@@ -22,6 +22,9 @@ process LD_DECAY_FROM_PGEN {
     def sample_id = pgen.baseName
     def keep_arg = keep_samples.size() > 0 ? "--keep ${keep_samples}" : ""
     def excl_arg = exclude_bed.size() > 0 ? "--exclude range ${exclude_bed}" : ""
+    // Thinning de sitios (plink2 --bp-space): mantiene ~1 sitio cada N bp para acotar el
+    // nº de pares cuando r2_min=0; no sesga la forma del decay (propiedad de la distancia).
+    def thin_arg = params.ld_thin_bp_space ? "--bp-space ${params.ld_thin_bp_space}" : ""
     """
     set -euo pipefail
 
@@ -29,8 +32,10 @@ process LD_DECAY_FROM_PGEN {
     plink2 --pfile ${sample_id} \
       ${keep_arg} \
       ${excl_arg} \
+      ${thin_arg} \
       --maf ${params.ld_maf_min} \
       --geno ${params.ld_site_missing_max} \
+      --set-all-var-ids '@:#:\$r:\$a' \
       --r2-unphased \
       --ld-window-kb ${params.ld_window_kb} \
       --ld-window ${params.ld_window} \
@@ -56,12 +61,11 @@ process LD_DECAY_FROM_PGEN {
       exit 1
     fi
 
-    # Standardize to gz TSV expected by downstream parser (use streaming to avoid memory issues)
+    # Standardize to gz TSV expected by downstream parser
     if [[ "\$LD_IN" == *.gz ]]; then
       cp "\$LD_IN" dnabr.hg38.2723.chr${chr}.ld_pairs.tsv.gz
     else
-      cat "\$LD_IN" | gzip -1 > dnabr.hg38.2723.chr${chr}.ld_pairs.tsv.gz
-      rm -f "\$LD_IN"
+      gzip -c "\$LD_IN" > dnabr.hg38.2723.chr${chr}.ld_pairs.tsv.gz
     fi
 
     python3 ${ld_decay_py} \

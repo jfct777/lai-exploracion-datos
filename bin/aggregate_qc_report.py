@@ -9,6 +9,19 @@ from typing import List
 import pandas as pd
 
 
+def _chr_sort_key(c: str) -> tuple:
+    """Sort chromosomes naturally: 1-22, then X, Y."""
+    c = c.replace("chr", "")
+    if c.isdigit():
+        return (0, int(c))
+    elif c == "X":
+        return (1, 0)
+    elif c == "Y":
+        return (1, 1)
+    else:
+        return (2, c)
+
+
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--mode", required=True, choices=["per_chr", "aggregate"])
@@ -109,7 +122,7 @@ def aggregate(args):
     stats_df = _read_many_tsv(args.stats)
     counts_df = _read_many_tsv(args.counts)
 
-    chrs = sorted(set(qc_df["chr"].astype(str).tolist())) if not qc_df.empty else []
+    chrs = sorted(set(qc_df["chr"].astype(str).tolist()), key=_chr_sort_key) if not qc_df.empty else []
 
     if qc_df.empty:
         merged_per_sample = pd.DataFrame(columns=["IID"]) 

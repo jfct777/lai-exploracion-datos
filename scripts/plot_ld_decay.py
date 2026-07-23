@@ -14,9 +14,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
-
-sns.set_style("whitegrid")
+try:
+    import seaborn as sns
+    sns.set_style("whitegrid")
+except ImportError:
+    pass  # seaborn optional, use default matplotlib style
 
 
 def parse_args():
@@ -26,6 +28,8 @@ def parse_args():
     p.add_argument("--max_dist_kb", type=int, default=1000, help="Max distance to plot (kb)")
     p.add_argument("--dpi", type=int, default=300, help="Figure DPI")
     p.add_argument("--format", default="pdf", choices=["pdf", "png", "svg"], help="Output format")
+    p.add_argument("--include_sex_chr", action="store_true", default=False,
+                   help="Include sex chromosomes (X, Y). Default: exclude for population genetics accuracy")
     return p.parse_args()
 
 
@@ -270,6 +274,12 @@ def main():
     
     # Concatenate if multiple chromosomes
     df = pd.concat(dfs, ignore_index=True) if len(dfs) > 1 else dfs[0]
+    
+    # Exclude sex chromosomes by default (LD estimates are biased due to hemizygosity)
+    if not args.include_sex_chr and 'chr' in df.columns:
+        sex_chr = ['X', 'Y', 'x', 'y', 'chrX', 'chrY', 'CHRX', 'CHRY']
+        df = df[~df['chr'].astype(str).isin(sex_chr)]
+        print(f"Excluded sex chromosomes. Using {df['chr'].nunique()} autosomes.")
     
     # If multiple chromosomes, aggregate by bin
     if 'chr' in df.columns and df['chr'].nunique() > 1:

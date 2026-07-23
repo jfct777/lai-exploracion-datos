@@ -21,28 +21,26 @@ process TAG_SNPS_FROM_PGEN {
     def sample_id = pgen.baseName
     def keep_arg = keep_samples.size() > 0 ? "--keep ${keep_samples}" : ""
     def excl_arg = exclude_bed.size() > 0 ? "--exclude range ${exclude_bed}" : ""
-    def window_bp = (params.tag_window_kb as Integer) * 1000
-    def step_bp = (params.tag_step as Integer) * 1000
     """
     set -euo pipefail
 
     plink2 --pfile ${sample_id} \
       ${keep_arg} \
       ${excl_arg} \
-      --set-all-var-ids '@:#:\$r:\$a' \
       --maf ${params.tag_maf_min} \
       --geno ${params.tag_site_missing_max} \
-      --indep-pairwise ${window_bp} ${step_bp} ${params.tag_r2} \
+      --set-all-var-ids '@:#:\$r:\$a' \
+      --indep-pairwise ${params.tag_window_kb}kb ${params.tag_step} ${params.tag_r2} \
       --threads ${params.resources?.tag_snps_from_pgen?.threads ?: params.cpus} \
       --out ${sample_id}.tag
 
     plink2 --pfile ${sample_id} \
       ${keep_arg} \
       ${excl_arg} \
-      --set-all-var-ids '@:#:\$r:\$a' \
       --maf ${params.tag_maf_min} \
       --geno ${params.tag_site_missing_max} \
-      --indep-pairwise ${window_bp} ${step_bp} ${params.tag_r2_strict} \
+      --set-all-var-ids '@:#:\$r:\$a' \
+      --indep-pairwise ${params.tag_window_kb}kb ${params.tag_step} ${params.tag_r2_strict} \
       --threads ${params.resources?.tag_snps_from_pgen?.threads ?: params.cpus} \
       --out ${sample_id}.tag_strict
 

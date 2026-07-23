@@ -19,11 +19,20 @@ process QC_PLINK_MAKE_PGEN {
     script:
     def sample_id = "dnabr.hg38.2723.chr${chr}"
     def snps_only = params.plink_snps_only ? "--snps-only" : ""
+    def psam_arg = (chr == "X") ? "--psam ${sample_id}.tmp.psam" : ""
+    def split_par = (chr == "X") ? "--split-par hg38" : ""
     """
     set -euo pipefail
 
+    if [ "${chr}" == "X" ]; then
+      # For chrX: create .psam with ambiguous sex (0) to enable processing without sex metadata
+      bcftools query -l ${vcf_in} | awk 'BEGIN {print "#IID\\tSEX"} {print \$1"\\t0"}' > ${sample_id}.tmp.psam
+    fi
+
     plink2 --vcf ${vcf_in} --make-pgen --out ${sample_id} \
       ${snps_only} \
+      ${psam_arg} \
+      ${split_par} \
       --max-alleles ${params.plink_max_alleles} \
       --mac ${params.plink_mac_min} \
       > ${sample_id}.plink.makepgen.log 2>&1

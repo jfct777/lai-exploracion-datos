@@ -20,6 +20,12 @@ def parse_args():
     p.add_argument("--min_an_frac", type=float, default=0.95)
     p.add_argument("--rare_tail_max_ac", type=int, default=20)
     p.add_argument("--sfs_bins_af", default="0,0.001,0.005,0.01,0.05,0.1,0.2,0.5,1.0")
+    # Folded minor-allele spectrum. REF/ALT is set by the reference genome, not by
+    # biology: an ALT allele at AF 0.95 and one at 0.05 are the same (rare) site
+    # folded. The unfolded ALT-AF spectrum puts spurious mass at the high end.
+    # Por defecto usa min(AC, AN-AC)/AN en [0, 0.5]. Pass
+    # "false" only for an explicitly ALT-based spectrum.
+    p.add_argument("--fold", default="true", choices=["true", "false"])
 
     return p.parse_args()
 
@@ -47,9 +53,14 @@ def main():
     out_prefix = Path(args.out_prefix)
     out_prefix.parent.mkdir(parents=True, exist_ok=True)
 
+    fold = args.fold == "true"
     bins = [float(x) for x in args.sfs_bins_af.split(",")]
-    if bins[0] != 0.0 or bins[-1] != 1.0:
-        raise SystemExit("sfs_bins_af must start with 0 and end with 1")
+    bins_top = 0.5 if fold else 1.0
+    if bins[0] != 0.0 or not math.isclose(bins[-1], bins_top):
+        raise SystemExit(
+            f"sfs_bins_af must start with 0 and end with {bins_top} "
+            f"({'folded MAF' if fold else 'unfolded ALT AF'})"
+        )
 
     n_samples = _count_samples(args.vcf, args.keep_samples)
     max_an = 2 * n_samples
@@ -91,19 +102,22 @@ def main():
         if an < args.min_an_frac * max_an:
             continue
 
-        af = ac / float(an)
+        # Fold to the minor allele: the spectrum value and the rare-tail count are
+        # both keyed on the minor-allele copy count, independent of REF/ALT polarity.
+        minor_ac = min(ac, an - ac) if fold else ac
+        af = minor_ac / float(an)
         if af < 0 or af > 1:
             continue
 
         kept_sites += 1
 
-        if 1 <= ac <= args.rare_tail_max_ac:
-            rare_tail[ac] += 1
+        if 1 <= minor_ac <= args.rare_tail_max_ac:
+            rare_tail[minor_ac] += 1
 
         for i in range(len(bins) - 1):
             lo = bins[i]
             hi = bins[i + 1]
-            if (af >= lo and af < hi) or (i == len(bins) - 2 and math.isclose(af, 1.0)):
+            if (af >= lo and af < hi) or (i == len(bins) - 2 and math.isclose(af, bins[-1])):
                 hist_bins[i] += 1
                 break
 
@@ -137,6 +151,7 @@ def main():
         "sites_with_ac_an": kept_sites,
         "rare_tail_max_ac": args.rare_tail_max_ac,
         "min_an_frac": args.min_an_frac,
+        "folded": fold,
         "keep_samples": bool(args.keep_samples),
     }
     with open(summary_path, "w", encoding="utf-8") as fh:

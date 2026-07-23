@@ -15,9 +15,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
-
-sns.set_style("whitegrid")
+try:
+    import seaborn as sns
+    sns.set_style("whitegrid")
+except ImportError:
+    pass  # seaborn optional, use default matplotlib style
 
 
 def parse_args():
@@ -27,6 +29,8 @@ def parse_args():
     p.add_argument("--out_prefix", default="sfs", help="Output file prefix")
     p.add_argument("--dpi", type=int, default=300, help="Figure DPI")
     p.add_argument("--format", default="pdf", choices=["pdf", "png", "svg"], help="Output format")
+    p.add_argument("--include_sex_chr", action="store_true", default=False,
+                   help="Include sex chromosomes (X, Y). Default: exclude for population genetics accuracy")
     return p.parse_args()
 
 
@@ -218,6 +222,14 @@ def main():
     # Concatenate if multiple chromosomes
     df_sfs = pd.concat(dfs_sfs, ignore_index=True) if len(dfs_sfs) > 1 else dfs_sfs[0]
     
+    # Define sex chromosomes list for filtering
+    sex_chr = ['X', 'Y', 'x', 'y', 'chrX', 'chrY', 'CHRX', 'CHRY']
+    
+    # Exclude sex chromosomes by default (SFS biased due to different sample sizes)
+    if not args.include_sex_chr and 'chr' in df_sfs.columns:
+        df_sfs = df_sfs[~df_sfs['chr'].astype(str).isin(sex_chr)]
+        print(f"Excluded sex chromosomes. Using {df_sfs['chr'].nunique()} autosomes.")
+    
     # If multiple chromosomes, aggregate by bin
     if 'chr' in df_sfs.columns and df_sfs['chr'].nunique() > 1:
         df_sfs = df_sfs.groupby(['af_bin_lo', 'af_bin_hi'], as_index=False).agg({'n_sites': 'sum'})
@@ -230,6 +242,9 @@ def main():
             df = pd.read_csv(rare_file, sep='\t')
             dfs_rare.append(df)
         df_rare = pd.concat(dfs_rare, ignore_index=True) if len(dfs_rare) > 1 else dfs_rare[0]
+        # Exclude sex chromosomes from rare tail too
+        if not args.include_sex_chr and 'chr' in df_rare.columns:
+            df_rare = df_rare[~df_rare['chr'].astype(str).isin(sex_chr)]
         if 'chr' in df_rare.columns and df_rare['chr'].nunique() > 1:
             df_rare = df_rare.groupby('AC', as_index=False).agg({'n_sites': 'sum'})
     

@@ -19,6 +19,8 @@ process SFS_FROM_FILTERED_VCF {
     script:
     def sample_id = "dnabr.hg38.2723.chr${chr}"
     def keep_arg = keep_samples.size() > 0 ? "--keep_samples ${keep_samples}" : ""
+    // Folded → bins MAF [0,0.5]; unfolded → bins ALT-AF [0,1]. Una sola fuente de verdad por modo.
+    def sfs_bins = params.sfs_fold ? params.sfs_bins_maf : params.sfs_bins_af
     """
     set -euo pipefail
 
@@ -29,7 +31,8 @@ process SFS_FROM_FILTERED_VCF {
       ${keep_arg} \
       --min_an_frac ${params.min_an_frac} \
       --rare_tail_max_ac ${params.rare_tail_max_ac} \
-      --sfs_bins_af '${params.sfs_bins_af}'
+      --fold ${params.sfs_fold} \
+      --sfs_bins_af '${sfs_bins}'
 
     mv ${sample_id}.summary.json ${sample_id}.sfs.summary.json
     """
