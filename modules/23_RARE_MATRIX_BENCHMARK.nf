@@ -195,7 +195,7 @@ process CONCAT_RARE_MATRIX {
 // el contraste E−C coinciden. bin/_common.py viaja como `path` a cada proceso (import del helper).
 process RARE_BENCH_PREFLIGHT {
     tag "preflight"
-    publishDir "${params.rare_bench_results_dir}/cv", mode: 'copy'
+    publishDir "${params.rare_bench_results_dir}/${params.rare_bench_stage_subdir}", mode: 'copy'
     cpus   params.resources.rare_bench_preflight.cpus
     memory params.resources.rare_bench_preflight.memory
     time   params.rare_bench_cv_light_time
@@ -227,7 +227,7 @@ process RARE_BENCH_PREFLIGHT {
 
 process RARE_BENCH_CV_ABC {
     tag "abc"
-    publishDir "${params.rare_bench_results_dir}/cv", mode: 'copy'
+    publishDir "${params.rare_bench_results_dir}/${params.rare_bench_stage_subdir}", mode: 'copy'
     cpus   params.resources.rare_bench_cv_abc.cpus
     memory params.resources.rare_bench_cv_abc.memory
     time   params.rare_bench_cv_light_time
@@ -260,7 +260,7 @@ process RARE_BENCH_CV_ABC {
 
 process RARE_BENCH_CV_FOLD {
     tag "fold_${set_name}_${fold}"
-    publishDir "${params.rare_bench_results_dir}/cv", mode: 'copy'
+    publishDir "${params.rare_bench_results_dir}/${params.rare_bench_stage_subdir}", mode: 'copy'
     cpus   params.resources.rare_bench_cv_fold.cpus
     // Valores base para una ejecución directa; conf/auto_resources.config aplica la política
     // de reintento durante la ejecución completa.
@@ -296,7 +296,7 @@ process RARE_BENCH_CV_FOLD {
 
 process RARE_BENCH_AGGREGATE {
     tag "aggregate"
-    publishDir "${params.rare_bench_results_dir}/cv", mode: 'copy'
+    publishDir "${params.rare_bench_results_dir}/${params.rare_bench_stage_subdir}", mode: 'copy'
     cpus   params.resources.rare_bench_aggregate.cpus
     memory params.resources.rare_bench_aggregate.memory
     time   params.rare_bench_cv_light_time
@@ -328,10 +328,95 @@ process RARE_BENCH_AGGREGATE {
       --provenance-b64 ${prov_b64} \
       --params-json '{"mode":"aggregate","heavy_sets":"${params.rare_bench_cv_heavy_sets}","folds":"${params.rare_bench_cv_folds}","test_fold":${params.rare_bench_test_fold}}' \
       --stamp "\$(TZ=Europe/Madrid date '+%Y-%m-%d %H:%M %Z')" \
+      --run-provenance-ref ./run_provenance.json \
       --out cv.manifest.json
     """
 }
 
+
+// ---------------------------------------------------------------------------
+// CONTROL ACOTADO DE CONVERGENCIA (23e) — NO repite el benchmark ni la grilla.
+// Reajusta el modelo FINAL de cada (set,fold) con los hiperparametros que la corrida base ya
+// eligio y un techo de iteraciones mas alto. Una tarea por (set,fold) -> reanudable con -resume.
+// ---------------------------------------------------------------------------
+process RARE_BENCH_REFIT_FOLD {
+    tag "refit_${set_name}_${fold}"
+    publishDir "${params.rare_bench_results_dir}/${params.rare_bench_stage_subdir}", mode: 'copy'
+    cpus   params.resources.rare_bench_refit_fold.cpus
+    memory params.resources.rare_bench_refit_fold.memory
+    time   params.rare_bench_refit_time
+
+    input:
+    tuple val(set_name), val(fold), path(baseline_json)
+    tuple path(matrix), path(samples)
+    path split_manifest
+    path modeling_master
+    path cv_py
+    path common_py
+    path preflight_json
+    // El preflight de la BASE se llama igual que el de esta etapa (preflight.json) -> stageAs para que
+    // no colisionen al montarse en el directorio de trabajo de la tarea.
+    path baseline_preflight_json, stageAs: 'baseline_preflight.json'
+    val  sci_flags
+    val  container_sha
+    val  prov_b64
+
+    output:
+    path "${set_name}.fold${fold}.refit.json", emit: results
+
+    script:
+    """
+    set -euo pipefail
+    OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 python3 ${cv_py} \
+      --mode refit --set ${set_name} --fold ${fold} ${sci_flags} \
+      --matrix-npz ${matrix} --samples-tsv ${samples} \
+      --split-manifest ${split_manifest} --modeling-master ${modeling_master} \
+      --container-sha256 ${container_sha} --preflight-json ${preflight_json} \
+      --baseline-fold-json ${baseline_json} \
+      --baseline-preflight-json ${baseline_preflight_json} \
+      --n-jobs 1 --pre-dispatch 1 --outdir .
+    """
+}
+
+process RARE_BENCH_REFIT_AGGREGATE {
+    tag "refit_aggregate"
+    publishDir "${params.rare_bench_results_dir}/${params.rare_bench_stage_subdir}", mode: 'copy'
+    cpus   params.resources.rare_bench_aggregate.cpus
+    memory params.resources.rare_bench_aggregate.memory
+    time   params.rare_bench_cv_light_time
+
+    input:
+    path abc_json
+    path refit_jsons
+    path cv_py
+    path common_py
+    val  sci_flags
+    val  prov_b64
+
+    output:
+    path "rare_bench_refit_results.json", emit: results
+    path "refit.manifest.json",           emit: manifest
+
+    script:
+    """
+    set -euo pipefail
+    REFIT_ARGS=""
+    for f in ${refit_jsons}; do REFIT_ARGS="\$REFIT_ARGS --refit-json \$f"; done
+    OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 python3 ${cv_py} \
+      --mode refit_aggregate ${sci_flags} \
+      --abc-json ${abc_json} \$REFIT_ARGS \
+      --refit-material-delta ${params.rare_bench_refit_material_delta} --outdir .
+
+    write_stage_manifest.py --stage RARE_BENCH_REFIT_AGGREGATE \
+      --input ${abc_json} \
+      --output rare_bench_refit_results.json \
+      --provenance-b64 ${prov_b64} \
+      --params-json '{"mode":"refit_aggregate","sets":"${params.rare_bench_refit_sets}","folds":"${params.rare_bench_refit_folds}","max_iter":${params.rare_bench_refit_max_iter},"baseline_max_iter":${params.rare_bench_cv_max_iter},"material_delta":${params.rare_bench_refit_material_delta},"test_fold":${params.rare_bench_test_fold}}' \
+      --stamp "\$(TZ=Europe/Madrid date '+%Y-%m-%d %H:%M %Z')" \
+      --run-provenance-ref ./run_provenance.json \
+      --out refit.manifest.json
+    """
+}
 
 
 // ---------------------------------------------------------------------------
@@ -350,8 +435,18 @@ workflow RARE_MATRIX_BENCHMARK {
     def do_rb_smoke   = params.enable_rare_bench_smoke   && params.run_rare_bench
     def do_rb_concat  = params.enable_rare_bench_concat  && params.run_rare_bench
     def do_rb_cv      = params.enable_rare_bench_cv       && params.run_rare_bench
+    def do_rb_refit   = params.enable_rare_bench_refit    && params.run_rare_bench
 
-    if( do_rb_extract || do_rb_smoke || do_rb_concat || do_rb_cv ) {
+    // El benchmark y su control de convergencia comparten el proceso PREFLIGHT (misma maquinaria,
+    // distinta huella por max_iter). Nextflow no permite invocar un proceso dos veces en el mismo
+    // workflow, y ademas ambos publicarian en el mismo subdir -> exclusion explicita.
+    if( do_rb_cv && do_rb_refit )
+        throw new IllegalStateException("M23: enable_rare_bench_cv y enable_rare_bench_refit no pueden "
+            + "estar activos en la misma corrida (comparten PREFLIGHT y subdir de publicación). "
+            + "Corre el control de convergencia en una invocación aparte con "
+            + "--rare_bench_stage_subdir distinto de '${params.rare_bench_stage_subdir}'.")
+
+    if( do_rb_extract || do_rb_smoke || do_rb_concat || do_rb_cv || do_rb_refit ) {
         def extract_rare_matrix_chr_py = file("${projectDir}/bin/extract_rare_matrix_chr.py")
         def rare_bench_smoke_py        = file("${projectDir}/bin/rare_bench_smoke.py")
         def concat_rare_matrix_py      = file("${projectDir}/bin/concat_rare_matrix.py")
@@ -396,7 +491,10 @@ workflow RARE_MATRIX_BENCHMARK {
             launch_dir       : workflow.launchDir.toString(),
             project_dir      : projectDir.toString(),
         ]
-        def rb_rp_dir = new File("${params.rare_bench_results_dir}")
+        // Va DENTRO del subdir de la etapa: cada etapa (cv, refit_check, ...) es una corrida distinta
+        // con su propio comando, y escribirlo en la raíz haría que la segunda pisara la procedencia de
+        // la primera. El puntero relativo del manifiesto apunta al de su propia etapa.
+        def rb_rp_dir = new File("${params.rare_bench_results_dir}/${params.rare_bench_stage_subdir}")
         rb_rp_dir.mkdirs()
         new File(rb_rp_dir, 'run_provenance.json').text = JsonOutput.prettyPrint(JsonOutput.toJson(rb_run_prov))
 
@@ -437,8 +535,8 @@ workflow RARE_MATRIX_BENCHMARK {
             )
         }
 
-        // --- ETAPA 2 (concat) + ETAPA 3 (CV científica) ------------------------------------------
-        if( do_rb_concat || do_rb_cv ) {
+        // --- ETAPA 2 (concat) + ETAPA 3 (CV científica) + ETAPA 3b (control de convergencia) -----
+        if( do_rb_concat || do_rb_cv || do_rb_refit ) {
             def ch_genome
             if( do_rb_concat ) {
                 ch_rb_matrix.multiMap { chrom, npz, var, sam ->
@@ -463,7 +561,7 @@ workflow RARE_MATRIX_BENCHMARK {
                 ch_genome = Channel.of( tuple(gnpz, gsam) )
             }
 
-            if( do_rb_cv ) {
+            if( do_rb_cv || do_rb_refit ) {
                 def rb_mm = file(reqRB(params.rare_bench_modeling_master, 'rare_bench_modeling_master'))
                 if( !rb_mm.exists() ) throw new IllegalStateException("M23 cv: modeling_master no encontrado en ${rb_mm}.")
                 def rb_common_py = file("${projectDir}/bin/_common.py")
@@ -472,7 +570,9 @@ workflow RARE_MATRIX_BENCHMARK {
                 // Flags cientificos COMUNES: fuente unica -> identicos en preflight/abc/fold/aggregate,
                 // de modo que la huella y el contraste E-C coincidan. Los valores no llevan espacios ->
                 // sin comillas de shell. Cambiar cualquier param cientifico invalida el cache (correcto).
-                def rb_sci = [
+                // El techo de iteraciones entra como argumento: es lo UNICO que el control de
+                // convergencia cambia respecto al benchmark, y esa diferencia debe verse en la huella.
+                def rb_sci_with = { max_iter -> [
                     "--sample-id-col ${params.rare_bench_sample_id_col}",
                     "--split-col ${params.rare_bench_split_col}",
                     "--label-col ${params.rare_bench_label_col}",
@@ -490,37 +590,105 @@ workflow RARE_MATRIX_BENCHMARK {
                     "--decision-threshold ${params.rare_bench_decision_threshold}",
                     "--class-weight ${params.rare_bench_class_weight}",
                     "--svd-components ${params.rare_bench_svd_components}",
-                    "--max-iter ${params.rare_bench_cv_max_iter}",
+                    "--max-iter ${max_iter}",
                     "--tol ${params.rare_bench_cv_tol}",
                     "--seed ${params.rare_bench_seed}",
                     (params.rare_bench_run_svd ? "--run-svd" : ""),
-                ].findAll { it }.join(' ')
+                ].findAll { it }.join(' ') }
 
                 // Canales inmutables compartidos por preflight y todas las tareas; así se conserva
                 // el mismo hash de entrada durante la ejecución.
                 def ch_genome_v = ch_genome.first()
 
-                def rb_pf = RARE_BENCH_PREFLIGHT(ch_genome_v, rb_split, rb_mm, rare_bench_cv_py,
-                                                 rb_common_py, rb_sci, rb_container_sha, ch_rb_prov).preflight.first()
+                // Un solo par (set,fold) por tarea: fuente unica de la expansion, reusada por el
+                // benchmark y por el control de convergencia.
+                def rb_expand = { sets_csv, folds_csv, what ->
+                    def ss = sets_csv.toString().split(',').collect { it.trim() }.findAll { it }
+                    def ff = folds_csv.toString().split(',').collect { it.trim() }.findAll { it }
+                    if( ss.isEmpty() || ff.isEmpty() ) throw new IllegalStateException("M23 ${what}: sets/folds vacios.")
+                    def out = []
+                    ss.each { s -> ff.each { f -> out << [s, f] } }
+                    return out
+                }
 
-                def rb_abc = RARE_BENCH_CV_ABC(ch_genome_v, rb_split, rb_mm, rare_bench_cv_py, rb_common_py,
-                                               rb_pf, rb_sci, rb_container_sha, ch_rb_prov).results
+                // El preflight se invoca igual en ambas ramas y solo cambia el juego de flags (el `throw`
+                // de arriba garantiza que solo UNA rama corre, asi que el proceso se usa una vez).
+                def rb_do_preflight = { sci -> RARE_BENCH_PREFLIGHT(ch_genome_v, rb_split, rb_mm,
+                                                                    rare_bench_cv_py, rb_common_py, sci,
+                                                                    rb_container_sha, ch_rb_prov).preflight }
 
-                // 8 tareas (set,fold) = {D,E} x {0,1,2,4}. Los sets/folds son parametrizables pero deben
-                // coincidir con HEAVY_SETS del script y con los outer_folds del split (el agregador lo
-                // exige fail-closed).
-                def rb_sets  = params.rare_bench_cv_heavy_sets.toString().split(',').collect { it.trim() }.findAll { it }
-                def rb_folds = params.rare_bench_cv_folds.toString().split(',').collect { it.trim() }.findAll { it }
-                if( rb_sets.isEmpty() || rb_folds.isEmpty() ) throw new IllegalStateException("M23 cv: rare_bench_cv_heavy_sets/folds vacios.")
-                def rb_sf = []
-                rb_sets.each { s -> rb_folds.each { f -> rb_sf << tuple(s, f) } }
+                if( do_rb_cv ) {
+                    def rb_sci = rb_sci_with(params.rare_bench_cv_max_iter)
 
-                def rb_fold_res = RARE_BENCH_CV_FOLD(Channel.fromList(rb_sf), ch_genome_v, rb_split, rb_mm,
-                                                     rare_bench_cv_py, rb_common_py, rb_pf, rb_sci,
-                                                     rb_container_sha, ch_rb_prov).results
+                    def rb_pf = rb_do_preflight(rb_sci)
 
-                RARE_BENCH_AGGREGATE(rb_abc, rb_fold_res.collect(), rare_bench_cv_py, rb_common_py,
-                                     rb_sci, ch_rb_prov)
+                    def rb_abc = RARE_BENCH_CV_ABC(ch_genome_v, rb_split, rb_mm, rare_bench_cv_py, rb_common_py,
+                                                   rb_pf, rb_sci, rb_container_sha, ch_rb_prov).results
+
+                    // 8 tareas (set,fold) = {D,E} x {0,1,2,4}. Los sets/folds son parametrizables pero deben
+                    // coincidir con HEAVY_SETS del script y con los outer_folds del split (el agregador lo
+                    // exige fail-closed).
+                    def rb_sf = rb_expand(params.rare_bench_cv_heavy_sets, params.rare_bench_cv_folds, 'cv')
+                                  .collect { s, f -> tuple(s, f) }
+
+                    def rb_fold_res = RARE_BENCH_CV_FOLD(Channel.fromList(rb_sf), ch_genome_v, rb_split, rb_mm,
+                                                         rare_bench_cv_py, rb_common_py, rb_pf, rb_sci,
+                                                         rb_container_sha, ch_rb_prov).results
+
+                    RARE_BENCH_AGGREGATE(rb_abc, rb_fold_res.collect(), rare_bench_cv_py, rb_common_py,
+                                         rb_sci, ch_rb_prov)
+                }
+
+                // --- ETAPA 3b: control acotado de convergencia del solver -------------------------
+                // Reajusta SOLO los modelos finales con los hiperparametros ya elegidos y un techo de
+                // iteraciones mas alto. NO recomputa A/B/C: las metricas de C se reutilizan leyendo el
+                // abc_results.json de la corrida base.
+                if( do_rb_refit ) {
+                    def rb_sci_refit = rb_sci_with(params.rare_bench_refit_max_iter)
+                    if( params.rare_bench_refit_max_iter.toString().toInteger() <= params.rare_bench_cv_max_iter.toString().toInteger() )
+                        throw new IllegalStateException("M23 refit: rare_bench_refit_max_iter "
+                            + "(${params.rare_bench_refit_max_iter}) debe ser > rare_bench_cv_max_iter "
+                            + "(${params.rare_bench_cv_max_iter}); si no, no es un control de convergencia.")
+
+                    def rf_base_dir = reqRB(params.rare_bench_refit_baseline_dir, 'rare_bench_refit_baseline_dir')
+                    def rf_abc = file("${rf_base_dir}/abc_results.json")
+                    if( !rf_abc.exists() ) throw new IllegalStateException("M23 refit: falta ${rf_abc} "
+                        + "(las metricas de C se REUTILIZAN de la corrida base, no se recomputan).")
+                    // Guard de sobrescritura POR CONTENIDO, no por nombre: comparar rutas solo atrapa el
+                    // caso en que el baseline sea literalmente este subdir. Si el baseline apunta a una
+                    // copia archivada y alguien olvida cambiar el subdir, esta etapa publicaria encima del
+                    // preflight/procedencia de la corrida CV que viva ahi. Un subdir que ya contiene
+                    // artefactos de una etapa CV no es un destino valido para el control.
+                    def rf_out_dir = "${params.rare_bench_results_dir}/${params.rare_bench_stage_subdir}"
+                    for( guard in ['abc_results.json', 'rare_bench_cv_results.json'] )
+                        if( file("${rf_out_dir}/${guard}").exists() )
+                            throw new IllegalStateException("M23 refit: el subdir de publicación ${rf_out_dir} "
+                                + "ya contiene ${guard} (artefactos de una etapa CV) -> publicar aqui pisaria "
+                                + "su preflight.json y su run_provenance.json. Usa un "
+                                + "--rare_bench_stage_subdir propio para el control (p.ej. refit_check).")
+
+                    def rf_pf_base = file("${rf_base_dir}/preflight.json")
+                    if( !rf_pf_base.exists() ) throw new IllegalStateException("M23 refit: falta ${rf_pf_base}; "
+                        + "su input_sha256 es lo unico que prueba que la base uso estas mismas entradas.")
+
+                    def rf_tuples = rb_expand(params.rare_bench_refit_sets, params.rare_bench_refit_folds, 'refit')
+                        .collect { s, f ->
+                            def bj = file("${rf_base_dir}/${s}.fold${f}.json")
+                            if( !bj.exists() ) throw new IllegalStateException("M23 refit: falta el JSON base "
+                                + "${bj}; de ahi se leen los hiperparametros ganadores de ese fold.")
+                            tuple(s, f, bj)
+                        }
+
+                    def rf_pf = rb_do_preflight(rb_sci_refit)
+
+                    def rf_res = RARE_BENCH_REFIT_FOLD(Channel.fromList(rf_tuples), ch_genome_v, rb_split,
+                                                       rb_mm, rare_bench_cv_py, rb_common_py, rf_pf,
+                                                       rf_pf_base, rb_sci_refit, rb_container_sha,
+                                                       ch_rb_prov).results
+
+                    RARE_BENCH_REFIT_AGGREGATE(rf_abc, rf_res.collect(), rare_bench_cv_py, rb_common_py,
+                                               rb_sci_refit, ch_rb_prov)
+                }
             }
         }
     }

@@ -51,6 +51,9 @@ def main():
                     help="JSON en base64 con {git_commit, nextflow_command, nextflow_version, "
                          "container_path, container_sha256}, computado en el head node")
     ap.add_argument("--stamp", default="", help="timestamp inyectado por el proceso (TZ del host)")
+    ap.add_argument("--run-provenance-ref", default="../run_provenance.json",
+                    help="ruta RELATIVA al run_provenance.json de la corrida, tal como se vera desde el "
+                         "directorio publicado de esta etapa. Default: un nivel arriba.")
     ap.add_argument("--out", required=True, type=Path)
     args = ap.parse_args()
 
@@ -84,8 +87,10 @@ def main():
         "params": params,
         "inputs": {p.name: _sha256(p) for p in args.input},
         "sha256": {p.name: _sha256(p) for p in args.output},
-        # El comando de Nextflow cambia con -resume y se guarda fuera del cache de cada etapa.
-        "run_provenance_file": "../run_provenance.json",
+        # El comando de Nextflow cambia con -resume y se guarda fuera del cache de cada etapa. Donde
+        # vive depende del modulo: la mayoria lo pone un nivel arriba de los subdirectorios de etapa
+        # (default), y M23 lo pone DENTRO del subdir porque cada etapa suya es una corrida aparte.
+        "run_provenance_file": args.run_provenance_ref,
     }
     args.out.write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
     print(json.dumps(manifest, indent=2, ensure_ascii=False))

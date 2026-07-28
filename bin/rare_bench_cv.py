@@ -24,10 +24,17 @@ Los modos `preflight`, `abc`, `fold` y `aggregate` dividen el trabajo en tareas
 reanudadables. El modo `monolithic` conserva la ejecución completa para
 comprobar la equivalencia de resultados. Todas las tareas comparten las mismas
 entradas y la misma huella de código, datos, configuración y entorno numérico.
+
+Los modos `refit` y `refit_aggregate` son un control acotado de convergencia del
+solver: reajustan el modelo FINAL de un (set, fold) con los hiperparámetros ya
+seleccionados en una corrida base y un techo de iteraciones más alto. No hay
+grilla ni selección nueva; las métricas de los sets densos se reutilizan tal
+cual desde la corrida base.
 """
 import argparse
 import json
 import math
+import resource
 import sys
 import time
 from pathlib import Path
@@ -159,16 +166,43 @@ def _split_for_held(X, y, outer_groups, held):
     raise SystemExit(f"[cv] outer-fold {held} no existe en {sorted(int(x) for x in np.unique(outer_groups))}")
 
 
+def _solver_convergence(fitted):
+    """(n_iter, converged) del clasificador FINAL. LogisticRegression expone `n_iter_` como array (un
+    elemento en binario) con las iteraciones que gasto saga/lbfgs; converged = no toco el techo.
+    Devuelve (None, None) si el paso 'clf' no lo expone: no se inventa un valor."""
+    clf = getattr(fitted, "named_steps", {}).get("clf")
+    n_it = getattr(clf, "n_iter_", None)
+    max_it = getattr(clf, "max_iter", None)
+    if n_it is None or max_it is None:
+        return None, None
+    n_it = int(np.max(np.asarray(n_it)))
+    return n_it, bool(n_it < int(max_it))
+
+
+def _peak_rss_gb():
+    """Pico de RSS en GiB. ru_maxrss viene en KiB en Linux. OJO: `self` NO incluye a los workers de
+    loky y `children` es el maximo de UN hijo, no la suma -> en modo grilla ninguno es el total del
+    arbol (para eso esta peak_rss de la traza de Nextflow). En un fit unico (modo refit, sin hijos)
+    `self` SI es el pico real del proceso."""
+    ru_s = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    ru_c = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+    return (round(ru_s / (1024 ** 2), 2), round(ru_c / (1024 ** 2), 2))
+
+
 def _fit_one_fold(estimator, grid, X, y, held, tr, va, inner_group, inner_splits, scorer, seed,
                   n_jobs, threshold, pre_dispatch):
     """Ajusta+evalua UN outer-fold. Es la UNIDAD de reanudacion del modo particionado y el cuerpo
-    exacto del loop del monolitico -> mismo numero por construccion. Devuelve el dict per-fold."""
+    exacto del loop del monolitico -> mismo numero por construccion. Devuelve el dict per-fold.
+
+    `grid` vacio/None => un solo fit del estimador tal como llega (sin seleccion): es el camino que
+    usa el control de convergencia con los hiperparametros ya fijados."""
     Xtr = X[tr]
     ytr = y[tr]
     gtr = inner_group[tr]
     Xva = X[va]
     yva = y[va]
     inner = StratifiedGroupKFold(n_splits=inner_splits, shuffle=True, random_state=seed)
+    t_fit = time.perf_counter()
     if grid:
         # pre_dispatch acota cuantas tareas (y copias/intermedios por worker) loky mantiene en vuelo a la
         # vez: es la palanca que evita el pico de RAM que OOM-mataba al set E (matriz completa) con 16 workers.
@@ -180,6 +214,9 @@ def _fit_one_fold(estimator, grid, X, y, held, tr, va, inner_group, inner_splits
     else:
         best = estimator.fit(Xtr, ytr)
         chosen = {}
+    fit_seconds = round(time.perf_counter() - t_fit, 1)
+    n_iter, converged = _solver_convergence(best)
+    peak_self_gb, peak_children_gb = _peak_rss_gb()
     proba = best.predict_proba(Xva)[:, 1]
     ypred = (proba >= threshold).astype(int)
     # nro de columnas retenidas en este fold (auditoria anti-leakage: debe variar entre folds).
@@ -203,6 +240,13 @@ def _fit_one_fold(estimator, grid, X, y, held, tr, va, inner_group, inner_splits
         "recall_neg": round(float(recall_score(yva, ypred, pos_label=0, zero_division=0)), 6),
         "chosen_params": chosen,
         "n_retained_rare_cols": n_ret,
+        # Auditoria del solver (campos NUEVOS, opcionales en el esquema del agregador para poder
+        # seguir leyendo artefactos de corridas anteriores que no los traen).
+        "n_iter": n_iter,
+        "converged": converged,
+        "fit_seconds": fit_seconds,
+        "peak_rss_self_gb": peak_self_gb,
+        "peak_rss_children_gb": peak_children_gb,
     }
 
 
@@ -687,6 +731,301 @@ def run_aggregate(args):
     _write_and_echo(args, report)
 
 
+# ---------------------------------------------------------------------------------------------------
+# Control ACOTADO de convergencia del solver (modos refit / refit_aggregate)
+# ---------------------------------------------------------------------------------------------------
+# NO repite el benchmark ni la busqueda de hiperparametros: reajusta el modelo FINAL de cada
+# (set, fold) con los hiperparametros que la corrida base YA eligio -- leidos de su JSON, nunca
+# transcritos a mano -- y un techo de iteraciones mas alto. Los sets densos A/B/C se reutilizan tal
+# cual del abc_results.json de la base. El fold de TEST sigue bloqueado por load_context.
+REFIT_STAGE = "RARE_BENCH_REFIT_FOLD"
+
+
+def _science_config_delta(base_cfg, cur_cfg):
+    """Claves de la config CIENTIFICA en las que base y actual difieren."""
+    keys = set(base_cfg) | set(cur_cfg)
+    return sorted(k for k in keys if base_cfg.get(k) != cur_cfg.get(k))
+
+
+def run_refit(args, ctx):
+    """Reajusta UN (set, fold) con los hiperparametros ganadores de la base y `--max-iter` mas alto."""
+    _reject_svd_partitioned(args)
+    fp = _load_preflight_and_fingerprint(args)
+    if args.baseline_fold_json is None:
+        raise SystemExit("[rare_bench_cv] --mode refit REQUIERE --baseline-fold-json: los hiperparametros "
+                         "ganadores se LEEN de la corrida base, no se transcriben")
+    if args.set_name not in HEAVY_SETS:
+        raise SystemExit(f"[rare_bench_cv] --mode refit requiere --set in {HEAVY_SETS}; "
+                         f"recibido {args.set_name!r}")
+    if args.fold is None or int(args.fold) not in ctx["meta"]["outer_folds"]:
+        raise SystemExit(f"[rare_bench_cv] --fold {args.fold} no esta en outer_folds "
+                         f"{ctx['meta']['outer_folds']}")
+    base = _common.read_json(args.baseline_fold_json)
+    _check(base.get("stage") == "RARE_BENCH_CV_FOLD",
+           f"baseline con stage inesperado: {base.get('stage')!r}")
+    _check(base.get("set") == args.set_name,
+           f"baseline es del set {base.get('set')!r}, se pidio {args.set_name!r}")
+    _check(_is_int(base.get("held_out_fold")) and int(base["held_out_fold"]) == int(args.fold),
+           f"baseline es del fold {base.get('held_out_fold')!r}, se pidio {args.fold!r}")
+    _check(isinstance(base.get("config"), dict), "baseline sin config")
+    _validate_fold_entry(base["per_fold_entry"], "baseline")
+
+    chosen = base["per_fold_entry"]["chosen_params"]
+    if not chosen:
+        raise SystemExit("[rare_bench_cv] el baseline tiene chosen_params vacio -> no hay modelo final "
+                         "que reajustar (fail-closed)")
+    # Mismos DATOS, no solo misma config. _science_config() compara escalares (columnas, umbrales,
+    # semilla) pero NO el contenido de la matriz/split/modeling_master, y el fingerprint_id no sirve de
+    # arbitro porque cambia a proposito al subir max_iter. Sin esto, regenerar el split_manifest con el
+    # mismo esquema pasaria todas las validaciones y el refit compararia contra otro train/val.
+    if args.baseline_preflight_json is None:
+        raise SystemExit("[rare_bench_cv] --mode refit REQUIERE --baseline-preflight-json: es lo unico "
+                         "que prueba que la corrida base uso EXACTAMENTE estas entradas")
+    base_pf = _common.read_json(args.baseline_preflight_json)
+    base_inputs = base_pf.get("fingerprint", base_pf).get("input_sha256")
+    if not base_inputs:
+        raise SystemExit("[rare_bench_cv] el preflight base no trae input_sha256 -> fail-closed")
+    cur_inputs = fp.get("input_sha256")
+    if not cur_inputs:
+        raise SystemExit("[rare_bench_cv] la huella de esta tarea no trae input_sha256 -> fail-closed")
+    if cur_inputs != base_inputs:
+        changed = sorted(k for k in set(base_inputs) | set(cur_inputs)
+                         if base_inputs.get(k) != cur_inputs.get(k))
+        raise SystemExit(f"[rare_bench_cv] las entradas cambiaron respecto a la corrida base en {changed} "
+                         "-> el refit no reproduciria el mismo split/retencion (fail-closed)")
+
+    base_cfg = base["config"]
+    base_max_iter = int(base_cfg["max_iter"])
+    if int(args.max_iter) <= base_max_iter:
+        raise SystemExit(f"[rare_bench_cv] --max-iter {args.max_iter} <= max_iter de la base "
+                         f"{base_max_iter}: no seria un control de convergencia (fail-closed)")
+    # Solo max_iter puede cambiar: cualquier otra diferencia cientifica volveria el contraste
+    # incomparable con la base y con las metricas de C que se reutilizan.
+    diff = [k for k in _science_config_delta(base_cfg, _science_config(args)) if k != "max_iter"]
+    if diff:
+        raise SystemExit(f"[rare_bench_cv] la config difiere de la base en {diff}: el control solo puede "
+                         "variar max_iter (fail-closed)")
+
+    estimator, _grid, Xin = _set_spec(args.set_name, args, ctx)
+    estimator.set_params(**chosen)  # hiperparametros FIJOS; grid=None -> un solo fit, sin seleccion
+    tr, va = _split_for_held(Xin, ctx["y"], ctx["folds"], int(args.fold))
+    entry = _fit_one_fold(estimator, None, Xin, ctx["y"], int(args.fold), tr, va, ctx["groups"],
+                          args.inner_splits, ctx["scorer"], args.seed, args.n_jobs,
+                          args.decision_threshold, args.pre_dispatch)
+    entry["chosen_params"] = dict(chosen)  # heredados y fijos: no los eligio este fit
+    out = {"stage": REFIT_STAGE, "set": args.set_name, "held_out_fold": int(args.fold),
+           "family": "elasticnet", "per_fold_entry": entry,
+           "baseline": {"per_fold_entry": base["per_fold_entry"],
+                        "max_iter": base_max_iter,
+                        "fingerprint_id": base.get("fingerprint_id"),
+                        "config": base_cfg,
+                        "input_sha256": base_inputs},
+           "input_sha256": cur_inputs,
+           "max_iter": int(args.max_iter), "meta": ctx["meta"],
+           "config": _science_config(args), "fingerprint_id": fp["fingerprint_id"]}
+    _common.write_json(args.outdir / f"{args.set_name}.fold{int(args.fold)}.refit.json", out)
+    print(json.dumps({"refit_ok": True, "set": args.set_name, "fold": int(args.fold),
+                      "n_iter": entry["n_iter"], "converged": entry["converged"],
+                      "max_iter": int(args.max_iter),
+                      "balanced_accuracy": entry["balanced_accuracy"],
+                      "balanced_accuracy_baseline": base["per_fold_entry"]["balanced_accuracy"],
+                      "fit_seconds": entry["fit_seconds"]}, indent=2))
+
+
+def _validate_refit_inputs(abc, refit_objs, args):
+    """Endurece lo que consume refit_aggregate. La base manda: abc (de donde salen las metricas de C
+    reutilizadas) debe compartir config con el baseline embebido en cada refit, y el refit solo puede
+    diferir en max_iter. Asi el contraste <set>-C sigue siendo el mismo contraste."""
+    _check(isinstance(abc, dict) and isinstance(abc.get("sets"), dict), "abc_results.json sin 'sets'")
+    _check(abc.get("stage") == "RARE_BENCH_CV_ABC", f"abc con stage inesperado: {abc.get('stage')!r}")
+    _check(SET_C in abc["sets"], f"abc sin el set de referencia {SET_C}")
+    _check(isinstance(abc.get("meta"), dict) and isinstance(abc["meta"].get("outer_folds"), list),
+           "abc sin meta.outer_folds")
+    for e in abc["sets"][SET_C]["per_fold"]:
+        _validate_fold_entry(e, f"abc[{SET_C}]")
+    _check(len(refit_objs) > 0, "no se paso ningun --refit-json")
+    cur_cfg = _science_config(args)
+    for o in refit_objs:
+        tag = f"{o.get('set')}.fold{o.get('held_out_fold')}"
+        _check(o.get("stage") == REFIT_STAGE, f"{tag}: stage inesperado {o.get('stage')!r}")
+        _check(o.get("set") in HEAVY_SETS, f"{tag}: set invalido {o.get('set')!r}")
+        _check(_is_int(o.get("held_out_fold")), f"{tag}: held_out_fold no es int")
+        _check(isinstance(o.get("baseline"), dict), f"{tag}: sin bloque baseline")
+        _validate_fold_entry(o["per_fold_entry"], tag)
+        _validate_fold_entry(o["baseline"]["per_fold_entry"], f"{tag}/baseline")
+        _check(int(o["per_fold_entry"]["held_out_fold"]) == int(o["held_out_fold"]),
+               f"{tag}: held_out_fold del envoltorio != del entry")
+        _check(int(o["baseline"]["per_fold_entry"]["held_out_fold"]) == int(o["held_out_fold"]),
+               f"{tag}: held_out_fold del baseline != del refit")
+        _check(o["meta"] == abc["meta"], f"{tag}: meta difiere del abc -> dataset distinto")
+        _check(o["baseline"]["config"] == abc.get("config"),
+               f"{tag}: la config del baseline difiere de la del abc -> las metricas de C que se "
+               "reutilizan no son comparables con este baseline")
+        _check(o["baseline"]["fingerprint_id"] == abc.get("fingerprint_id"),
+               f"{tag}: fingerprint del baseline != del abc -> no son la misma corrida base")
+        _check(o.get("config") == cur_cfg,
+               f"{tag}: la config de la tarea difiere de la de --mode refit_aggregate")
+        only = [k for k in _science_config_delta(o["baseline"]["config"], cur_cfg) if k != "max_iter"]
+        _check(not only, f"{tag}: el refit difiere de la base en {only} ademas de max_iter")
+        # El techo TIENE que haber subido: si no, no hubo control de convergencia y el reporte diria
+        # "reajustado con mas iteraciones" sobre un ajuste identico al de la base.
+        _check(int(o["max_iter"]) > int(o["baseline"]["max_iter"]),
+               f"{tag}: max_iter del refit ({o['max_iter']}) <= de la base ({o['baseline']['max_iter']}) "
+               "-> no es un control de convergencia")
+        _check(int(o["config"]["max_iter"]) == int(o["max_iter"]),
+               f"{tag}: config.max_iter ({o['config']['max_iter']}) != max_iter declarado ({o['max_iter']})")
+        # Mismas ENTRADAS que la base (no solo misma config escalar): sin esto el contraste vs C
+        # reutilizado compararia numeros calculados sobre datos distintos.
+        _check(o.get("input_sha256") and o["input_sha256"] == o["baseline"].get("input_sha256"),
+               f"{tag}: input_sha256 del refit != del baseline -> datos distintos (fail-closed)")
+    fps = {o.get("fingerprint_id") for o in refit_objs}
+    _check(len(fps) == 1 and None not in fps, f"fingerprint_id inconsistente entre refits: {fps}")
+    inputs = {json.dumps(o.get("input_sha256"), sort_keys=True) for o in refit_objs}
+    _check(len(inputs) == 1, "los refits no comparten input_sha256 -> vienen de datos distintos")
+
+
+def _refit_verdict(per_set, material_delta):
+    """Criterio de cierre PREDECLARADO (fijado antes de correr; el umbral vive en la config).
+
+    La no-convergencia MANDA sobre todo lo demas: cerrar apoyandose en un modelo que sigue topando el
+    techo de iteraciones es justamente lo que este control existe para evitar. Solo si todos los
+    modelos convergieron se evalua el signo y la magnitud."""
+    flat = [f for s in per_set.values() for f in s["per_fold"]]
+    not_conv = [f"{s}.fold{f['held_out_fold']}" for s, v in per_set.items()
+                for f in v["per_fold"] if f["converged"] is False]
+    unknown = [f"{s}.fold{f['held_out_fold']}" for s, v in per_set.items()
+               for f in v["per_fold"] if f["converged"] is None]
+    max_change = max((abs(f["delta_balacc_vs_baseline"]) for f in flat), default=0.0)
+    all_neg = all(f["delta_balacc_vs_C"] < 0 for f in flat)
+    if unknown:
+        return {"verdict": "INDETERMINADO_SIN_n_iter",
+                "action": "el solver no expuso n_iter en " + ", ".join(unknown) + " -> no se puede "
+                          "juzgar convergencia; revisar antes de concluir",
+                "not_converged": not_conv, "n_iter_unknown": unknown,
+                "max_abs_delta_balacc_vs_baseline": round(max_change, 6), "all_delta_vs_C_negative": all_neg}
+    if not_conv:
+        return {"verdict": "SIGUE_SIN_CONVERGER",
+                "action": "reportar trayectoria (base vs este techo) y estabilidad, y CONSULTAR antes de "
+                          "subir el techo otra vez; NO cerrar con un modelo que sigue topando max_iter",
+                "not_converged": not_conv, "n_iter_unknown": [],
+                "max_abs_delta_balacc_vs_baseline": round(max_change, 6), "all_delta_vs_C_negative": all_neg}
+    if all_neg and max_change < material_delta:
+        return {"verdict": "CIERRE_CON_CAVEAT",
+                "action": f"delta vs C negativo en TODOS los folds y el cambio maximo de balanced "
+                          f"accuracy ({max_change:.6f}) < umbral material ({material_delta}) -> la "
+                          "no-convergencia del solver no explicaba el resultado. Cierra: la matriz rara "
+                          "cruda NO muestra utilidad incremental sobre C BAJO EL PIPELINE ELASTIC NET "
+                          "PREESPECIFICADO de este benchmark (retencion fold-fitted -> MaxAbs -> "
+                          "elasticnet/saga, grilla y umbral congelados). El alcance del cierre es ESA "
+                          "ruta, no la familia Elastic Net ni la representacion diadica: un instrumento "
+                          "marginal por-variante no puede refutar lo que no mide.",
+                "scope_of_closure": ("sin utilidad incremental bajo el pipeline Elastic Net "
+                                     "preespecificado; NO es un veredicto sobre Elastic Net como familia "
+                                     "ni sobre la senal diadica de las raras"),
+                "not_converged": [], "n_iter_unknown": [],
+                "max_abs_delta_balacc_vs_baseline": round(max_change, 6), "all_delta_vs_C_negative": all_neg}
+    return {"verdict": "DETENERSE_Y_REVISAR",
+            "action": ("cambio material o cambio de signo -> NO cerrar y NO repetir ninguna seleccion "
+                       "sin revisarlo primero"),
+            "not_converged": [], "n_iter_unknown": [],
+            "max_abs_delta_balacc_vs_baseline": round(max_change, 6), "all_delta_vs_C_negative": all_neg}
+
+
+def run_refit_aggregate(args):
+    """Reensambla el control: por fold n_iter/convergencia/metricas/tiempo/memoria, delta vs C
+    (metricas de C REUTILIZADAS de la base) y delta vs el resultado original. No carga la matriz."""
+    _reject_svd_partitioned(args)
+    abc = _common.read_json(args.abc_json)
+    refit_objs = [_common.read_json(p) for p in args.refit_json]
+    _validate_refit_inputs(abc, refit_objs, args)
+
+    c_per_fold = abc["sets"][SET_C]["per_fold"]
+    c_bal = {int(e["held_out_fold"]): e["balanced_accuracy"] for e in c_per_fold}
+    required = list(abc["meta"]["outer_folds"])
+    per_set = {}
+    for name in sorted({o["set"] for o in refit_objs}):
+        objs = sorted((o for o in refit_objs if o["set"] == name), key=lambda o: int(o["held_out_fold"]))
+        held = [int(o["held_out_fold"]) for o in objs]
+        if held != required:
+            raise SystemExit(f"[refit_aggregate] set {name}: folds {held} != requeridos {required} -> "
+                             "fail-closed (faltan/sobran tareas por fold)")
+        rows = []
+        for o in objs:
+            h = int(o["held_out_fold"])
+            r, b = o["per_fold_entry"], o["baseline"]["per_fold_entry"]
+            if h not in c_bal:
+                raise SystemExit(f"[refit_aggregate] {name}.fold{h}: el abc no trae {SET_C} para ese fold")
+            rows.append({
+                "held_out_fold": h,
+                "chosen_params": r["chosen_params"],
+                "max_iter_baseline": int(o["baseline"]["max_iter"]),
+                "max_iter_refit": int(o["max_iter"]),
+                "n_iter": r["n_iter"], "converged": r["converged"],
+                "balanced_accuracy": r["balanced_accuracy"],
+                "balanced_accuracy_baseline": b["balanced_accuracy"],
+                "delta_balacc_vs_baseline": round(r["balanced_accuracy"] - b["balanced_accuracy"], 6),
+                "auroc": r["auroc"], "auroc_baseline": b["auroc"],
+                "delta_auroc_vs_baseline": round(r["auroc"] - b["auroc"], 6),
+                "recall_pos": r["recall_pos"], "recall_neg": r["recall_neg"],
+                "balanced_accuracy_C": c_bal[h],
+                "delta_balacc_vs_C": round(r["balanced_accuracy"] - c_bal[h], 6),
+                "delta_balacc_vs_C_baseline": round(b["balanced_accuracy"] - c_bal[h], 6),
+                "n_retained_rare_cols": r["n_retained_rare_cols"],
+                "fit_seconds": r["fit_seconds"],
+                "peak_rss_self_gb": r["peak_rss_self_gb"],
+            })
+        c_entries = [e for e in c_per_fold if int(e["held_out_fold"]) in required]
+        per_set[name] = {
+            "per_fold": rows,
+            "balanced_accuracy": _agg(rows, "balanced_accuracy"),
+            "balanced_accuracy_baseline": _agg(rows, "balanced_accuracy_baseline"),
+            "delta_balacc_vs_baseline": _agg(rows, "delta_balacc_vs_baseline"),
+            "delta_balacc_vs_C": _paired_delta(rows, c_entries, "balanced_accuracy"),
+            "delta_auroc_vs_C": _paired_delta(rows, c_entries, "auroc"),
+            "fit_seconds": _agg(rows, "fit_seconds"),
+        }
+
+    verdict = _refit_verdict(per_set, float(args.refit_material_delta))
+    report = {
+        "module": "23_RARE_MATRIX_BENCHMARK",
+        "stage": "refit (control acotado de convergencia)",
+        "sklearn_version": sklearn.__version__,
+        "seed": args.seed,
+        "meta": abc["meta"],
+        "test_fold_excluded": args.test_fold,
+        "scope": ("reajuste del modelo FINAL por (set,fold) con los hiperparametros ya seleccionados en "
+                  "la corrida base y max_iter mas alto. Sin grilla, sin seleccion nueva, sin TEST. Las "
+                  f"metricas de {SET_C} se REUTILIZAN del abc_results.json de la base."),
+        "max_iter": {"baseline": sorted({int(o["baseline"]["max_iter"]) for o in refit_objs}),
+                     "refit": sorted({int(o["max_iter"]) for o in refit_objs})},
+        "material_delta_balacc": float(args.refit_material_delta),
+        "closure_criterion": ("PREDECLARADO. (1) si algun modelo sigue sin converger -> reportar y "
+                              "consultar antes de subir el techo; (2) si el delta vs C sigue negativo en "
+                              "los 4 folds y el cambio de balanced accuracy < umbral material -> cerrar "
+                              "con caveat, con el alcance acotado a ESTA ruta (ver closure.scope_of_"
+                              "closure); (3) en cualquier otro caso -> detenerse y revisar."),
+        "closure_scope_declared": ("un cierre de este control significa 'sin utilidad incremental bajo el "
+                                   "pipeline Elastic Net preespecificado', NO 'la familia Elastic Net "
+                                   "queda refutada' ni 'las raras no tienen senal'. El estimador es "
+                                   "MARGINAL por-variante y no representa interaccion diadica, que es la "
+                                   "senal que motiva el encoder: por construccion no puede pronunciarse "
+                                   "sobre ella. El juez capaz de hacer PERDER a la matriz vive fuera de "
+                                   "M14 y fuera de este benchmark."),
+        "per_set": per_set,
+        "reference_C": {"set": SET_C, "balanced_accuracy": _agg(c_per_fold, "balanced_accuracy"),
+                        "source": "abc_results.json de la corrida base (reutilizado, no recomputado)"},
+        "closure": verdict,
+        "config": _science_config(args),
+        "baseline_fingerprint_id": abc.get("fingerprint_id"),
+        "refit_fingerprint_id": refit_objs[0].get("fingerprint_id"),
+    }
+    _common.write_json(args.outdir / "rare_bench_refit_results.json", report)
+    print(json.dumps({"refit_aggregate_ok": True, "closure": verdict,
+                      "per_set_delta_vs_C": {k: v["delta_balacc_vs_C"] for k, v in per_set.items()},
+                      "per_set_delta_vs_baseline": {k: v["delta_balacc_vs_baseline"]
+                                                    for k, v in per_set.items()}}, indent=2))
+
+
 def run_monolithic(args, ctx):
     """Corrida de un tiron (REFERENCIA). Todos los sets/folds -> rare_bench_cv_results.json. No usa
     preflight (es la referencia standalone que hashea sus propias entradas al cargar)."""
@@ -753,8 +1092,10 @@ def build_parser():
     ap.add_argument("--outdir", required=True, type=Path)
     # Modos de ejecución particionada.
     ap.add_argument("--mode", default="monolithic",
-                    choices=["monolithic", "preflight", "abc", "fold", "aggregate"],
-                    help="monolithic (referencia) | preflight | abc | fold (--set --fold) | aggregate")
+                    choices=["monolithic", "preflight", "abc", "fold", "aggregate",
+                             "refit", "refit_aggregate"],
+                    help="monolithic (referencia) | preflight | abc | fold (--set --fold) | aggregate | "
+                         "refit (control de convergencia de UN modelo final) | refit_aggregate")
     ap.add_argument("--set", dest="set_name", default=None, help="set para --mode fold (D/E)")
     ap.add_argument("--fold", type=int, default=None, help="outer-fold para --mode fold")
     ap.add_argument("--container-sha256", default=None,
@@ -764,6 +1105,20 @@ def build_parser():
     ap.add_argument("--abc-json", type=Path, default=None, help="abc_results.json para --mode aggregate")
     ap.add_argument("--fold-json", action="append", default=[], type=Path,
                     help="cada <set>.fold<K>.json para --mode aggregate (repetible)")
+    # Control acotado de convergencia.
+    ap.add_argument("--baseline-fold-json", type=Path, default=None,
+                    help="<set>.fold<K>.json de la corrida BASE para --mode refit. De ahi se leen los "
+                         "hiperparametros ganadores (no se transcriben) y la config a comparar.")
+    ap.add_argument("--baseline-preflight-json", type=Path, default=None,
+                    help="preflight.json de la corrida BASE para --mode refit. Su input_sha256 prueba que "
+                         "la base uso EXACTAMENTE las mismas entradas (matriz/split/modeling_master); sin "
+                         "el, un archivo regenerado con el mismo esquema pasaria desapercibido.")
+    ap.add_argument("--refit-json", action="append", default=[], type=Path,
+                    help="cada <set>.fold<K>.refit.json para --mode refit_aggregate (repetible)")
+    ap.add_argument("--refit-material-delta", type=float, default=0.01,
+                    help="umbral de cambio MATERIAL en balanced accuracy del criterio de cierre "
+                         "predeclarado. Operacional-de-decision: no entra en la huella cientifica "
+                         "porque no altera ningun ajuste, solo etiqueta el veredicto.")
     return ap
 
 
@@ -781,12 +1136,16 @@ def _is_oom_worker_kill(exc):
 
 
 def _run(args):
-    if args.mode == "aggregate":
-        # No carga la matriz: solo reensambla JSONs. Barato y portable.
-        for req in ("abc_json",):
-            if getattr(args, req) is None:
-                raise SystemExit(f"[rare_bench_cv] --mode aggregate requiere --{req.replace('_','-')}")
-        run_aggregate(args)
+    if args.mode in ("aggregate", "refit_aggregate"):
+        # No cargan la matriz: solo reensamblan JSONs. Barato y portable.
+        if args.abc_json is None:
+            raise SystemExit(f"[rare_bench_cv] --mode {args.mode} requiere --abc-json")
+        if args.mode == "aggregate":
+            run_aggregate(args)
+        else:
+            if not args.refit_json:
+                raise SystemExit("[rare_bench_cv] --mode refit_aggregate requiere al menos un --refit-json")
+            run_refit_aggregate(args)
         return
 
     # Todos los demas modos requieren la matriz + metadatos.
@@ -796,7 +1155,7 @@ def _run(args):
     ctx = load_context(args)  # fold-3 fail-closed SIEMPRE corre aqui, antes de cualquier computo
 
     dispatch = {"preflight": run_preflight, "abc": run_abc, "fold": run_fold,
-                "monolithic": run_monolithic}
+                "monolithic": run_monolithic, "refit": run_refit}
     dispatch[args.mode](args, ctx)
 
 
