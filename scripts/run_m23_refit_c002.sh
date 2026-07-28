@@ -24,7 +24,17 @@ set -euo pipefail
 export PATH="$HOME/micromamba/envs/nf/bin:$PATH"
 export JAVA_HOME="$HOME/micromamba/envs/nf"
 
-cd "$(dirname "$(readlink -f "$0")")/.."   # raiz del repo desde scripts/
+# Raiz del repo. OJO: bajo sbatch, $0 apunta a la COPIA del script en el spool del nodo, no al
+# original, asi que autoubicarse por $0 NO sirve (falla con "Permission denied" al escribir logs).
+# SLURM_SUBMIT_DIR es el directorio desde donde se hizo el sbatch; M23_REPO lo sobrescribe a mano.
+# Fail-closed: si no hay main.nf ahi, aborta en vez de correr en el sitio equivocado.
+REPO="${M23_REPO:-${SLURM_SUBMIT_DIR:-$(dirname "$(readlink -f "$0")")/..}}"
+REPO="$(readlink -f "$REPO")"
+if [ ! -f "$REPO/main.nf" ]; then
+  echo "No encuentro main.nf en $REPO. Lanza el sbatch desde la raiz del repo, o exporta M23_REPO=<raiz>." >&2
+  exit 1
+fi
+cd "$REPO"
 mkdir -p logs
 
 BASE=/scratch/datalake/refined/genbr/genbr_bioinfo/projects/DNABR_QC
@@ -35,7 +45,7 @@ MASTER="$BASE/model_pipeline_canonical/22_model_pipeline/modeling_master/modelin
 # Corrida BASE: de aqui salen los hiperparametros ganadores, las metricas de C y el input_sha256 que
 # prueba que se usaron EXACTAMENTE estas mismas entradas.
 BASELINE="$OUTDIR/23_rare_matrix_benchmark/cv"
-REPORTDIR=/home/jose.tantalean/projects/lai-exploracion-datos/logs/m23_refit_reports
+REPORTDIR="$REPO/logs/m23_refit_reports"
 mkdir -p "$REPORTDIR"
 
 nextflow run main.nf \
