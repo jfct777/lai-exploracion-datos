@@ -24,7 +24,7 @@ set -euo pipefail
 export PATH="$HOME/micromamba/envs/nf/bin:$PATH"
 export JAVA_HOME="$HOME/micromamba/envs/nf"
 
-cd /home/jose.tantalean/projects/lai-exploracion-datos
+cd "$(dirname "$(readlink -f "$0")")/.."   # raiz del repo desde scripts/
 mkdir -p logs
 
 BASE=/scratch/datalake/refined/genbr/genbr_bioinfo/projects/DNABR_QC
@@ -42,7 +42,7 @@ nextflow run main.nf \
   -profile slurm_singularity \
   -c hpc.config \
   -c conf/auto_resources.config \
-  -c /home/jose.tantalean/m23_launch/nodelist_c002.config \
+  -c scripts/nodelist_c002.config \
   -w "$WORKDIR" \
   -with-trace "$REPORTDIR/trace.txt" \
   -with-report "$REPORTDIR/report.html" \
