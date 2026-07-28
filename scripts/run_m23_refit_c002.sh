@@ -3,7 +3,7 @@
 #SBATCH --partition=cpu
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=4G
-#SBATCH --time=96:00:00
+#SBATCH --time=120:00:00
 #SBATCH --requeue
 #SBATCH --nodelist=c002
 #SBATCH --output=/home/jose.tantalean/projects/lai-exploracion-datos/logs/m23_refit_%j.log
@@ -21,7 +21,7 @@
 # El trabajo se fija en c002 porque es el nodo que tiene montado el datalake. Al reutilizar el mismo
 # workDir y usar -resume, la concatenación queda en caché y cada combinación de set y fold puede
 # reanudarse de forma independiente.
-# En el peor caso, los cuatro folds usan 24 horas en paralelo y el reintento tarda otras 48 horas.
+# En el peor caso, los cuatro folds usan 48 horas en paralelo y el reintento tarda otras 60 horas.
 set -euo pipefail
 
 export PATH="$HOME/micromamba/envs/nf/bin:$PATH"
