@@ -18,9 +18,10 @@
 # converger. Como el JSON no guardaba n_iter_, no era posible comprobar la convergencia del modelo
 # final.
 #
-# El trabajo se fija en c002 porque es el nodo que tiene montado el datalake. Al reutilizar el mismo
-# workDir y usar -resume, la concatenación queda en caché y cada combinación de set y fold puede
-# reanudarse de forma independiente.
+# El trabajo se fija en c002 porque es el nodo que tiene montado el datalake. El refit tiene su propio
+# workDir, separado del de la CV, para que un relanzamiento parta limpio sin arrastrar tareas a medias
+# de la corrida anterior. CONCAT tarda 1m25s y PREFLIGHT 15s, así que rehacerlas no cuesta nada. Con
+# -resume, dentro del propio refit cada combinación de set y fold se reanuda de forma independiente.
 # En el peor caso, los cuatro folds usan 48 horas en paralelo y el reintento tarda otras 60 horas.
 set -euo pipefail
 
@@ -41,7 +42,7 @@ mkdir -p logs
 
 BASE=/scratch/datalake/refined/genbr/genbr_bioinfo/projects/DNABR_QC
 OUTDIR="$BASE/results_m23_extract_22chr"
-WORKDIR=/scratch/datalake/transient/genbr/genbr_bioinfo/projects/DNABR_QC/tmp/nxf_work_m23_cv
+WORKDIR=/scratch/datalake/transient/genbr/genbr_bioinfo/projects/DNABR_QC/tmp/nxf_work_m23_refit
 SPLIT="$BASE/model_pipeline_canonical/22_model_pipeline/split/split_manifest.tsv"
 MASTER="$BASE/model_pipeline_canonical/22_model_pipeline/modeling_master/modeling_master.tsv"
 # De la corrida base se leen los hiperparámetros elegidos, las métricas de C y el input_sha256 que
