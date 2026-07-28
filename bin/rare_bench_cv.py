@@ -40,7 +40,7 @@ import time
 from pathlib import Path
 
 import _common
-_common.pin_env()  # Fija las variables de un hilo antes de importar numpy y sklearn.
+_common.pin_env()  # env vars de 1-hilo ANTES de numpy/sklearn (import-time; standalone/nube)
 
 import numpy as np
 import pandas as pd
@@ -64,7 +64,7 @@ _THREAD_STATE = _common.pin_threadpools()  # El límite de hilos se aplica en ru
 # Los sets A y B siguen la definición de M22 en bin/model_primary_cv.py.
 A_COLS = ["Q_NAM", "Q_EUR", "Q_EAS", "Q_AFR", "sex"]
 B_DENSITY_COL = "rare_density"           # columna directa del modeling_master
-B_CARRIER_NUM = "rare_carrier_site_count"  # Solo se usa para derivar carrier_density.
+B_CARRIER_NUM = "rare_carrier_site_count"  # solo para DERIVAR carrier_density (no es predictor crudo)
 B_CARRIER_DEN = "rare_gt_nonmissing_sites"  # denominador de carrier_density (no es predictor crudo)
 B_NAMES = ["rare_density", "carrier_density"]  # orden M22
 
@@ -87,7 +87,6 @@ class RareRetention(BaseEstimator, TransformerMixin):
         self.min_variance = min_variance
 
     def fit(self, X, y=None):
-        """Aprende la máscara de variantes usando únicamente el fold de entrenamiento."""
         Xc = sp.csc_matrix(X)
         # MAC = suma de dosis alt por columna (train del fold); carriers = individuos con dosis>0.
         mac = np.asarray(Xc.sum(axis=0)).ravel()
@@ -103,7 +102,6 @@ class RareRetention(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
-        """Aplica la máscara aprendida sin densificar la matriz."""
         Xc = sp.csc_matrix(X)
         return Xc[:, self.mask_].astype(np.float32)
 
@@ -249,7 +247,7 @@ def _fit_one_fold(estimator, grid, X, y, held, tr, va, inner_group, inner_splits
         "recall_neg": round(float(recall_score(yva, ypred, pos_label=0, zero_division=0)), 6),
         "chosen_params": chosen,
         "n_retained_rare_cols": n_ret,
-        # Auditoría del solver; los campos son opcionales para poder
+        # Auditoria del solver (campos NUEVOS, opcionales en el esquema del agregador para poder
         # seguir leyendo artefactos de corridas anteriores que no los traen).
         "n_iter": n_iter,
         "converged": converged,
@@ -345,7 +343,7 @@ def load_context(args):
     n_dense_C = C.shape[1]
 
     # Entradas combinadas para E (C denso ++ matriz sparse) como una sola matriz sparse.
-    # A, B y C se pasan densos porque solo tienen entre cinco y siete columnas y StandardScaler debe centrar.
+    # A/B/C se pasan DENSOS (5-7 columnas, no ganan sparsity) para que StandardScaler pueda centrar
     # (with_mean=True); la version sparse rompe StandardScaler ("Cannot center sparse matrices").
     E_input = sp.hstack([sp.csr_matrix(C), X], format="csr")
 
@@ -416,7 +414,7 @@ def build_report(results, args, meta, elapsed, partition_meta=None):
         "secondary_delta_balacc_D_minus_A": _paired_delta(results[SET_D]["per_fold"], A_pf),
     }
 
-    # Auditoría de fuga: las columnas raras retenidas deben poder cambiar entre folds externos.
+    # auditoria anti-leakage: las columnas raras retenidas DEBEN diferir entre outer folds.
     d_ret = summary[SET_D]["retained_rare_cols_per_fold"]
     anti_leakage_ok = len(set(x for x in d_ret if x is not None)) > 1
 
@@ -717,7 +715,7 @@ def run_aggregate(args):
         raise SystemExit(f"[aggregate] fingerprint_id inconsistente entre tareas: {fps}")
     # La configuración de aggregate debe coincidir con la de las tareas porque
     # build_report deriva la metadata cientifica (test_fold, cv_design, retencion, class_weight) de los
-    # argumentos de esta invocación. Si difieren, el informe mostraría metadatos incorrectos aunque los números
+    # args de ESTA invocacion. Si difieren, el reporte mostraria metadata falsa aunque los numeros
     # per-fold (leidos de los JSON) sean correctos. El `config` guardado por cada tarea es la verdad.
     agg_config = _science_config(args)
     for obj, tag in [(abc, "abc")] + [(o, o.get("set")) for o in fold_objs]:
@@ -1050,7 +1048,7 @@ def run_refit_aggregate(args):
 
 
 def run_monolithic(args, ctx):
-    """Ejecuta todos los sets y folds como referencia y escribe rare_bench_cv_results.json. No usa
+    """Corrida de un tiron (REFERENCIA). Todos los sets/folds -> rare_bench_cv_results.json. No usa
     preflight (es la referencia standalone que hashea sus propias entradas al cargar)."""
     results = {}
     t0 = time.perf_counter()
@@ -1075,7 +1073,6 @@ def run_monolithic(args, ctx):
 
 
 def build_parser():
-    """Construye el parser de argumentos para todos los modos del benchmark."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--matrix-npz", type=Path)
     ap.add_argument("--samples-tsv", type=Path)
@@ -1184,14 +1181,13 @@ def _run(args):
 
 
 def main():
-    """Ejecuta el modo solicitado y traduce fallos de memoria al código de reintento."""
     args = build_parser().parse_args()
     args.outdir.mkdir(parents=True, exist_ok=True)
     try:
         _run(args)
     except TerminatedWorkerError as exc:
         # loky solo mata un worker con SIGKILL(-9) cuando el kernel lo OOM-killea (o alguien lo mata a
-        # mano) indica un fallo transitorio de recursos y se remapea a un código reintentable. Cualquier
+        # mano) -> fallo de RECURSOS transitorio: remapear a un exit dedicado reintentable. Cualquier
         # otra terminacion del worker (SIGSEGV -11 = bug de codigo/datos, etc.) se re-lanza y sale
         # Los errores científicos terminan con código 1.
         if _is_oom_worker_kill(exc):
