@@ -3,29 +3,27 @@ nextflow.enable.dsl=2
 import groovy.json.JsonOutput
 
 // ---------------------------------------------------------------------------
-// Module 23 — Benchmark de la matriz rara individuo x variante (recuperabilidad tecnica)
+// Módulo 23: benchmark de la matriz rara individuo por variante
 // ---------------------------------------------------------------------------
-// El diseño mide si la matriz rara reducida, añadida
-// al burden (E = Q+sexo+burden+matriz) frente a C = Q+sexo+burden, RECUPERA fuera de muestra mas de
-// la etiqueta Leiden (interna a M14). Como la matriz y la etiqueta comparten el mismo substrato de
-// raras mac2, un E-C>0 es CONCORDANCIA/recuperabilidad, no descubrimiento biologico; y por DPI-en-
-// muestra-finita el resultado PUEDE ser <=0. Fuente exacta del label = results_modtest_mac2/lai_rare.
+// Compara E = Q+sexo+burden+matriz con C = Q+sexo+burden para medir cuánto aporta la matriz rara
+// fuera de muestra respecto a la etiqueta Leiden generada por M14. Como la matriz y la etiqueta se
+// derivan de las mismas variantes mac2, un E-C positivo indica concordancia o recuperabilidad, no un
+// descubrimiento biológico. La etiqueta se lee de results_modtest_mac2/lai_rare.
 //
-// Este archivo implementa las ETAPAS del benchmark:
-//   1. EXTRACT_RARE_MATRIX_CHR  extraccion sparse por cromosoma (+ RARE_BENCH_SMOKE tecnico chr22)
-//   2. CONCAT_RARE_MATRIX       concatenacion genoma-completa de las 22 matrices (nunca densifica)
+// Etapas del benchmark:
+//   1. EXTRACT_RARE_MATRIX_CHR  extracción sparse por cromosoma y smoke técnico en chr22
+//   2. CONCAT_RARE_MATRIX       concatenación de las 22 matrices sin densificarlas
 //   3. RARE_BENCH_CV            CV anidada agrupada dentro de TRAIN: sets A-E, contraste E-C
-// Cada etapa se activa con su enable_* y es independiente (descubre las salidas publicadas si la
-// etapa previa esta desactivada). El fold 3 (TEST) no entra en ninguna etapa.
+// Cada etapa se activa mediante su parámetro enable_* y puede reutilizar las salidas publicadas por
+// la etapa anterior. El fold 3, reservado para test, queda fuera de todo el módulo.
 //
 // Validaciones:
-//  - EL FOLD 3 (TEST) NUNCA SE DECODIFICA: extract_rare_matrix_chr.py pasa a `bcftools query -S`
-//    unicamente los IDs de TRAIN -> el genotipo de TEST no se lee del VCF. Ademas el script aborta
-//    (fail-closed) si algun ID esta a la vez en TRAIN y TEST.
-//  - El SMOKE es tecnico: etiqueta permutada, sin CV, sin grilla, sin metricas cientificas. Solo
-//    reporta dimensiones, missingness, memoria, tiempo, sparse-safety y el bloqueo de fold 3.
+//  - extract_rare_matrix_chr.py entrega a `bcftools query -S` únicamente los ID de TRAIN. Los
+//    genotipos del fold de test no se leen y el script termina si un ID aparece en ambos grupos.
+//  - El smoke usa una etiqueta permutada y no ejecuta CV ni grilla. Solo informa dimensiones,
+//    missingness, memoria, tiempo y conservación del formato sparse.
 //  - Matriz siempre sparse (CSC/CSR); nunca se densifica.
-//  - Manifiesto sha256 por etapa via bin/write_stage_manifest.py (bin/ en el PATH del worker).
+//  - Cada etapa escribe un manifiesto sha256 mediante bin/write_stage_manifest.py.
 
 process EXTRACT_RARE_MATRIX_CHR {
     tag "extract_chr${chrom}"
@@ -125,13 +123,11 @@ process RARE_BENCH_SMOKE {
 }
 
 // ---------------------------------------------------------------------------
-// ETAPA 2 — Concatenación genoma-completa de las 22 matrices por-cromosoma
+// Etapa 2: concatenación de las 22 matrices por cromosoma
 // ---------------------------------------------------------------------------
-// hstack de las 22 CSC en una matriz individuo×variante genoma-completa (nunca densifica). El orden de
-// filas se re-asegura idéntico en los 22 y == orden TRAIN del split (fail-closed). El pre-filtro de
-// missingness (call-rate) es GLOBAL-TRAIN aquí (la extracción imputó faltantes a 0 → la máscara por
-// individuo no es recuperable; es casi inerte y label-independiente). MAC/portadores/varianza se
-// re-derivan POR-FOLD en la CV, no aquí.
+// Las 22 matrices CSC se unen con hstack sin densificarlas. El orden de las filas debe coincidir en
+// todos los cromosomas y con TRAIN en el split. El prefiltro de missingness se calcula sobre TRAIN;
+// MAC, portadores y varianza se vuelven a calcular dentro de cada fold durante la CV.
 process CONCAT_RARE_MATRIX {
     tag "concat_genome"
 
@@ -181,17 +177,17 @@ process CONCAT_RARE_MATRIX {
 }
 
 // ---------------------------------------------------------------------------
-// ETAPA 3 — Benchmark científico PARTICIONADO por (set,fold): reanudabilidad Nextflow-first
+// Etapa 3: benchmark científico dividido por set y fold
 // ---------------------------------------------------------------------------
 // El CV monolítico se divide en cuatro procesos para reanudar después de una interrupción:
-//   PREFLIGHT  → valida cohortes + fold-3 + huella fail-closed (única lectura que HASHEA la matriz).
+//   PREFLIGHT  → valida cohortes, fold 3 y huella; es la única tarea que calcula el hash de la matriz.
 //   CV_ABC     → sets densos A,B,C (ms) en una tarea; per_fold por los 4 folds.
 //   CV_FOLD    → una tarea por (set∈{D,E}, fold∈{0,1,2,4}) = 8 tareas paralelas (maxForks acotado).
 //   AGGREGATE  → reensambla en orden, arma contrastes → rare_bench_cv_results.json (esquema idéntico).
-// Diseño científico INTACTO (grilla/modelos/umbral/fold-3/SVD-off): probado bit-equivalente al monolítico
-// (tests/test_partition_equivalence.py). Fold 3 sellado antes de honrar cualquier resultado. Los flags
-// científicos (${sci_flags}) son IDÉNTICOS en los 4 procesos (fuente única en el subworkflow) y matriz/
-// split/samples/modeling_master viajan por los MISMOS canales `path` inmutables → la herencia del hash y
+// La grilla, los modelos, el umbral, la exclusión del fold 3 y SVD-off se mantienen sin cambios. La
+// equivalencia con el modo monolítico se prueba en tests/test_partition_equivalence.py. Los cuatro
+// procesos comparten los parámetros científicos y reciben matriz, split, samples y modeling_master
+// por los mismos canales `path`, de modo que la herencia del hash y
 // el contraste E−C coinciden. bin/_common.py viaja como `path` a cada proceso (import del helper).
 process RARE_BENCH_PREFLIGHT {
     tag "preflight"
@@ -335,9 +331,9 @@ process RARE_BENCH_AGGREGATE {
 
 
 // ---------------------------------------------------------------------------
-// CONTROL ACOTADO DE CONVERGENCIA (23e) — NO repite el benchmark ni la grilla.
-// Reajusta el modelo FINAL de cada (set,fold) con los hiperparametros que la corrida base ya
-// eligio y un techo de iteraciones mas alto. Una tarea por (set,fold) -> reanudable con -resume.
+// Control acotado de convergencia (23e). Reajusta el modelo final de cada combinación de set y fold
+// con los hiperparámetros elegidos en la corrida base y un techo de iteraciones más alto. Cada
+// combinación se ejecuta como una tarea independiente que puede reanudarse con -resume.
 // ---------------------------------------------------------------------------
 process RARE_BENCH_REFIT_FOLD {
     tag "refit_${set_name}_${fold}"
@@ -354,8 +350,8 @@ process RARE_BENCH_REFIT_FOLD {
     path cv_py
     path common_py
     path preflight_json
-    // El preflight de la BASE se llama igual que el de esta etapa (preflight.json) -> stageAs para que
-    // no colisionen al montarse en el directorio de trabajo de la tarea.
+    // El preflight de la corrida base y el de esta etapa se llaman preflight.json. stageAs evita que
+    // ambos archivos colisionen en el directorio de trabajo.
     path baseline_preflight_json, stageAs: 'baseline_preflight.json'
     val  sci_flags
     val  container_sha
@@ -491,9 +487,8 @@ workflow RARE_MATRIX_BENCHMARK {
             launch_dir       : workflow.launchDir.toString(),
             project_dir      : projectDir.toString(),
         ]
-        // Va DENTRO del subdir de la etapa: cada etapa (cv, refit_check, ...) es una corrida distinta
-        // con su propio comando, y escribirlo en la raíz haría que la segunda pisara la procedencia de
-        // la primera. El puntero relativo del manifiesto apunta al de su propia etapa.
+        // Cada etapa guarda run_provenance.json en su propio subdirectorio. Así una segunda corrida no
+        // reemplaza la procedencia de la anterior y el manifiesto puede usar una ruta relativa.
         def rb_rp_dir = new File("${params.rare_bench_results_dir}/${params.rare_bench_stage_subdir}")
         rb_rp_dir.mkdirs()
         new File(rb_rp_dir, 'run_provenance.json').text = JsonOutput.prettyPrint(JsonOutput.toJson(rb_run_prov))
@@ -567,11 +562,10 @@ workflow RARE_MATRIX_BENCHMARK {
                 def rb_common_py = file("${projectDir}/bin/_common.py")
                 if( !rb_common_py.exists() ) throw new IllegalStateException("M23 cv: bin/_common.py no encontrado (helper compartido).")
 
-                // Flags cientificos COMUNES: fuente unica -> identicos en preflight/abc/fold/aggregate,
-                // de modo que la huella y el contraste E-C coincidan. Los valores no llevan espacios ->
-                // sin comillas de shell. Cambiar cualquier param cientifico invalida el cache (correcto).
-                // El techo de iteraciones entra como argumento: es lo UNICO que el control de
-                // convergencia cambia respecto al benchmark, y esa diferencia debe verse en la huella.
+                // Los parámetros científicos se construyen en un solo lugar para que preflight, abc,
+                // fold y aggregate compartan la misma huella y el mismo contraste E-C. Como los valores
+                // no contienen espacios, pueden pasarse sin comillas adicionales. Un cambio científico
+                // invalida la caché. En el control de convergencia solo cambia el techo de iteraciones.
                 def rb_sci_with = { max_iter -> [
                     "--sample-id-col ${params.rare_bench_sample_id_col}",
                     "--split-col ${params.rare_bench_split_col}",
@@ -625,9 +619,8 @@ workflow RARE_MATRIX_BENCHMARK {
                     def rb_abc = RARE_BENCH_CV_ABC(ch_genome_v, rb_split, rb_mm, rare_bench_cv_py, rb_common_py,
                                                    rb_pf, rb_sci, rb_container_sha, ch_rb_prov).results
 
-                    // 8 tareas (set,fold) = {D,E} x {0,1,2,4}. Los sets/folds son parametrizables pero deben
-                    // coincidir con HEAVY_SETS del script y con los outer_folds del split (el agregador lo
-                    // exige fail-closed).
+                    // Se crean ocho tareas: los sets D y E para los folds 0, 1, 2 y 4. Los valores
+                    // configurados deben coincidir con HEAVY_SETS y con los outer folds del split.
                     def rb_sf = rb_expand(params.rare_bench_cv_heavy_sets, params.rare_bench_cv_folds, 'cv')
                                   .collect { s, f -> tuple(s, f) }
 
@@ -640,9 +633,9 @@ workflow RARE_MATRIX_BENCHMARK {
                 }
 
                 // --- ETAPA 3b: control acotado de convergencia del solver -------------------------
-                // Reajusta SOLO los modelos finales con los hiperparametros ya elegidos y un techo de
-                // iteraciones mas alto. NO recomputa A/B/C: las metricas de C se reutilizan leyendo el
-                // abc_results.json de la corrida base.
+                // Reajusta los modelos finales con los hiperparámetros elegidos en la corrida base y
+                // un techo de iteraciones más alto. A/B/C no se recalculan; las métricas de C se leen
+                // de abc_results.json.
                 if( do_rb_refit ) {
                     def rb_sci_refit = rb_sci_with(params.rare_bench_refit_max_iter)
                     if( params.rare_bench_refit_max_iter.toString().toInteger() <= params.rare_bench_cv_max_iter.toString().toInteger() )
@@ -653,12 +646,10 @@ workflow RARE_MATRIX_BENCHMARK {
                     def rf_base_dir = reqRB(params.rare_bench_refit_baseline_dir, 'rare_bench_refit_baseline_dir')
                     def rf_abc = file("${rf_base_dir}/abc_results.json")
                     if( !rf_abc.exists() ) throw new IllegalStateException("M23 refit: falta ${rf_abc} "
-                        + "(las metricas de C se REUTILIZAN de la corrida base, no se recomputan).")
-                    // Guard de sobrescritura POR CONTENIDO, no por nombre: comparar rutas solo atrapa el
-                    // caso en que el baseline sea literalmente este subdir. Si el baseline apunta a una
-                    // copia archivada y alguien olvida cambiar el subdir, esta etapa publicaria encima del
-                    // preflight/procedencia de la corrida CV que viva ahi. Un subdir que ya contiene
-                    // artefactos de una etapa CV no es un destino valido para el control.
+                        + "(las métricas de C se leen de la corrida base y no se recalculan).")
+                    // Se comprueba el contenido del destino y no solo su ruta. Así también se detecta
+                    // una copia archivada de la corrida base y se evita reemplazar su preflight o su
+                    // información de procedencia.
                     def rf_out_dir = "${params.rare_bench_results_dir}/${params.rare_bench_stage_subdir}"
                     for( guard in ['abc_results.json', 'rare_bench_cv_results.json'] )
                         if( file("${rf_out_dir}/${guard}").exists() )

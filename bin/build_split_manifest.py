@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
-"""SPLIT_POLICY -- construye el split train/test PRIMARIO, reproducible y congelable, a partir de
-`modeling_master.tsv` (P0_DATASET=COMPLETO). NO selecciona features ni entrena nada.
+"""SPLIT_POLICY construye el split principal de entrenamiento y test a partir de
+`modeling_master.tsv` (P0_DATASET=COMPLETO). No selecciona variables ni entrena modelos.
 
 El diseño aplica las siguientes reglas:
   - Manifiesto con las 2619 filas. Las 6 QC-rojas: eligible=false, split=EXCLUDE, fold=NA,
     exclusion_reason=qc_red. Las 2613 elegibles se particionan.
-  - Etiqueta y: y=1 si community_res_1 >= 0 (pertenece a comunidad Leiden); y=0 si
-    community_res_1 == -1 (ruido de Leiden) O falta (aislado sin nodo en el grafo).
+  - Etiqueta y: y=1 si community_res_1 >= 0 (pertenece a una comunidad Leiden); y=0 si
+    community_res_1 == -1 (ruido de Leiden) o falta (aislado sin nodo en el grafo).
     y0_subtype distingue {community, leiden_noise, isolated} para trazabilidad.
   - Grupo (anti-fuga de familias): componentes conexas PC-Relate phi>=0.0442. La etiqueta de grupo
-    se CANONICALIZA a min(sample_id) del componente ANTES de particionar -> invariante al orden de
-    generacion de PC-Relate (sklearn ordena los grupos por su etiqueta para la asignacion greedy).
+    se normaliza a min(sample_id) del componente antes de particionar. Así el resultado no depende
+    del orden de generación de PC-Relate.
   - Particionado: StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42) genera 5 folds.
-  - SELECCION del fold de TEST (regla DECLARADA de antemano, usa SOLO metadatos -- etiqueta,
-    cohorte, region -- NUNCA features raras ni resultados de modelos): se elige el fold cuya
-    distribucion es MAS REPRESENTATIVA del total elegible, minimizando el desbalance conjunto
+  - Selección del fold de test: se define de antemano usando la etiqueta, la cohorte y la región.
+    No se consultan variables raras ni resultados de modelos. Se elige el fold cuya distribución
+    representa mejor el total elegible y minimiza el desbalance conjunto:
       joint = |prev_fold - prev_overall| + TVD_cohorte + TVD_region
-    (TVD = distancia de variacion total). En empate, el fold de menor numero. Los otros 4 = TRAIN.
+    (TVD = distancia de variación total). En caso de empate se elige el fold de menor número. Los
+    otros cuatro folds se usan para entrenamiento.
 
-Fuga ACEPTADA declarada (no es cero): el agrupamiento a phi>=0.0442 garantiza que ningun par con
+Fuga aceptada (no es igual a cero): el agrupamiento a phi>=0.0442 garantiza que ningún par con
 phi>=0.0442 cruza el split, pero el 4.º grado (phi>=0.0221) y la co-descendencia founder-difusa
 (que phi de SNPs comunes no ve) PUEDEN quedar a ambos lados. Limite explicito, no ausencia de fuga.
 
@@ -111,7 +112,7 @@ def build_split(master_path, red_samples, n_splits, seed, group_col, community_c
 def select_test_fold(elig, n_splits):
     """Regla DECLARADA: el fold de TEST es el mas representativo del total elegible -- minimiza
     joint = |prev_fold-prev_overall| + TVD_cohorte + TVD_region. Empate -> menor numero de fold.
-    Usa SOLO etiqueta/cohorte/region (metadatos), nunca features raras ni resultados de modelos."""
+    Usa etiqueta, cohorte y región; no consulta variables raras ni resultados de modelos."""
     prev_all = float((elig["y"] == 1).mean())
     coh_all = _dist(elig["cohort"])
     reg_all = _dist(elig["region"])
@@ -169,7 +170,7 @@ def audit(master, elig, full, chosen_fold, per_fold, overall, master_path,
         flag_ids = set(master.loc[master["flag_aislado"].astype(str).isin(["True", "1", "1.0"]), "sample_id"])
         isolated_matches_flag = bool(iso_ids == (flag_ids & set(elig["sample_id"])))
     chosen = per_fold_out[chosen_fold]
-    # bloque familiar mas grande, derivado de los datos (NO hardcodear -- CERO invencion)
+    # El bloque familiar más grande se calcula a partir de los datos y no se fija a mano.
     grp_sizes = elig.groupby("split_group_key").size()
     big_gid = grp_sizes.idxmax()
     big = elig[elig["split_group_key"] == big_gid]
@@ -292,7 +293,7 @@ def main():
 
 **Etiqueta y (binaria):**
 - `y=1` si `%(cc)s` >= 0 -> pertenece a una comunidad Leiden detectada.
-- `y=0` si `%(cc)s` == -1 (ruido de Leiden) O faltante (aislado sin nodo en el grafo).
+- `y=0` si `%(cc)s` == -1 (ruido de Leiden) o está ausente (aislado sin nodo en el grafo).
 
 **`y0_subtype`** (trazabilidad de la clase negativa): `leiden_noise` (community == -1),
 `isolated` (community faltante; coincide con `flag_aislado`), `community` (para y=1).
@@ -301,18 +302,18 @@ def main():
 a `min(sample_id)` del componente -> split funcion determinista de la particion, no del orden de
 generacion de PC-Relate.
 
-**Particionado y seleccion del TEST:** `StratifiedGroupKFold(n_splits=%(ns)d, shuffle=True,
-random_state=%(seed)d)` genera 5 folds. El fold de TEST se elige por una **regla declarada de
-antemano** que usa SOLO metadatos (etiqueta, cohorte, region -- nunca features raras ni resultados
+**Particionado y selección del test:** `StratifiedGroupKFold(n_splits=%(ns)d, shuffle=True,
+random_state=%(seed)d)` genera cinco folds. El fold de test se elige por una **regla declarada de
+antemano** que usa únicamente metadatos (etiqueta, cohorte y región, sin variables raras ni resultados
 de modelos): el fold mas representativo del total elegible, que minimiza
 `joint = |prev_fold - prev_overall| + TVD_cohorte + TVD_region`; en empate, el fold de menor numero.
 El fold elegido y las metricas por fold estan en `split_manifest_audit.json` (`fold_selection`).
 
-**Fuga ACEPTADA (limite explicito, NO cero):** phi>=0.0442 garantiza 0 pares cruzando; el 4.º grado
-(phi>=0.0221) y la co-descendencia founder-difusa PUEDEN quedar a ambos lados. Sensibilidad diferida
-al modelado. No afirmar "sin fuga".
+**Fuga aceptada (límite explícito, no igual a cero):** phi>=0.0442 evita pares cruzados; el cuarto grado
+(phi>=0.0221) y la co-descendencia founder-difusa pueden quedar a ambos lados. La sensibilidad queda
+pendiente para el modelado. No se describe como un split sin fuga.
 
-**Limitacion declarada:** el desbalance residual de cohorte/region del TEST proviene de bloques
+**Limitación declarada:** el desbalance residual de cohorte y región del test proviene de bloques
 familiares indivisibles (el mayor, n=119, amazonico, cae entero en un fold por la garantia
 anti-fuga). Se documenta, no se corrige con un metodo nuevo. Ver `fold_selection.limitation`.
 

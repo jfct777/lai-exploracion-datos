@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """Genera el manifest.json reproducible de una etapa.
 
-Cada manifiesto contiene: etapa, timestamp, commit git, contenedor (path + sha256), versiones
-(python + librerias del contenedor + nextflow), parametros efectivos, y sha256 de ENTRADAS y
-SALIDAS, mas un puntero a run_provenance.json. NO recomputa ni reabre nada: solo hashea los
-archivos que se le pasan (que el proceso ya produjo/consumio en el work dir).
+Cada manifiesto contiene la etapa, fecha, commit de git, contenedor, versiones, parámetros efectivos,
+huellas sha256 de las entradas y salidas, y una referencia a run_provenance.json. El script solo
+calcula las huellas de los archivos recibidos.
 
-La procedencia de ARTEFACTO (commit, version Nextflow, path + sha256 del contenedor) se computa
-UNA sola vez en el head node (main.nf) porque el .sif NO es visible desde dentro del contenedor,
-y llega aqui como JSON en base64 (--provenance-b64) para evitar problemas de quoting. Las versiones
-de librerias y de python SI se leen aqui dentro, porque este script corre dentro del mismo
-contenedor que produjo los artefactos.
+La procedencia del artefacto se calcula una vez en el nodo principal, ya que el archivo .sif no es
+visible desde dentro del contenedor. La información llega como JSON en base64 mediante
+--provenance-b64. Las versiones de Python y sus bibliotecas se consultan dentro del contenedor.
 
 El comando de Nextflow se guarda en run_provenance.json porque cambia al usar `-resume`. Dejarlo
 fuera de las entradas de cada etapa permite reutilizar correctamente los procesos almacenados.
@@ -43,17 +40,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", required=True, help="nombre de la etapa (proceso Nextflow)")
     ap.add_argument("--input", action="append", default=[], type=Path,
-                    help="archivo de ENTRADA a hashear (repetible)")
+                    help="archivo de entrada del que se calcula sha256 (repetible)")
     ap.add_argument("--output", action="append", default=[], type=Path,
-                    help="archivo de SALIDA a hashear (repetible)")
+                    help="archivo de salida del que se calcula sha256 (repetible)")
     ap.add_argument("--params-json", default="{}", help="params efectivos de la etapa, como JSON")
     ap.add_argument("--provenance-b64", default="",
                     help="JSON en base64 con {git_commit, nextflow_command, nextflow_version, "
-                         "container_path, container_sha256}, computado en el head node")
+                         "container_path, container_sha256}, calculado en el nodo principal")
     ap.add_argument("--stamp", default="", help="timestamp inyectado por el proceso (TZ del host)")
     ap.add_argument("--run-provenance-ref", default="../run_provenance.json",
-                    help="ruta RELATIVA al run_provenance.json de la corrida, tal como se vera desde el "
-                         "directorio publicado de esta etapa. Default: un nivel arriba.")
+                    help="ruta relativa a run_provenance.json desde el directorio publicado de la "
+                         "etapa; por defecto apunta a un nivel superior")
     ap.add_argument("--out", required=True, type=Path)
     args = ap.parse_args()
 
@@ -87,9 +84,9 @@ def main():
         "params": params,
         "inputs": {p.name: _sha256(p) for p in args.input},
         "sha256": {p.name: _sha256(p) for p in args.output},
-        # El comando de Nextflow cambia con -resume y se guarda fuera del cache de cada etapa. Donde
-        # vive depende del modulo: la mayoria lo pone un nivel arriba de los subdirectorios de etapa
-        # (default), y M23 lo pone DENTRO del subdir porque cada etapa suya es una corrida aparte.
+        # El comando de Nextflow cambia al usar -resume y se guarda fuera de la caché de cada etapa.
+        # La mayoría de los módulos lo deja un nivel arriba; M23 lo guarda dentro de su subdirectorio
+        # porque cada etapa corresponde a una corrida diferente.
         "run_provenance_file": args.run_provenance_ref,
     }
     args.out.write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
