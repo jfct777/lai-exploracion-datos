@@ -493,13 +493,3 @@ una tarea.
 Revise `sacct`, la memoria, el tiempo solicitado y la salud del nodo. El perfil
 incluye reintentos acotados para terminaciones externas, pero los errores del
 comando no se reintentan de forma general.
-
-## Seguridad de datos
-
-Este repositorio es público y contiene solamente código y configuración.
-
-- no coloque VCF, PGEN, metadatos individuales ni resultados dentro del clon;
-- no incluya rutas con credenciales o tokens en archivos versionados;
-- use un archivo de parámetros externo con permisos restrictivos;
-- publique resultados únicamente en directorios autorizados;
-- revise el contenido antes de abrir una incidencia o compartir un registro.
