@@ -8,26 +8,28 @@
 #SBATCH --nodelist=c002
 #SBATCH --output=/home/jose.tantalean/projects/lai-exploracion-datos/logs/m23_refit_%j.log
 
-# Control ACOTADO de convergencia del solver sobre los modelos finales de E_full_elasticnet.
-# Reajusta los 4 modelos finales con los hiperparametros que la corrida base YA eligio (se leen de sus
-# JSON, no se transcriben) y max_iter=2000. Ni grilla, ni seleccion nueva, ni TEST, ni recomputo de
-# A/B/C: las metricas de C se reutilizan del abc_results.json de la base.
+# Control acotado de convergencia para los modelos finales de E_full_elasticnet.
+# Reajusta los cuatro modelos finales con los hiperparámetros elegidos en la corrida base. Estos
+# valores se leen de los JSON publicados y no se transcriben a mano. Se usa max_iter=2000 sin repetir
+# la grilla, seleccionar nuevos parámetros ni recalcular A/B/C. Las métricas de C se leen de
+# abc_results.json.
 #
-# Motivo: en la corrida base 28/36 ajustes internos de cada fold de E tocaron max_iter=1000 sin
-# converger y el JSON no guardaba n_iter_, asi que no se podia saber si el modelo ganador convergio.
+# En la corrida base, 28 de los 36 ajustes internos de cada fold de E llegaron a max_iter=1000 sin
+# converger. Como el JSON no guardaba n_iter_, no era posible comprobar la convergencia del modelo
+# final.
 #
-# Fijado a c002 (unico nodo con el datalake). Mismo WORKDIR que la base + -resume: CONCAT queda
-# cacheado (no depende de rare_bench_cv.py) y cada (set,fold) es una tarea independiente reanudable.
-# Peor caso: 4 folds x 24h en paralelo + reintento de 48h = ~72h < 96h del padre.
+# El trabajo se fija en c002 porque es el nodo que tiene montado el datalake. Al reutilizar el mismo
+# workDir y usar -resume, la concatenación queda en caché y cada combinación de set y fold puede
+# reanudarse de forma independiente.
+# En el peor caso, los cuatro folds usan 24 horas en paralelo y el reintento tarda otras 48 horas.
 set -euo pipefail
 
 export PATH="$HOME/micromamba/envs/nf/bin:$PATH"
 export JAVA_HOME="$HOME/micromamba/envs/nf"
 
-# Raiz del repo. OJO: bajo sbatch, $0 apunta a la COPIA del script en el spool del nodo, no al
-# original, asi que autoubicarse por $0 NO sirve (falla con "Permission denied" al escribir logs).
-# SLURM_SUBMIT_DIR es el directorio desde donde se hizo el sbatch; M23_REPO lo sobrescribe a mano.
-# Fail-closed: si no hay main.nf ahi, aborta en vez de correr en el sitio equivocado.
+# Bajo sbatch, $0 apunta a la copia del script guardada por Slurm y no al archivo original.
+# SLURM_SUBMIT_DIR conserva el directorio desde el que se lanzó sbatch; M23_REPO permite indicar otra
+# raíz de forma explícita. Si main.nf no está allí, el script termina antes de ejecutar Nextflow.
 REPO="${M23_REPO:-${SLURM_SUBMIT_DIR:-$(dirname "$(readlink -f "$0")")/..}}"
 REPO="$(readlink -f "$REPO")"
 if [ ! -f "$REPO/main.nf" ]; then
@@ -42,8 +44,8 @@ OUTDIR="$BASE/results_m23_extract_22chr"
 WORKDIR=/scratch/datalake/transient/genbr/genbr_bioinfo/projects/DNABR_QC/tmp/nxf_work_m23_cv
 SPLIT="$BASE/model_pipeline_canonical/22_model_pipeline/split/split_manifest.tsv"
 MASTER="$BASE/model_pipeline_canonical/22_model_pipeline/modeling_master/modeling_master.tsv"
-# Corrida BASE: de aqui salen los hiperparametros ganadores, las metricas de C y el input_sha256 que
-# prueba que se usaron EXACTAMENTE estas mismas entradas.
+# De la corrida base se leen los hiperparámetros elegidos, las métricas de C y el input_sha256 que
+# permite comprobar que se usaron las mismas entradas.
 BASELINE="$OUTDIR/23_rare_matrix_benchmark/cv"
 REPORTDIR="$REPO/logs/m23_refit_reports"
 mkdir -p "$REPORTDIR"

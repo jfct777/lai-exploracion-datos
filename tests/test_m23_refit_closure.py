@@ -1,34 +1,33 @@
 #!/usr/bin/env python3
-"""Prueba del control acotado de convergencia de M23 (modos `refit` / `refit_aggregate`).
+"""Prueba el control acotado de convergencia de M23 (`refit` y `refit_aggregate`).
 
-El control reajusta el modelo FINAL de cada (set, fold) con los hiperparametros que la corrida base ya
-eligio y un techo de iteraciones mas alto. No hay grilla ni seleccion nueva. Lo que se prueba aqui es el
-ENSAMBLADO y el CRITERIO DE CIERRE, no el ajuste: los JSON de entrada se fabrican a partir de los reales
-de una corrida base, cambiando solo los campos del solver. Los numeros inyectados son sinteticos a
-proposito -- sirven para llevar el criterio a cada una de sus ramas, no son resultados.
+El control reajusta el modelo final de cada combinación de set y fold con los hiperparámetros elegidos
+en la corrida base y un techo de iteraciones más alto. No repite la grilla ni selecciona parámetros
+nuevos. Esta prueba cubre el ensamblado y el criterio de cierre, no el ajuste del modelo. Los JSON de
+entrada se crean a partir de una corrida base y usan números sintéticos para recorrer cada caso.
 
 Se prueba en dos bloques:
 
-  VEREDICTOS (4 ramas del criterio predeclarado)
-    1. converge y el cambio es menor al umbral material -> CIERRE_CON_CAVEAT
-    2. sigue topando el techo nuevo                      -> SIGUE_SIN_CONVERGER
-    3. el cambio supera el umbral material               -> DETENERSE_Y_REVISAR
-    4. el solver no expone n_iter_                       -> INDETERMINADO_SIN_n_iter
-    La no-convergencia se evalua ANTES del cierre: un modelo que sigue topando max_iter no cierra
-    aunque el delta siga negativo y estable.
+  Veredictos
+    1. Converge y el cambio es menor al umbral material: CIERRE_CON_CAVEAT.
+    2. Sigue alcanzando el nuevo techo: SIGUE_SIN_CONVERGER.
+    3. El cambio supera el umbral material: DETENERSE_Y_REVISAR.
+    4. El solver no expone n_iter_: INDETERMINADO_SIN_n_iter.
+    La convergencia se revisa antes del cierre. Si el modelo alcanza max_iter, el caso no se cierra
+    aunque el delta continúe negativo y estable.
 
-  GUARDAS (todas deben ABORTAR; una guarda que no se vio bloquear no esta verificada)
-    5. abc de otra corrida base (fingerprint distinto)
-    6. falta un fold de los requeridos
-    7. max_iter del refit no es mayor que el de la base
-    8. max_iter declarado != config.max_iter
-    9. input_sha256 del refit != del baseline (datos distintos con el mismo esquema)
-   10. input_sha256 ausente
+  Validaciones que deben rechazar la entrada
+    5. abc pertenece a otra corrida base.
+    6. Falta uno de los folds requeridos.
+    7. max_iter no es mayor que el valor de la base.
+    8. max_iter no coincide con config.max_iter.
+    9. input_sha256 no coincide con el de la corrida base.
+   10. input_sha256 está ausente.
 
-Tambien comprueba la invariante mas fuerte del ensamblado: con las metricas intactas, el delta vs C que
-reconstruye el agregador debe ser IDENTICO al publicado por la corrida base.
+También comprueba que, si las métricas no cambian, el delta frente a C reconstruido por el agregador
+coincida con el publicado por la corrida base.
 
-Correr en el contenedor del pipeline (stack coherente), NO en login node:
+Se ejecuta dentro del contenedor del pipeline y desde un nodo de cómputo:
   singularity exec -B "$HOME" -B /scratch/datalake <sif> \
     python3 tests/test_m23_refit_closure.py --baseline-dir <dir de la corrida base>
 """
@@ -44,7 +43,7 @@ CV_PY = ROOT / "bin" / "rare_bench_cv.py"
 SET_E = "E_full_elasticnet"
 FOLDS = (0, 1, 2, 4)
 
-# Flags cientificos del control: identicos a los de la corrida base salvo max_iter.
+# Parámetros científicos del control. Solo max_iter cambia frente a la corrida base.
 SCI = ("--sample-id-col sample_id --split-col split --label-col y --fold-col fold "
        "--group-col split_group_key --train-label TRAIN --test-fold 3 --min-mac-train 2 "
        "--min-alt-carriers-train 2 --min-variance-train 0.0 --c-grid 1e-3,1e-2,1e-1,1 "
@@ -53,7 +52,7 @@ SCI = ("--sample-id-col sample_id --split-col split --label-col y --fold-col fol
 
 
 def build_refits(base_dir, outdir, scenario, max_iter=2000):
-    """Fabrica los 4 <set>.fold<K>.refit.json a partir de los reales de la corrida base."""
+    """Crea cuatro archivos <set>.fold<K>.refit.json a partir de la corrida base."""
     inputs = json.loads((base_dir / "preflight.json").read_text())["fingerprint"]["input_sha256"]
     for fold in FOLDS:
         base = json.loads((base_dir / f"{SET_E}.fold{fold}.json").read_text())
@@ -69,7 +68,7 @@ def build_refits(base_dir, outdir, scenario, max_iter=2000):
             entry["balanced_accuracy"] = round(entry["balanced_accuracy"] + 0.09, 6)
         elif scenario == "sin_n_iter":
             entry["n_iter"], entry["converged"] = None, None
-        elif scenario == "identico":  # metricas intactas: el delta vs C debe reproducir el publicado
+        elif scenario == "identico":  # Las métricas no cambian y el delta frente a C debe coincidir.
             entry["n_iter"], entry["converged"] = 1400, True
         else:
             raise SystemExit(f"escenario desconocido: {scenario}")
