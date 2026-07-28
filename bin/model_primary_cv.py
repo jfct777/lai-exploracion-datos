@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Fase primaria de modelado -- validacion interna sobre TRAIN (TEST cerrado). NO abre el fold de
-TEST, NO corre sensibilidades de parentesco, NO usa modelos complejos.
+"""Fase primaria de modelado con validación interna sobre TRAIN y el fold de test cerrado.
+No ejecuta sensibilidades de parentesco ni modelos complejos.
 
 Este análisis mide la recuperabilidad técnica de una etiqueta interna a M14
-(comunidad Leiden), CONDICIONAL a la ancestria global Q. NO es descubrimiento biologico -- la
+(comunidad Leiden), condicionada a la ancestría global Q. No corresponde a descubrimiento biológico; la
 etiqueta deriva del grafo M14 (grado del grafo -> etiqueta, AUC~0.99 tautologico) y el burden
 marginal de raras es termometro de ancestria (rare_density corr ~0.99 con Q_AFR). Un balanced-acc
 alto es concordancia esperada, no señal de subestructura rara ortogonal.
 
 Diseno:
-  - Universo: TRAIN = split=='TRAIN' (2091). TEST (fold del manifiesto marcado TEST) NUNCA se carga
+  - Universo: TRAIN = split=='TRAIN' (2091). El fold marcado como TEST no se carga
     para entrenar/seleccionar. Validacion interna = LeaveOneGroupOut sobre la columna `fold` (los 4
     folds congelados restantes); los folds ya respetan grupos de parentesco (0 cruzados).
   - Roles de columna (ver README/print): etiqueta y; features raras principales = burden
@@ -19,7 +19,7 @@ Diseno:
   - Sets nested para el incremental "¿rara aporta sobre comun?": A=comun (Q+sex), B=rara,
     C=comun+rara.
   - Modelos: LogReg(l2, balanced, C=1), RF(100, balanced), KNN(5). Defaults fijos declarados.
-  - Metricas por fold: balanced_accuracy (ARBITRO primario), roc_auc, sensibilidad, especificidad.
+  - Métricas por fold: balanced_accuracy como criterio primario, roc_auc, sensibilidad y especificidad.
   - Seleccion (pre-declarada): mejor (modelo x set) por balanced_accuracy media; si dos caen dentro
     de 1 sd de la diferencia pareada por fold -> parsimonia (LogReg > KNN > RF).
   - Null ancestry-stratified para el candidato: permutar y dentro de cuartiles de Q_AFR.
@@ -47,13 +47,16 @@ PARSIMONY = {"logreg": 0, "knn": 1, "rf": 2}  # menor = mas simple (desempate)
 
 
 class VarianceSafeScaler(StandardScaler):
-    """StandardScaler que no produce NaN si una feature es constante en un fold (var=0)."""
+    """Escala variables y reemplaza valores no finitos cuando una columna es constante."""
+
     def transform(self, X):
+        """Aplica el escalado y reemplaza NaN o infinitos por cero."""
         Xt = super().transform(X)
         return np.nan_to_num(Xt, nan=0.0, posinf=0.0, neginf=0.0)
 
 
 def make_pipeline(name):
+    """Construye el pipeline congelado correspondiente al nombre del modelo."""
     if name == "logreg":
         # L2 es el default en sklearn 1.8 (penalty='l2' quedó deprecado); C=1.0 fija la regularización.
         clf = LogisticRegression(C=1.0, class_weight="balanced", max_iter=1000, random_state=SEED)
@@ -93,6 +96,7 @@ def cv_evaluate(X, y, folds, model_name):
 
 
 def summarize(per_fold):
+    """Resume métricas por fold mediante media, desviación y valores individuales."""
     ba = np.array([r["balanced_accuracy"] for r in per_fold])
     return {
         "balanced_accuracy_mean": round(float(ba.mean()), 4),
@@ -105,6 +109,7 @@ def summarize(per_fold):
 
 
 def main():
+    """Ejecuta la validación interna y escribe resultados y procedencia."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--master", required=True, type=Path)
     ap.add_argument("--split", required=True, type=Path)
@@ -119,11 +124,11 @@ def main():
 
     train = df[df["split"] == "TRAIN"].copy()
     assert len(train) == 2091, f"TRAIN esperado 2091, {len(train)}"
-    # re-confirmar cero grupos de parentesco cruzados entre folds dentro de TRAIN
+    # Confirma otra vez que ningún grupo de parentesco cruce folds dentro de TRAIN.
     crossed = int((train.groupby("split_group_key")["fold"].nunique() > 1).sum())
     assert crossed == 0, f"{crossed} grupos de parentesco cruzan folds en TRAIN -- fuga"
 
-    # GUARDIAS de completitud (transparencia: nada de imputacion silenciosa). El feature store marca
+    # Comprueba la completitud para evitar imputaciones silenciosas. El feature store marca
     # flag_missing_Q/density; si un Q_* o el denominador de burden viniera NaN, rompe el null
     # estratificado (qcut manda el NaN a un estrato que nunca se permuta) y VarianceSafeScaler lo
     # imputaria a 0 sin declararlo. Empiricamente TRAIN esta completo; el assert lo hace explicito.
@@ -153,8 +158,9 @@ def main():
     cand_keys = [k for k in results if results[k]["feature_set"] == "C_combined"]
     best = max(cand_keys, key=lambda k: results[k]["balanced_accuracy_mean"])
     best_ba = results[best]["balanced_accuracy_mean"]
-    # empate: dentro de 1 sd de la DIFERENCIA PAREADA por fold -> parsimonia
+    # En un empate dentro de una desviación del cambio pareado por fold, se prefiere parsimonia.
     def paired_sd(k1, k2):
+        """Calcula la desviación del cambio pareado entre dos modelos."""
         d = np.array([a["balanced_accuracy"] - b["balanced_accuracy"]
                       for a, b in zip(results[k1]["per_fold"], results[k2]["per_fold"])])
         return float(d.std(ddof=1))
@@ -192,7 +198,7 @@ def main():
     out = {
         "estimand": ("asociacion de burden raro (density-normalizado) con la pertenencia a comunidad "
                      "Leiden CONDICIONAL a la ancestria global Q. Etiqueta interna a M14 -> mide "
-                     "concordancia/recuperabilidad tecnica, NO descubrimiento biologico."),
+                     "concordancia o recuperabilidad técnica, no descubrimiento biológico."),
         "sklearn_version": sklearn.__version__,
         "seed": SEED,
         "n_train": int(len(train)),
@@ -220,10 +226,10 @@ def main():
             "null_ba_mean": round(float(null_bas.mean()), 4),
             "null_ba_p95": round(float(np.percentile(null_bas, 95)), 4),
             "p_value": round(p_val, 4),
-            "note": ("null permuta y DENTRO de cuartiles de Q_AFR (1-D). NO aisla el burden raro: al "
+            "note": ("El null permuta y dentro de cuartiles de Q_AFR (1-D). No aísla el burden raro: al "
                      "randomizar y dentro de estratos de Q_AFR quedan intactos Q_EUR/NAM/EAS/sex como "
                      "predictores, y el baseline comun A (0.727) YA supera el null (~0.614). El p-valor "
-                     "NO es evidencia de senal rara; el unico test que aisla la rara es el incremental "
+                     "no es evidencia de señal rara; el único test que aísla la rara es el incremental "
                      "C-A (Delta 0.051).")},
         "results": results,
         "declared_limitations": [
@@ -231,10 +237,10 @@ def main():
             "rare_density corr ~0.99 con Q_AFR: un positivo es consistente con confound de ancestria.",
             "Baseline comun = Q 4-D (no burden comun completo): 'rara>comun' sub-potenciado hacia rara.",
             "Señal fina real de raras es DIADICA (co-sharing), no el burden marginal 1-D usado aqui.",
-            "El null ancestry-stratified es 1-D (solo Q_AFR): NO aisla el burden raro de Q_EUR/NAM/EAS; "
-            "su p-valor NO es evidencia de senal rara (el baseline comun A solo ya supera el null).",
-            "El ORIGEN del incremento Delta bal-acc (C sobre A) NO esta identificado con este diseño: "
-            "NO es atribuible a subestructura rara, y NO se puede separar de ancestria ni de artefacto "
+            "El null ancestry-stratified es 1-D y solo usa Q_AFR; no aísla el burden raro de "
+            "Q_EUR/NAM/EAS. Su p-valor no demuestra señal rara, ya que el baseline común A supera el null.",
+            "El origen del incremento de balanced accuracy de C sobre A no está identificado con este "
+            "diseño. No puede atribuirse a subestructura rara ni separarse de ancestría o de artefactos "
             "tecnico. No atribuir a una causa concreta.",
             "TEST cerrado: la evaluacion unica en TEST requiere autorizacion separada.",
         ],

@@ -28,7 +28,7 @@ process LD_DECAY_FROM_PGEN {
     """
     set -euo pipefail
 
-    # Compute pairwise LD (PLINK2). Output as gz TSV.
+    # Calcula el LD por pares con PLINK2 y guarda la salida como TSV comprimido.
     plink2 --pfile ${sample_id} \
       ${keep_arg} \
       ${excl_arg} \
@@ -43,7 +43,8 @@ process LD_DECAY_FROM_PGEN {
       --threads ${params.resources?.ld_decay_from_pgen?.threads ?: params.cpus} \
       --out ${sample_id}.ld
 
-    # PLINK2 output filename varies across versions; pick the first output for this prefix (excluding logs)
+    # El nombre de salida cambia entre versiones de PLINK2; se usa el primer archivo del prefijo,
+    # sin considerar el log.
     LD_IN=""
     for f in ${sample_id}.ld*; do
       if [ ! -f "\$f" ]; then
@@ -61,7 +62,7 @@ process LD_DECAY_FROM_PGEN {
       exit 1
     fi
 
-    # Standardize to gz TSV expected by downstream parser
+    # Normaliza el nombre y el formato que espera el parser posterior.
     if [[ "\$LD_IN" == *.gz ]]; then
       cp "\$LD_IN" dnabr.hg38.2723.chr${chr}.ld_pairs.tsv.gz
     else

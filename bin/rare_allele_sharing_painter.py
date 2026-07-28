@@ -102,6 +102,7 @@ def _filter_variants_by_region(variants, start_bp, end_bp):
 # ---------------------------------------------------------------------------
 
 def parse_args():
+    """Define y devuelve los argumentos de línea de comandos."""
     parser = argparse.ArgumentParser(
         description="Identify and paint shared rare allele segments between individuals."
     )
@@ -287,6 +288,7 @@ def _read_header_samples(input_path):
 
 
 def validate_input_schema(input_path, input_format):
+    """Comprueba el formato y las columnas requeridas del archivo de variantes."""
     if input_format != "vcf_rare":
         _fail(
             f"Unsupported input format '{input_format}'. "
@@ -330,6 +332,7 @@ def _read_sample_ids_file(path):
 
 
 def load_selected_samples(header_samples, sample_ids_file, max_samples):
+    """Selecciona muestras conservando el orden del encabezado."""
     header_set = set(header_samples)
 
     if sample_ids_file:
@@ -1953,6 +1956,7 @@ def _run_region_analysis(variants_region, chrom_key, chrom_label, region_extent,
 
 
 def scan_mode(args):
+    """Analiza un cromosoma y publica segmentos, resúmenes y figuras."""
     if not args.input or not args.chr:
         _fail("scan mode requires --input and --chr")
 
@@ -2563,6 +2567,7 @@ def write_aggregate_report(chrom_df, top_pairs_df, all_samples_ordered,
 # ---------------------------------------------------------------------------
 
 def main():
+    """Selecciona el modo solicitado y ejecuta el análisis."""
     args = parse_args()
     if args.mode == "scan":
         scan_mode(args)

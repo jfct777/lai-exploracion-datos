@@ -3,14 +3,14 @@
 
 Tres pistas alineadas en el eje genomico (proporcional en bp):
 
-  (a) Karyograma: painting de ancestria local de TODOS los haplotipos de la cohorte
+  (a) Cariotipos con la ancestría local de los haplotipos de la cohorte.
       (Gnomix, Nunes 2025), una fila por haplotipo, ordenados por fraccion de
       ancestria del cromosoma (gradiente continuo, sin etiqueta argmax). Hace
       visibles los tractos discretos AFR/EUR/NAM que el promedio poblacional borra.
 
   (b) Densidad de variantes raras estratificada por ancestria local: copias de
       alelo raro (MAC>=2) por Mb, separadas segun la ancestria local del tracto
-      donde caen (solo copias con atribucion EXACTA; las fase-ambiguas se excluyen).
+      donde caen (solo copias con atribución exacta; las ambiguas por fase se excluyen).
 
   (c) Zoom: pocos individuos representativos del gradiente, con sus dos haplotipos
       pintados y sus variantes raras portadas como ticks. Sin fase -> la marca es
@@ -127,6 +127,7 @@ def carrier_positions(bcftools, rare_vcf, vcf_chrom, sample, lo, hi):
 
 
 def main():
+    """Genera el cariotipo de ancestría local y las figuras de variantes raras."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--msp", required=True)
     ap.add_argument("--windows_tsv", required=True, help="<prefix>.windows.tsv de M17 extendido")
@@ -158,7 +159,7 @@ def main():
     painted_min, painted_max = int(spos[0]), int(epos[-1])
 
     frac = indiv_ancestry_fraction(spos, epos, codes, lai_per_col, common)
-    # Orden continuo: NAM desc, luego AFR desc (gradiente, NO etiqueta argmax).
+    # Orden continuo por NAM descendente y luego AFR descendente; no usa la etiqueta argmax.
     order = sorted(common, key=lambda l: (-frac[l][2], -frac[l][0]))
 
     # --- matriz del karyograma (panel a): [hap_row, bin] = codigo de ancestria ---
@@ -228,7 +229,7 @@ def main():
 
     lo_mb, hi_mb = painted_min / 1e6, painted_max / 1e6
 
-    # ===================== FIGURA =====================
+    # Construcción de la figura.
     fig = plt.figure(figsize=(7.2, 8.4))
     gs = fig.add_gridspec(3, 1, height_ratios=[1.5, 0.85, 1.25], hspace=0.32)
     ax_a = fig.add_subplot(gs[0])

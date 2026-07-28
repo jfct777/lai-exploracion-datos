@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 def parse_args():
+    """Define y devuelve los argumentos de línea de comandos."""
     p = argparse.ArgumentParser()
     p.add_argument("--vcf", required=True)
     p.add_argument("--chr", required=True)
@@ -66,6 +67,7 @@ def _choose_contig(contigs: set[str], requested: str) -> str | None:
 
 
 def main():
+    """Construye la tabla de alelos ancestrales para las variantes de entrada."""
     args = parse_args()
 
     fasta_path = args.ancestral_fasta

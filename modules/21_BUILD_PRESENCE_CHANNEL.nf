@@ -1,18 +1,17 @@
 nextflow.enable.dsl=2
 
 // ---------------------------------------------------------------------------
-// Module 21 — Build presence channel (CANAL DE PRESENCIA EXTERNA / NO-PRIVACIDAD)
+// Módulo 21: canal de presencia externa
 // ---------------------------------------------------------------------------
 // Para cada SNV raro bialélico de DNABR (upstream lai_rare) y cada panel NAM externo
-// (NAMBR-128 VQSR, 71-native .raw, …) clasifica si el ALELO aparece afuera:
+// (NAMBR-128 VQSR, 71-native .raw, …) clasifica si el alelo aparece afuera:
 //   PRESENT_ALLELE (refuta privacidad) / PRESENT_POS_ONLY / REF_MISMATCH / ABSENT.
 // Canal binario present/unknown: la ausencia no confirma un efecto fundador,
-// por eso NO hay Beta-Binomial ni 3.er estado de callability.
+// Por eso no se usa Beta-Binomial ni un tercer estado de callability.
 //
-// El panel es un INPUT DE REFERENCIA pre-staged (``tools/stage_presence_panels.sh`` lo
-// baja del bucket y lo tabixea a ``presence_panel_dir/<panel_id>/chr<C>.vcf.gz``). El
-// pipeline NO baja de gs:// dentro de un proceso (igual que no baja el FASTA hg38): el
-// staging es provisioning, separado del cómputo (principio: sin red dentro de procesos).
+// El panel es una entrada de referencia preparada por ``tools/stage_presence_panels.sh``, que lo
+// descarga y lo indexa en ``presence_panel_dir/<panel_id>/chr<C>.vcf.gz``. El pipeline no descarga
+// desde gs:// dentro de los procesos; la preparación de datos se mantiene separada del cómputo.
 //
 // Topología (mismo molde que M17):
 //   BUILD_PRESENCE_LCR_MASK   1 vez  -> bed genome-wide segdup+simpleRepeat+blacklist

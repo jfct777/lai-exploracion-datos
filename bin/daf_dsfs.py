@@ -12,6 +12,7 @@ import pandas as pd
 
 
 def parse_args():
+    """Define y devuelve los argumentos de línea de comandos."""
     p = argparse.ArgumentParser()
     p.add_argument("--vcf", required=True)
     p.add_argument("--chr", required=True)
@@ -30,6 +31,7 @@ def _run(cmd):
 
 
 def main():
+    """Calcula DAF y el espectro derivado a partir de la tabla ancestral."""
     args = parse_args()
 
     out_prefix = Path(args.out_prefix)
@@ -39,7 +41,7 @@ def main():
     if bins[0] != 0.0 or bins[-1] != 1.0:
         raise SystemExit("sfs_bins_af must start with 0 and end with 1")
 
-    # Load ancestral table (CHROM POS REF ALT ANCESTRAL STATUS)
+    # Carga la tabla ancestral con las columnas CHROM, POS, REF, ALT, ANCESTRAL y STATUS.
     anc = pd.read_csv(args.ancestral_tsv_gz, sep="\t", dtype=str)
     required = {"CHROM", "POS", "REF", "ALT", "ANCESTRAL", "STATUS"}
     if not required.issubset(set(anc.columns)):
@@ -51,7 +53,7 @@ def main():
 
     anc["POS"] = anc["POS"].astype(int)
 
-    # Query AC/AN from VCF
+    # Consulta AC y AN directamente en el VCF.
     q = _run(["bcftools", "query", "-f", "%CHROM\t%POS\t%REF\t%ALT\t%INFO/AC\t%INFO/AN\n", args.vcf])
 
     rows = []
@@ -81,7 +83,7 @@ def main():
     if merged.empty:
         raise SystemExit("No overlap between VCF and ancestral TSV")
 
-    # Compute derived allele count/frequency
+    # Calcula el conteo y la frecuencia del alelo derivado.
     def _dac(row):
         if row["ANCESTRAL"] == row["REF"]:
             return int(row["AC"])
@@ -94,7 +96,7 @@ def main():
     merged["DAC"] = merged["DAC"].astype(int)
     merged["DAF"] = merged["DAC"] / merged["AN"].astype(float)
 
-    # DSFS bins by DAF
+    # Agrupa el espectro derivado por intervalos de DAF.
     hist = [0 for _ in range(len(bins) - 1)]
     rare_tail = Counter()
 

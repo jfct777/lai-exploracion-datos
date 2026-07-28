@@ -9,6 +9,7 @@ import pandas as pd
 
 
 def parse_args():
+    """Define y devuelve los argumentos de línea de comandos."""
     p = argparse.ArgumentParser()
     p.add_argument("--pairs", required=True, help="PLINK2 pairwise LD file (.ld/.r2/.ld.gz)")
     p.add_argument("--chr", required=True)
@@ -20,19 +21,20 @@ def parse_args():
 
 
 def main():
+    """Resume el decaimiento de LD por distancia."""
     args = parse_args()
 
     in_path = Path(args.pairs)
     if not in_path.exists():
         raise SystemExit(f"Missing LD pairs file: {in_path}")
 
-    # Read flexible LD format (plink1/2 variants)
+    # Acepta las variantes de formato producidas por PLINK 1 y PLINK 2.
     if str(in_path).endswith(".gz"):
         df = pd.read_csv(in_path, sep="\t", compression="gzip")
     else:
         df = pd.read_csv(in_path, sep="\t")
 
-    # Try common column sets
+    # Identifica las columnas habituales de posición y r².
     col_dist = None
     col_r2 = None
 

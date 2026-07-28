@@ -6,10 +6,10 @@ nextflow.enable.dsl=2
 // Mapea cada copia de alelo raro (MAF<1%, upstream lai_rare) sobre la ancestría
 // local del painting Gnomix (.msp por cromosoma), y mide el enriquecimiento de
 // raras por ancestría local (African/European/Native_American) contra un baseline
-// posicional de la composición de la cohorte. Atribución EXACTA sin fase (primaria)
+// posicional de la composición de la cohorte. Atribución exacta sin fase (primaria)
 // + fraccional 0.5/0.5 para los het-on-het ambiguos (sensibilidad).
 //
-// Es DESCRIPTIVO/control: el baseline posicional NO remueve la tautología
+// Es un control descriptivo: el baseline posicional no elimina la tautología
 // burden-raras ∝ NAM a nivel-individuo (eso requiere residualización + null
 // condicional, Paso 2 del plan). Códigos .msp: African=0 European=1 Native-American=2.
 //

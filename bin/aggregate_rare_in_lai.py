@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Agrega los summary.json por-cromosoma de rare_variants_in_lai_tracts.py al
-resultado genome-wide. Suma CONTEOS CRUDOS (no promedia fracciones) y recomputa
+resultado de todo el genoma. Suma conteos crudos, no promedia fracciones, y vuelve a calcular
 el enriquecimiento sobre el total acumulado.
 """
 import argparse
@@ -15,6 +15,7 @@ ANC = ["African", "European", "Native_American"]
 
 
 def main():
+    """Combina los resúmenes cromosómicos de variantes raras en tractos LAI."""
     p = argparse.ArgumentParser()
     p.add_argument("--glob", required=True, help="Patrón de los *.summary.json por crom")
     p.add_argument("--out_prefix", required=True)
@@ -50,6 +51,7 @@ def main():
                              "n_copies": s["n_rare_allele_copies"]})
 
     def enr(observed, expected):
+        """Calcula el enriquecimiento observado frente a la composición esperada."""
         obs_tot = sum(observed.values())
         exp_tot = sum(expected.values())
         out = {}
@@ -71,7 +73,7 @@ def main():
         "expected_copies_exact_raw": {a: round(tot["expected_copies_exact_raw"][a], 1) for a in ANC},
         "enrichment_genomewide_exact": enr(tot["observed_exact"], tot["expected_copies_exact_raw"]),
         "enrichment_genomewide_fractional": enr(tot["observed_fractional_raw"], tot["expected_copies_raw"]),
-        "CAVEAT": "Descriptivo. Baseline posicional NO remueve la tautología "
+        "CAVEAT": "Descriptivo. El baseline posicional no elimina la tautología "
                   "burden-raras ∝ NAM a nivel-individuo (requiere residualización, Paso 2).",
     }
     Path(f"{args.out_prefix}.genomewide.json").write_text(json.dumps(gw, indent=2, ensure_ascii=False))

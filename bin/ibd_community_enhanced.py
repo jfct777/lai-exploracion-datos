@@ -385,6 +385,7 @@ def _parse_bool(s: str | bool) -> bool:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Construye el parser de argumentos para todas las etapas del módulo."""
     p = argparse.ArgumentParser(
         prog="ibd_community_enhanced",
         description="Module 16.5: IBD community detection enhanced "
@@ -602,7 +603,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "Empty (default) = no auto-annotation.")
     p.add_argument("--plot-auto-annotate-secondary", type=str, default="",
                    help="Optional second metadata column composed into the "
-                        "auto label as '<primary>·<secondary>' BEFORE "
+                        "auto label as '<primary>·<secondary>' before "
                         "collision disambiguation (e.g. primary="
                         "'finestructure_clusters', secondary="
                         "'finestructure_bigclusters' yields labels like "
@@ -657,6 +658,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 @dataclass
 class M14Paths:
+    """Agrupa las rutas de entrada publicadas por el módulo 14."""
     segments: Path
     pair_summary: Path
     individual_summary: Path
@@ -664,6 +666,7 @@ class M14Paths:
 
     @classmethod
     def from_dir(cls, input_dir: Path) -> "M14Paths":
+        """Resuelve y valida las salidas requeridas dentro de un directorio de M14."""
         seg = input_dir / "all_pairwise_segments.tsv.gz"
         ps = input_dir / "pair_sharing_summary.tsv"
         ind = input_dir / "individual_sharing_summary.tsv"
@@ -688,6 +691,7 @@ def load_individuals(path: Path) -> list[str]:
 
 
 def load_pair_summary(path: Path) -> pd.DataFrame:
+    """Carga el resumen por pares y valida sus columnas principales."""
     df = pd.read_csv(path, sep="\t", dtype={"sample_a": str, "sample_b": str})
     expected = {"sample_a", "sample_b", "n_segments", "total_shared_bp",
                 "mean_jaccard"}
@@ -910,6 +914,7 @@ def save_graph(out_dir: Path, S: sp.csr_matrix, g: ig.Graph,
                pair_df_with_weight: pd.DataFrame,
                min_edge_bp: int, weight_transform: str,
                min_max_segment_bp: int = 0) -> None:
+    """Guarda la matriz dispersa, el grafo y su información de procedencia."""
     out_dir.mkdir(parents=True, exist_ok=True)
     # Sparse matrix (npz, binary, O(nnz) IO).
     sp.save_npz(out_dir / NAME_GRAPH_MATRIX, S)
@@ -962,6 +967,7 @@ def save_graph(out_dir: Path, S: sp.csr_matrix, g: ig.Graph,
 
 
 def load_graph(out_dir: Path) -> tuple[sp.csr_matrix, ig.Graph, list[str]]:
+    """Recupera un grafo publicado junto con su matriz y orden de muestras."""
     nodes_df = pd.read_csv(out_dir / NAME_GRAPH_NODES, sep="\t",
                            dtype={"sample_id": str})
     samples = nodes_df["sample_id"].tolist()
@@ -1036,7 +1042,7 @@ def run_leiden_multiresolution(g: ig.Graph,
     best_modularity_consensus : modularity of the representative partition
                                 at ``consensus_resolution`` (or None).
     memberships_by_res : dict[res] -> list of raw per-seed membership
-                         arrays (BEFORE the small-community filter), used
+                         arrays before the small-community filter, used
                          by ARI stability diagnostics.
     """
     n_nodes = g.vcount()
@@ -1172,6 +1178,7 @@ def save_leiden(out_dir: Path, samples: Sequence[str],
 
 
 def load_leiden_assignments(out_dir: Path) -> pd.DataFrame:
+    """Carga las asignaciones Leiden publicadas por una ejecución anterior."""
     return pd.read_csv(out_dir / NAME_LEIDEN_ASSIGN, sep="\t",
                        dtype={"sample_id": str})
 
@@ -1188,7 +1195,7 @@ def _nndsvd_init(S: np.ndarray, k: int, seed: int) -> np.ndarray:
     positive noise is added so the multiplicative update (which is fixed on
     exact zeros) can explore.
 
-    NOTE: this initialiser is essentially deterministic — the seed only
+    Esta inicialización es prácticamente determinista; la semilla solo
     perturbs the noise term (O(1e-4)).  Multiple restarts converge to the
     same optimum, so cophenetic correlation (Brunet 2004) is uninformative
     in this mode.  Use ``_random_nonneg_init`` for genuine cophenetic
@@ -1310,6 +1317,7 @@ def run_symnmf_multi_k(S: sp.spmatrix, k_values: Sequence[int],
 
 def save_symnmf(out_dir: Path, samples: Sequence[str],
                 H_by_k: dict[int, np.ndarray], err_df: pd.DataFrame) -> None:
+    """Guarda las matrices de membresía SymNMF y sus errores de reconstrucción."""
     out_dir.mkdir(parents=True, exist_ok=True)
     for k, H in H_by_k.items():
         cols = [f"component_{i+1}" for i in range(H.shape[1])]
@@ -1323,6 +1331,7 @@ def save_symnmf(out_dir: Path, samples: Sequence[str],
 
 
 def load_symnmf(out_dir: Path, k: int) -> pd.DataFrame | None:
+    """Carga las membresías SymNMF para un valor de k si están disponibles."""
     p = out_dir / NAME_NMF_SOFT_TPL.format(k=k)
     if not p.exists():
         return None
@@ -1989,12 +1998,12 @@ def resolve_community_annotations(
     """Resolve UMAP centroid labels with three-tier precedence.
 
     Tiers (highest first):
-      1. ``--plot-community-annotations-file PATH`` — explicit override
+      1. ``--plot-community-annotations-file <ruta>`` — archivo explícito
          file with ``community_id`` + (``manual_label`` | ``annotation``).
          Use when the user has hand-curated labels external to the run
          directory (e.g. a project-wide canonical mapping).
-      2. ``--plot-auto-annotate-by COLUMN`` (+ optional
-         ``--plot-auto-annotate-secondary COLUMN``) — auto-derive labels
+      2. ``--plot-auto-annotate-by <columna>`` y la opción
+         ``--plot-auto-annotate-secondary <columna>`` — etiquetas automáticas
          from the modal value of one or two metadata columns per
          community.  Collisions ('BrazilA' appearing in 3 distinct
          communities) are disambiguated deterministically as
@@ -2578,6 +2587,7 @@ def validate_intra_vs_inter(pair_df: pd.DataFrame,
 
 
 def save_validation(out_dir: Path, df: pd.DataFrame) -> None:
+    """Guarda las comparaciones intra e intercomunidad."""
     out_dir.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_dir / NAME_VALIDATION, sep="\t", index=False,
               float_format="%.6g")
@@ -2719,6 +2729,7 @@ def plot_network(g: ig.Graph, membership: np.ndarray, out_path: Path,
 def plot_modularity_vs_resolution(mod_df: pd.DataFrame, out_path: Path,
                                     *, dpi: int, width_in: float,
                                     height_in: float, export_pdf: bool) -> None:
+    """Grafica la modularidad de Leiden a lo largo de las resoluciones."""
     if mod_df.empty:
         return
     fig, ax = plt.subplots(figsize=(width_in, height_in * 0.6))
@@ -2747,6 +2758,7 @@ def plot_sharing_heatmap(S: sp.csr_matrix, membership: np.ndarray,
                           *, max_nodes: int, dpi: int,
                           width_in: float, height_in: float,
                           export_pdf: bool) -> None:
+    """Grafica la matriz de sharing ordenada por comunidad."""
     n = S.shape[0]
     if n == 0:
         return
@@ -2933,6 +2945,7 @@ def plot_validation_box(pair_df: pd.DataFrame, membership: np.ndarray,
                          samples: Sequence[str], out_path: Path,
                          *, dpi: int, width_in: float,
                          height_in: float, export_pdf: bool) -> None:
+    """Compara gráficamente el sharing dentro y entre comunidades."""
     idx = {s: i for i, s in enumerate(samples)}
     sa = pair_df["sample_a"].astype(str).to_numpy()
     sb = pair_df["sample_b"].astype(str).to_numpy()
@@ -3531,7 +3544,7 @@ def _plot_network_3d_multiview(*, coords3d: np.ndarray,
 def _within_community_hierarchical_order(S: sp.csr_matrix,
                                           membership: np.ndarray) -> np.ndarray:
     """Produce a global ordering: community block sorted by size, then
-    UPGMA leaf order WITHIN each community (so bloated diagonals reveal
+    UPGMA leaf order within each community (so bloated diagonals reveal
     fine-scale substructure instead of arbitrary sample index).
     """
     order_parts: list[np.ndarray] = []
@@ -4018,6 +4031,7 @@ def _configure_threads(nthreads: int) -> None:
 def do_build_graph(args, inputs: M14Paths, out_dir: Path
                     ) -> tuple[sp.csr_matrix, ig.Graph, list[str],
                                pd.DataFrame]:
+    """Construye el grafo ponderado a partir de las salidas de M14."""
     samples = load_individuals(inputs.individual_summary)
     pair_summary = load_pair_summary(inputs.pair_summary)
     seg_summary = None
@@ -4051,6 +4065,7 @@ def do_build_graph(args, inputs: M14Paths, out_dir: Path
 
 def do_leiden(args, g: ig.Graph, samples: Sequence[str], out_dir: Path
                ) -> tuple[pd.DataFrame, pd.DataFrame, sp.csr_matrix | None]:
+    """Ejecuta Leiden en varias resoluciones y guarda estabilidad y consenso."""
     (assignments_df, mod_df, consensus, _,
      memberships_by_res) = run_leiden_multiresolution(
         g,
@@ -4113,6 +4128,7 @@ def do_symnmf(args, S: sp.csr_matrix, samples: Sequence[str],
 def do_validate(args, pair_summary: pd.DataFrame,
                  assignments_df: pd.DataFrame,
                  out_dir: Path) -> pd.DataFrame:
+    """Valida la separación intra e intercomunidad para las resoluciones elegidas."""
     vdf = validate_intra_vs_inter(pair_summary, assignments_df,
                                    args.leiden_resolutions)
     save_validation(out_dir, vdf)
@@ -4248,6 +4264,7 @@ def do_plot(args, S: sp.csr_matrix, g: ig.Graph, samples: Sequence[str],
 # ---------------------------------------------------------------------------
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Coordina las etapas solicitadas y sus artefactos de salida."""
     args = build_parser().parse_args(argv)
     _configure_threads(args.threads)
     in_dir = Path(args.input_dir)

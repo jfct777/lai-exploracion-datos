@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Concatena las 22 matrices sparse por-cromosoma (individuo x variante rara) en UNA matriz
 genoma-completa (CSC, filas=muestras TRAIN en el orden del manifiesto, columnas=variantes de los 22
-autosomas en orden cromosomico). Aplica el pre-filtro de missingness (call-rate) como filtro GLOBAL-
-TRAIN: la extraccion imputo faltantes a 0, asi que la mascara por-individuo no es recuperable y este
-filtro no puede ser fold-fitted; es casi inerte (ningun variante supera ~0.087 < 0.10) y label-
-independiente (propiedad QC del sitio). MAC/portadores/varianza SI se re-derivan por-fold en la CV.
+autosomas en orden cromosómico). Aplica el prefiltro de missingness sobre todo TRAIN. La extracción
+imputó faltantes a cero, así que la máscara por individuo no puede recuperarse y este filtro no
+puede ajustarse por fold. En la práctica es casi inerte: ninguna variante supera ~0.087 frente al
+umbral de 0.10. MAC, portadores y varianza se vuelven a derivar por fold en la CV.
 
 Validaciones:
-  - Orden de filas IDENTICO en los 22 cromosomas y == orden TRAIN del split (fail-closed).
+  - El orden de filas debe ser idéntico en los 22 cromosomas y coincidir con TRAIN en el split.
   - Nunca densifica: hstack de CSC -> CSC.
 
 Salidas:
@@ -26,6 +26,7 @@ import scipy.sparse as sp
 
 
 def main():
+    """Concatena matrices cromosómicas conservando muestras y formato sparse."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--extract-dir", required=True, type=Path,
                     help="dir con {chrom}.rare_matrix.npz / .samples.tsv / .variants.tsv")

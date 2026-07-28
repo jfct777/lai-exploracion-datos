@@ -21,7 +21,8 @@ El diseño aplica las siguientes reglas:
 
 Fuga aceptada (no es igual a cero): el agrupamiento a phi>=0.0442 garantiza que ningún par con
 phi>=0.0442 cruza el split, pero el 4.º grado (phi>=0.0221) y la co-descendencia founder-difusa
-(que phi de SNPs comunes no ve) PUEDEN quedar a ambos lados. Limite explicito, no ausencia de fuga.
+(que phi de SNPs comunes no detecta) pueden quedar a ambos lados. Es un límite explícito, no una
+garantía de ausencia de fuga.
 
 Modo --verify: re-deriva el split desde el mismo modeling_master.tsv y afirma que el sha256 del
 manifiesto coincide con el congelado, columna por columna (re-derivabilidad bit a bit).
@@ -75,12 +76,13 @@ def _dist(series):
 
 
 def build_split(master_path, red_samples, n_splits, seed, group_col, community_col):
+    """Carga la cohorte elegible y genera los folds agrupados y estratificados."""
     dtype = {"sample_id": str, group_col: str, community_col: str}
     master = pd.read_csv(master_path, sep="\t", dtype=dtype)
     master[community_col] = master[community_col].fillna("")
     red = set(s.strip() for s in red_samples.split(",")) if red_samples else set()
 
-    # fuente UNICA de elegibilidad = columna qc_red del master; --red-samples es un GUARD.
+    # La única fuente de elegibilidad es qc_red; --red-samples solo comprueba su coherencia.
     n_red_found = int(master["sample_id"].isin(red).sum())
     assert n_red_found == len(red), f"{len(red) - n_red_found} IDs de --red-samples no estan en el master"
     qc_red_ids = set(master.loc[master["qc_red"].astype(str) == "True", "sample_id"])
@@ -93,7 +95,7 @@ def build_split(master_path, red_samples, n_splits, seed, group_col, community_c
     elig = master[master["qc_red"].astype(str) != "True"].copy()
     assert len(elig) == len(master) - len(red), "elegibles != master - rojas"
 
-    # clave de grupo CANONICA = min(sample_id) del componente phi0442, sobre el universo elegible.
+    # La clave canónica del grupo es el menor sample_id de la componente phi0442 elegible.
     elig["split_group_key"] = elig.groupby(group_col)["sample_id"].transform("min")
     elig = elig.sort_values("sample_id", kind="mergesort").reset_index(drop=True)
 
@@ -110,7 +112,7 @@ def build_split(master_path, red_samples, n_splits, seed, group_col, community_c
 
 
 def select_test_fold(elig, n_splits):
-    """Regla DECLARADA: el fold de TEST es el mas representativo del total elegible -- minimiza
+    """Elige como TEST el fold más representativo del total elegible; minimiza
     joint = |prev_fold-prev_overall| + TVD_cohorte + TVD_region. Empate -> menor numero de fold.
     Usa etiqueta, cohorte y región; no consulta variables raras ni resultados de modelos."""
     prev_all = float((elig["y"] == 1).mean())
@@ -135,6 +137,7 @@ def select_test_fold(elig, n_splits):
 
 
 def assemble_manifest(master, elig, chosen_fold):
+    """Asigna TRAIN, TEST o EXCLUDE y conserva la razón de cada exclusión."""
     elig = elig.copy()
     elig["eligible"] = True
     elig["exclusion_reason"] = ""
@@ -155,6 +158,7 @@ def assemble_manifest(master, elig, chosen_fold):
 
 def audit(master, elig, full, chosen_fold, per_fold, overall, master_path,
           n_splits, seed, group_col, community_col):
+    """Construye la auditoría de balance, parentesco y procedencia del split."""
     # etiqueta split final por fold (TEST/TRAIN) sobre las representaciones ya elegidas
     per_fold_out = []
     for r in per_fold:
@@ -229,13 +233,14 @@ def audit(master, elig, full, chosen_fold, per_fold, overall, master_path,
         },
         "accepted_leakage_limit": (
             "phi>=0.0442 garantiza 0 pares cruzando; 4.º grado (phi>=0.0221) y co-descendencia "
-            "founder-difusa PUEDEN cruzar -> fuga aceptada, no cero. Sensibilidad (reagrupar a "
+            "founder difusa pueden cruzar; la fuga se acepta como limitación. Sensibilidad (reagrupar a "
             "phi>=0.0221, medir dAUC) diferida al modelado."),
     }
     return rep
 
 
 def main():
+    """Genera el manifiesto congelado y sus archivos de auditoría."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--master", required=True, type=Path)
     ap.add_argument("--red-samples", required=True, help="6 QC-rojas, separadas por comas")

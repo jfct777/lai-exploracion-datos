@@ -23,6 +23,7 @@ except ImportError:
 
 
 def parse_args():
+    """Define y devuelve los argumentos de línea de comandos."""
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--sfs", required=True, help="SFS TSV file(s)", nargs="+")
     p.add_argument("--rare_tail", help="Rare tail AC TSV file(s)", nargs="+")
@@ -35,7 +36,7 @@ def parse_args():
 
 
 def plot_sfs_standard(df, out_path, dpi=300):
-    """Standard SFS plot: linear scale, raw counts."""
+    """Grafica el SFS en escala lineal con conteos sin normalizar."""
     fig, ax = plt.subplots(figsize=(10, 6))
     
     x = np.arange(len(df))
@@ -51,7 +52,7 @@ def plot_sfs_standard(df, out_path, dpi=300):
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=45, ha='right')
     
-    # Add count labels on bars
+    # Añade el conteo encima de cada barra.
     for i, (bar, count) in enumerate(zip(bars, df['n_sites'])):
         height = bar.get_height()
         ax.text(bar.get_x() + bar.get_width()/2., height,
@@ -65,7 +66,7 @@ def plot_sfs_standard(df, out_path, dpi=300):
 
 
 def plot_sfs_log_scale(df, out_path, dpi=300):
-    """SFS with log scale on Y-axis (better for visualizing wide range)."""
+    """Grafica el SFS con escala logarítmica en el eje vertical."""
     fig, ax = plt.subplots(figsize=(10, 6))
     
     x = np.arange(len(df))
@@ -89,7 +90,7 @@ def plot_sfs_log_scale(df, out_path, dpi=300):
 
 
 def plot_sfs_proportions(df, out_path, dpi=300):
-    """SFS as proportions (normalized to 1)."""
+    """Grafica el SFS como proporciones normalizadas a uno."""
     fig, ax = plt.subplots(figsize=(10, 6))
     
     df = df.copy()
@@ -101,7 +102,7 @@ def plot_sfs_proportions(df, out_path, dpi=300):
     
     bars = ax.bar(x, df['proportion'], width=width, color='seagreen', alpha=0.8, edgecolor='black')
     
-    # Add cumulative line
+    # Añade la proporción acumulada en un segundo eje.
     ax2 = ax.twinx()
     ax2.plot(x, df['cumulative'], color='red', marker='o', linewidth=2, markersize=6, label='Cumulative')
     ax2.set_ylabel('Cumulative Proportion', fontsize=12, fontweight='bold', color='red')
@@ -117,7 +118,7 @@ def plot_sfs_proportions(df, out_path, dpi=300):
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=45, ha='right')
     
-    # Add percentage labels on bars
+    # Añade el porcentaje encima de cada barra.
     for i, (bar, prop) in enumerate(zip(bars, df['proportion'])):
         height = bar.get_height()
         ax.text(bar.get_x() + bar.get_width()/2., height,
@@ -131,7 +132,7 @@ def plot_sfs_proportions(df, out_path, dpi=300):
 
 
 def plot_rare_tail(df, out_path, dpi=300, max_ac=20):
-    """Plot rare tail distribution (singleton, doubleton, etc.)."""
+    """Grafica la cola rara de singletons, doubletons y conteos siguientes."""
     fig, ax = plt.subplots(figsize=(12, 6))
     
     df = df[df['AC'] <= max_ac].copy()
@@ -143,7 +144,7 @@ def plot_rare_tail(df, out_path, dpi=300, max_ac=20):
     ax.set_title(f'Rare Variant Tail (AC ≤ {max_ac})', fontsize=14, fontweight='bold')
     ax.set_xticks(df['AC'])
     
-    # Add count labels
+    # Añade el conteo encima de cada barra.
     for bar, count in zip(bars, df['n_sites']):
         height = bar.get_height()
         ax.text(bar.get_x() + bar.get_width()/2., height,
@@ -157,11 +158,11 @@ def plot_rare_tail(df, out_path, dpi=300, max_ac=20):
 
 
 def plot_summary_panel(df_sfs, df_rare, out_path, dpi=300):
-    """Multi-panel summary figure."""
+    """Genera una figura resumen con varios paneles."""
     fig = plt.figure(figsize=(16, 10))
     gs = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.3)
     
-    # Panel 1: Standard SFS
+    # Panel 1: SFS estándar.
     ax1 = fig.add_subplot(gs[0, 0])
     x = np.arange(len(df_sfs))
     ax1.bar(x, df_sfs['n_sites'], color='steelblue', alpha=0.8, edgecolor='black')
@@ -208,33 +209,34 @@ def plot_summary_panel(df_sfs, df_rare, out_path, dpi=300):
 
 
 def main():
+    """Carga el espectro de frecuencias y genera las figuras configuradas."""
     args = parse_args()
     
     out_dir = Path(args.out_prefix).parent
     out_dir.mkdir(parents=True, exist_ok=True)
     
-    # Load SFS data
+    # Carga las tablas del SFS.
     dfs_sfs = []
     for sfs_file in args.sfs:
         df = pd.read_csv(sfs_file, sep='\t')
         dfs_sfs.append(df)
     
-    # Concatenate if multiple chromosomes
+    # Concatena las tablas cuando hay más de un cromosoma.
     df_sfs = pd.concat(dfs_sfs, ignore_index=True) if len(dfs_sfs) > 1 else dfs_sfs[0]
     
-    # Define sex chromosomes list for filtering
+    # Define las etiquetas aceptadas para los cromosomas sexuales.
     sex_chr = ['X', 'Y', 'x', 'y', 'chrX', 'chrY', 'CHRX', 'CHRY']
     
-    # Exclude sex chromosomes by default (SFS biased due to different sample sizes)
+    # Excluye cromosomas sexuales por defecto porque tienen tamaños muestrales distintos.
     if not args.include_sex_chr and 'chr' in df_sfs.columns:
         df_sfs = df_sfs[~df_sfs['chr'].astype(str).isin(sex_chr)]
         print(f"Excluded sex chromosomes. Using {df_sfs['chr'].nunique()} autosomes.")
     
-    # If multiple chromosomes, aggregate by bin
+    # Suma los conteos de varios cromosomas dentro de cada intervalo.
     if 'chr' in df_sfs.columns and df_sfs['chr'].nunique() > 1:
         df_sfs = df_sfs.groupby(['af_bin_lo', 'af_bin_hi'], as_index=False).agg({'n_sites': 'sum'})
     
-    # Load rare tail if provided
+    # Carga la cola rara si fue indicada.
     df_rare = None
     if args.rare_tail:
         dfs_rare = []
@@ -242,13 +244,13 @@ def main():
             df = pd.read_csv(rare_file, sep='\t')
             dfs_rare.append(df)
         df_rare = pd.concat(dfs_rare, ignore_index=True) if len(dfs_rare) > 1 else dfs_rare[0]
-        # Exclude sex chromosomes from rare tail too
+        # Aplica el mismo filtro de cromosomas sexuales a la cola rara.
         if not args.include_sex_chr and 'chr' in df_rare.columns:
             df_rare = df_rare[~df_rare['chr'].astype(str).isin(sex_chr)]
         if 'chr' in df_rare.columns and df_rare['chr'].nunique() > 1:
             df_rare = df_rare.groupby('AC', as_index=False).agg({'n_sites': 'sum'})
     
-    # Generate plots
+    # Genera las figuras solicitadas.
     fmt = args.format
     plot_sfs_standard(df_sfs, f"{args.out_prefix}_standard.{fmt}", dpi=args.dpi)
     plot_sfs_log_scale(df_sfs, f"{args.out_prefix}_log.{fmt}", dpi=args.dpi)

@@ -2,9 +2,9 @@
 """P0 -- ensambla modeling_master.tsv (cohorte canonica 2619) para el experimento train/test con
 features de variantes raras definidas para el análisis.
 
-Estado: P0_DATASET=COMPLETO, SPLIT_POLICY=PENDIENTE. El dataset de modelado esta completo; NO hace
-split ni entrena nada, y NO fija el umbral de parentesco primario (esa decision se difiere al diseno
-de split_manifest.tsv). Construye:
+Estado: P0_DATASET=COMPLETO, SPLIT_POLICY=PENDIENTE. El dataset de modelado está completo. Este paso
+no crea el split, no entrena modelos y no fija el umbral de parentesco primario; esa decisión queda
+para el diseño de split_manifest.tsv. Construye:
   - modeling_master.tsv        : una fila por individuo canonico
   - modeling_master_dict.md    : diccionario de columnas
   - join_audit.json            : duplicados / faltantes / conteos de cada join + estado (dataset/split)
@@ -25,16 +25,19 @@ import pandas as pd
 
 
 class UnionFind:
+    """Mantiene componentes conexas de parentesco mediante unión y búsqueda."""
     def __init__(self, items):
         self.parent = {i: i for i in items}
 
     def find(self, x):
+        """Devuelve la raíz del componente y comprime el camino recorrido."""
         while self.parent[x] != x:
             self.parent[x] = self.parent[self.parent[x]]
             x = self.parent[x]
         return x
 
     def union(self, a, b):
+        """Une los componentes de dos muestras."""
         ra, rb = self.find(a), self.find(b)
         if ra != rb:
             self.parent[ra] = rb
@@ -60,12 +63,11 @@ def _components(sub_pairs, ids):
 def kinship_components(pairs, ids, threshold):
     """Componentes conexas de PC-Relate restringidas a `ids`, a un umbral de phi.
 
-    Reporta el criterio de Molloy-Reed (1995) para aparicion de componente gigante en un
-    grafo con secuencia de grados ARBITRARIA (no asume Poisson): kappa = <k^2>/<k>, kappa>2
-    predice percolacion. El grado medio <k> solo (criterio Erdos-Renyi) NO es sustituto de
-    kappa cuando la distribucion de grado tiene cola pesada (familias grandes = hubs), que es
-    exactamente el regimen esperado en un grafo de parentesco -- corregido tras revision de la
-    Se usa el criterio de Molloy-Reed; no basta con comprobar que el grado medio sea mayor que uno.
+    Usa el criterio de Molloy-Reed (1995) para evaluar la aparición de una componente gigante
+    en grafos con una secuencia de grados arbitraria. Este criterio emplea
+    kappa = <k^2>/<k> y predice percolación cuando kappa>2. El grado medio del criterio
+    Erdős-Rényi no basta cuando la distribución tiene una cola pesada, como ocurre con familias
+    grandes que actúan como hubs.
     """
     sub = pairs[(pairs["kin"] >= threshold) & pairs["ID1"].isin(ids) & pairs["ID2"].isin(ids)]
     id_to_group, group_size = _components(sub, ids)
@@ -105,12 +107,12 @@ def kinship_components(pairs, ids, threshold):
 
 def duplicate_or_mz_detection(pairs, ids, threshold):
     """Duplicado tecnico O gemelo MZ via PC-Relate: banda phi>=threshold (Manichaikul et al. 2010,
-    KING: dup/MZ si kinship > 1/2^(3/2) ~= 0.354, confirmado por k2 -> 1). PC-Relate NO distingue
+    KING: dup/MZ si kinship > 1/2^(3/2) ~= 0.354 y k2 se aproxima a 1. PC-Relate no distingue
     una replica tecnica (mismo ADN secuenciado dos veces) de un gemelo monocigotico: ambos dan
     kinship ~0.5 y k2 ~1. Por eso se etiqueta "duplicate_or_MZ", no "replica".
 
     Devuelve:
-      id_to_group, group_size : componentes conexas INTRA-cohorte (parejas con AMBOS extremos en `ids`).
+      id_to_group, group_size : componentes conexas dentro de la cohorte; ambos extremos están en `ids`.
       external : lista de (id_canonico, id_externo, kin, k2) donde solo UNO de los extremos es canonico
                  -> el duplicado/MZ del individuo vivio fuera de la cohorte (dedup aguas arriba).
     """
@@ -128,6 +130,7 @@ def duplicate_or_mz_detection(pairs, ids, threshold):
 
 
 def main():
+    """Construye la tabla maestra de modelado y sus informes de auditoría."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--feature-store", required=True, type=Path)
     ap.add_argument("--leiden", required=True, type=Path)
@@ -140,7 +143,7 @@ def main():
                      help="umbrales de phi a reportar en el JSON (4to,3ro,2do,1er grado)")
     ap.add_argument("--kinship-group-columns", default="0.0442,0.0884",
                      help="umbrales que se materializan como columnas explicitas de grupo en la tabla. "
-                          "NO hay columna primaria: la eleccion se difiere al split (subset de "
+                          "No hay una columna primaria; la elección queda para el split (subconjunto de "
                           "--kinship-thresholds)")
     ap.add_argument("--replicate-threshold", type=float, default=0.354,
                      help="phi de duplicado/MZ (Manichaikul 2010, KING band: kinship>1/2^(3/2))")
@@ -174,7 +177,7 @@ def main():
         # rellena con un centinela y se compara toda la fila contra la primera.
         filled = block.fillna("\x00__NA__\x00")
         assert bool(filled.eq(filled.iloc[0]).all().all()), (
-            f"ID {dup_id} duplicado en metadata con filas NO identicas -- no se dedup silenciosamente")
+            f"ID {dup_id} duplicado en metadata con filas distintas; no se deduplica de forma silenciosa")
     md_dedup = md.drop_duplicates("ID", keep="first")
     geo = md_dedup[["ID", "Region", "State"]].rename(
         columns={"ID": "sample_id", "Region": "region", "State": "state"})
@@ -211,7 +214,7 @@ def main():
         json.dump(reports, fh, indent=2, ensure_ascii=False)
 
     # --- cruce grupo-de-parentesco x comunidad Leiden, para cada umbral reportado ---
-    # Diagnostico de CIRCULARIDAD (no de fuga train/test): dice si un bloque de parentesco cae
+    # Diagnóstico de circularidad, no de fuga train/test: indica si un bloque de parentesco cae
     # entero dentro de una comunidad; la interpretacion vive en el diccionario.
     leid_map = leid.set_index("sample_id")[args.leiden_col_for_crosstab].to_dict()
     crosstab_rows = []
@@ -272,8 +275,9 @@ def main():
     dup_mz_report = {
         "threshold": args.replicate_threshold,
         "citation": "Manichaikul et al. 2010 (KING): dup/MZ si kinship > 1/2^(3/2) ~= 0.354",
-        "note": ("PC-Relate NO distingue replica tecnica de gemelo MZ (ambos kinship ~0.5, k2 ~1); "
-                 "por eso 'duplicate_or_MZ', no 'replica'. Distinto del duplicado de FILAS de "
+        "note": ("PC-Relate no distingue una réplica técnica de un gemelo MZ "
+                 "(ambos tienen kinship ~0.5 y k2 ~1); "
+                 "por eso 'duplicate_or_MZ', no 'replica'. Es distinto del duplicado de filas de "
                  "metadata (BB-COVL-397, dos filas identicas colapsadas en el join), que no es un "
                  "duplicado genomico sino un artefacto de la tabla de metadata."),
         "n_intra_cohort_pairs": n_intra_pairs,
@@ -288,13 +292,13 @@ def main():
         "interpretation": (
             "0 grupos dup/MZ no-triviales intra-cohorte -> el dedup ocurrio aguas arriba: cada "
             "individuo canonico con un duplicado/MZ genomico conserva UNA sola version; la copia "
-            "gemela (sufijo -R, prefijo RHT/DRC, o version alterna) quedo FUERA de los 2619. "
+            "gemela (sufijo -R, prefijo RHT/DRC o versión alterna) quedó fuera de los 2619. "
             "La copia canónica la decidió el join lai_rare∩metadata y no un criterio de QC; queda "
             "pendiente comprobar que se retuvo la de mejor call-rate/het. Las features "
             "de co-sharing M14 se computaron sobre los 2619 (carriers recomputados en el subset), asi "
             "que la copia externa no aporta aristas. Los conteos rare_* son por-individuo (genotipos "
             "propios), de modo que la copia externa no suma a la cuenta de un individuo; pero OJO: el "
-            "universo de SITIO 'raro' NO se recalculo dentro de 2619 (ver rare_* en el diccionario)."),
+            "el universo de sitios raros no se recalculó dentro de las 2619 muestras."),
     }
     with open(args.outdir / "duplicate_or_mz_report.json", "w") as fh:
         json.dump(dup_mz_report, fh, indent=2, ensure_ascii=False)
@@ -339,8 +343,8 @@ def main():
         "p0_dataset_status": "COMPLETO",
         "split_policy_status": "PENDIENTE",
         "p0_status_reason": (
-            "dataset de modelado COMPLETO (region/estado + dup/MZ + parentesco a doble umbral "
-            "phi0442/phi0884, sin primaria); la POLITICA de split queda PENDIENTE: umbral primario "
+            "dataset de modelado completo (región/estado + dup/MZ + parentesco a doble umbral "
+            "phi0442/phi0884, sin primaria); la política de split queda pendiente: umbral primario "
             "y unidad de particion se deciden en el diseno del split, todavia no autorizado"),
         "n_feature_store_rows": n_fs_raw,
         "n_feature_store_duplicated_ids": int(dup_fs),
@@ -378,8 +382,8 @@ y unidad de particion) se difiere al diseno de `split_manifest.tsv`.
   `n_chromosomes_with_sharing`, `flag_aislado`, `rare_*`, `flag_missing_*`:
   `20_feature_store/20_feature_store/feature_store.tsv` (modulo M20).
   **Procedencia de `rare_*` (corregida 2026-07-15):** M20 corre `bcftools stats -s -` (bloque PSC)
-  sobre TODAS las muestras del VCF raro (2723) y luego restringe las FILAS del feature store a los
-  2619; **NO recalcula el universo MAC/MAF dentro de 2619**. Es decir: los conteos `rare_*` son
+  sobre todas las muestras del VCF raro (2723) y luego restringe las filas del feature store a los
+  2619; no recalcula el universo MAC/MAF dentro de las 2619 muestras. Los conteos `rare_*` son
   por-individuo (genotipos propios de cada quien), pero la definicion de sitio 'raro' (MAF<1%)
   proviene del VCF construido sobre el panel completo, no de un recalculo sobre la cohorte de 2619.
 - `community_res_*`, `assignment_confidence`: `leiden_assignments.tsv` (M16.5, resolucion Leiden
@@ -389,8 +393,8 @@ y unidad de particion) se difiere al diseno de `split_manifest.tsv`.
   comparten sustrato (M14). No usar `grado_M14` como feature de entrenamiento sin declarar esto.
 - `region`, `state`: `metadata_cleaned.txt` (columnas Region/State, Nunes et al. 2025). Cobertura
   total de los 2619 (0 NA); `Unknown` es una categoria explicita, no un faltante. El unico ID
-  duplicado en metadata (`BB-COVL-397`, dos filas IDENTICAS) se dedup con verificacion previa de
-  identidad de filas. **Esto es un duplicado de FILAS de la tabla de metadata, NO un duplicado
+  duplicado en metadata (`BB-COVL-397`, dos filas idénticas) se deduplica tras verificar la
+  identidad de filas. Esto es un duplicado de filas de la tabla de metadata, no un duplicado
   genomico** -- es distinto de las columnas `duplicate_or_MZ_*` (que vienen de PC-Relate); no se
   mezclan.
 - `qc_red`, `qc_gray`, `qc_gray_source_available`, `qc_status`: construidas a partir de
@@ -406,10 +410,11 @@ y unidad de particion) se difiere al diseno de `split_manifest.tsv`.
   que el split quede ligado de forma implícita a un umbral.
 - `duplicate_or_MZ_group` / `duplicate_or_MZ_group_size` / `has_external_duplicate_or_MZ`:
   duplicado tecnico O gemelo monocigotico via PC-Relate phi>=0.354 (Manichaikul et al. 2010, banda
-  KING dup/MZ). **PC-Relate NO distingue replica tecnica de gemelo MZ** (ambos kinship ~0.5, k2 ~1);
-  por eso el nombre `duplicate_or_MZ`, no `replica`. **0 grupos dup/MZ no-triviales intra-cohorte**
+  KING dup/MZ). PC-Relate no distingue una réplica técnica de un gemelo MZ; ambos tienen kinship
+  cercano a 0.5 y k2 cercano a 1. Por eso se usa el nombre `duplicate_or_MZ` y no `replica`.
+  No se encontraron grupos dup/MZ no triviales dentro de la cohorte:
   -- todos son singleton. `has_external_duplicate_or_MZ=True` marca los ~20 individuos cuya copia
-  gemela quedo FUERA de los 2619 (dedup aguas arriba: la version `-R`/RHT/DRC alterna no entro). La
+  gemela quedó fuera de los 2619 (deduplicación aguas arriba: la versión alterna no entró). La
   llamada se sostiene por **k2 (IBD2) ~= 1**, no por el kinship puntual: k2->1 es la firma inequivoca
   de dup/MZ y es practicamente inmune al sesgo por admixtura (compartir los DOS alelos IBD en todo el
   genoma no lo fabrica la estructura poblacional); PC-Relate (Conomos 2016) ademas es robusto a
@@ -418,44 +423,44 @@ y unidad de particion) se difiere al diseno de `split_manifest.tsv`.
 
 **Por que `has_external_duplicate_or_MZ` es inerte para el split (verificado, no asumido):** las
 features de co-sharing M14 (`n_sharing_partners`, `n_segments_involved`, `total_shared_bp`,
-`grado_M14`) se computaron sobre EXACTAMENTE los 2619 (el painter recomputa carriers sobre las
-muestras seleccionadas, MAC>=2 en el subset), asi que la copia externa no aporta aristas. Los
+`grado_M14`) se calcularon sobre las 2619 muestras; el painter vuelve a calcular portadores sobre las
+  muestras seleccionadas con MAC>=2, así que la copia externa no aporta aristas. Los
 conteos `rare_*` son por-individuo (genotipos propios), de modo que la copia externa no suma a la
-cuenta de un individuo; PERO (ver procedencia de `rare_*` arriba) el universo de SITIO 'raro' NO se
+cuenta de un individuo. Sin embargo, el universo de sitios raros no se
 recalculo dentro de 2619. Deuda declarada (crítica): que copia de cada par dup/MZ quedo canonica
-lo decidio el join lai_rare∩metadata, NO un criterio de QC -> auditar a futuro que se retuvo la de
+lo decidió el join lai_rare∩metadata y no un criterio de QC. Queda pendiente auditar que se retuvo la
 mejor call-rate/het.
 
-**phi agrupa pedigrí, NO toda la co-descendencia founder-difusa (matiz de dominio):** phi de
-PC-Relate se estima con SNPs COMUNES y captura parentesco genealogico reciente. El co-sharing de
-RARAS lo genera descendencia reciente PERO TAMBIEN deriva founder difusa; en las comunidades founder
-amazonicas (BrazilA) muchos pares con phi<0.0442 comparten muchas raras por drift compartido. Por
-eso un phi bajo NO garantiza independencia para el co-sharing de raras en esas comunidades: las
+**Alcance de phi:** agrupa pedigrí, pero no toda la co-descendencia founder-difusa. PC-Relate se
+estima con SNP comunes y captura parentesco genealógico reciente. El co-sharing de variantes raras
+surge tanto de descendencia reciente como de deriva founder difusa. En las comunidades founder
+amazónicas (BrazilA), muchos pares con phi<0.0442 comparten variantes raras por drift. Por eso un phi
+bajo no garantiza independencia para el co-sharing de raras en esas comunidades: las
 bandas agrupan bien la familia literal, pero no toda la co-descendencia.
 
-**Riesgo de circularidad declarado (NO es fuga train/test):** `community_res_*` y `grado_M14`
+**Riesgo de circularidad declarado:** `community_res_*` y `grado_M14`
 derivan del mismo grafo M14. Dentro de una comunidad, features diadicas como Sigma-l, n_segments
 y densidad son parecidas entre emparentados y no-emparentados por construccion del grafo. Esto es
 una **limitacion de circularidad** de la etiqueta (deriva de M14), no necesariamente una fuga de
-informacion entre train y test; por si sola NO obliga a un diseno community-holdout. Un modelo
+información entre entrenamiento y test; por sí sola no obliga a un diseño community-holdout. Un modelo
 entrenado con esas features y evaluado contra `community_res_*` mide recuperabilidad técnica fuera
 de muestra, no validación biológica independiente.
 
 **Condiciones necesarias del split:**
-`split_manifest.tsv` NO se considera valido si no declara, en su header, las tres decisiones que
+`split_manifest.tsv` se considera válido cuando declara en su encabezado las tres decisiones que
 P0 dejo abiertas a proposito:
-  1. **Umbral de agrupamiento** usado (`phi0442` vs `phi0884`) y por que; correr AMBOS como analisis
+  1. **Umbral de agrupamiento** usado (`phi0442` frente a `phi0884`) y por qué; correr ambos como análisis
      de sensibilidad y reportar el delta de metrica. Sin esto, el TSV plano deja que downstream use
      la columna equivocada y se re-introduce el sesgo que P0 elimino.
   2. **Unidad de particion** (bloque de parentesco vs comunidad vs individuo). A phi>=0.0442 el
-     `kappa` del modelo de configuracion (Molloy-Reed) es >2, MIENTRAS la mayor componente OBSERVADA
-     es 119/2619 (~4,5%). kappa>2 es una propiedad del modelo aleatorio de configuracion, NO una
+     `kappa` del modelo de configuración (Molloy-Reed) es >2, mientras la mayor componente observada
+     es 119/2619 (~4,5%). kappa>2 es una propiedad del modelo aleatorio de configuración, no una
      percolacion observada; el grafo de parentesco real esta mas "en clusters". El diseno del split
      debe medir el tamano de bloque real antes de asumir que GroupKFold por bloque es viable.
   3. **Mascara de parentesco en la feature diadica**: si el split es por-individuo, la feature
-     diadica DEBE enmascarar pares con phi>=umbral, o el ΔAUC sera parentesco disfrazado de senal
+     diádica debe enmascarar pares con phi>=umbral o el ΔAUC será parentesco disfrazado de señal
      (historico del proyecto: 72% del ΔAUC eran parientes sin mascara). El rechazo del
-     community-holdout es correcto, pero NO exime de esta mascara.
+     community-holdout es correcto, pero sigue requiriendo esta máscara.
 
 **Deuda declarada (`SPLIT_POLICY=PENDIENTE`, no olvido):** `region`/`state` y `grupos de
 duplicado/MZ` se agregaron en esta corrida (dataset completo). Quedan como deuda a decidir en el split: (a) las 3

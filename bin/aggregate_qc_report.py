@@ -23,6 +23,7 @@ def _chr_sort_key(c: str) -> tuple:
 
 
 def parse_args():
+    """Define y devuelve los argumentos de línea de comandos."""
     p = argparse.ArgumentParser()
     p.add_argument("--mode", required=True, choices=["per_chr", "aggregate"])
 
@@ -43,6 +44,7 @@ def parse_args():
 
 
 def read_plink_imiss(path: str) -> pd.DataFrame:
+    """Carga la tabla de missingness de PLINK y normaliza sus columnas."""
     df = pd.read_csv(path, delim_whitespace=True)
     cols = set(df.columns.astype(str).tolist())
     if {"FID", "IID", "MISS_PHENO", "N_MISS", "N_GENO", "F_MISS"}.issubset(cols):
@@ -62,6 +64,7 @@ def read_plink_imiss(path: str) -> pd.DataFrame:
 
 
 def read_plink_het(path: str) -> pd.DataFrame:
+    """Carga la tabla de heterocigosidad de PLINK y calcula las métricas usadas."""
     df = pd.read_csv(path, delim_whitespace=True)
     cols = set(df.columns.astype(str).tolist())
     if {"FID", "IID", "O(HOM)", "E(HOM)", "N(NM)", "F"}.issubset(cols):
@@ -80,6 +83,7 @@ def read_plink_het(path: str) -> pd.DataFrame:
 
 
 def per_chr(args):
+    """Construye el resumen de control de calidad para un cromosoma."""
     if not args.chr or not args.imiss or not args.het or not args.out:
         raise SystemExit("per_chr requires --chr --imiss --het --out")
 
@@ -114,6 +118,7 @@ def _read_many_tsv(paths: List[str]) -> pd.DataFrame:
 
 
 def aggregate(args):
+    """Combina resúmenes cromosómicos y genera el informe de cohorte."""
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "plots").mkdir(parents=True, exist_ok=True)
@@ -187,6 +192,7 @@ def aggregate(args):
 
 
 def main():
+    """Ejecuta el modo por cromosoma o el modo agregado."""
     args = parse_args()
 
     if args.mode == "per_chr":

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Módulo 21 — agregado genome-wide del canal de presencia externa, para UN panel.
 
-Junta los ``*.external_presence.summary.json`` por-cromosoma (mismo panel) y suma los conteos
-CRUDOS, recomputando las fracciones/enriquecimiento genome-wide (no promedia fracciones — suma
-numeradores y denominadores, que es lo correcto para tasas). Mismo patrón que
-``bin/aggregate_rare_in_lai.py`` (M17): per-chr ANALYZE -> genome-wide AGGREGATE.
+Junta los ``*.external_presence.summary.json`` por cromosoma de un mismo panel. En lugar de
+promediar fracciones, suma numeradores y denominadores y vuelve a calcular las tasas y el
+enriquecimiento de todo el genoma. Sigue el mismo patrón de agregado de M17.
 
-SALIDAS:
+Salidas:
   <prefix>.external_presence.genomewide.json   conteos sumados + fracciones recomputadas
   <prefix>.external_presence.per_chr.tsv       una fila por cromosoma (auditoría/figura)
 """
@@ -30,6 +29,7 @@ def _chrom_sort_key(chrom: str):
 
 
 def main() -> int:
+    """Agrega por panel los resultados cromosómicos del canal de presencia."""
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--glob", default="*.external_presence.summary.json",
@@ -119,8 +119,8 @@ def main() -> int:
             "lost_when_drop": ec57_lost,
             "frac_present_lost_when_drop": ec57_lost / max(n_present, 1),
         } if has_drop else None,
-        "interpretation": ("Agregado genome-wide del canal de presencia externa / NO-privacidad. "
-                           "PRESENT_ALLELE refuta privacidad; ABSENT_FROM_PANEL NO confirma founder."),
+        "interpretation": ("Agregado genome-wide del canal de presencia externa. "
+                           "PRESENT_ALLELE descarta privacidad; ABSENT_FROM_PANEL no confirma founder."),
     }
     Path(f"{args.out_prefix}.external_presence.genomewide.json").write_text(
         json.dumps(genomewide, indent=2))

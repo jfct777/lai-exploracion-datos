@@ -20,8 +20,8 @@ import json
 import os
 import sys
 
-# Orden LITERAL de columnas de Q en metadata (11..14) -> etiqueta de ancestría.
-# NO es AFR/EUR/NAM/EAS: permutar Q es un error fatal y silencioso (contrato §A2).
+# Orden de las columnas Q en metadata, de 11 a 14, y su etiqueta de ancestría.
+# El orden no es AFR/EUR/NAM/EAS; permutar Q produciría un error silencioso (contrato §A2).
 Q_COLUMN_TO_LABEL = {
     "Autosomes_Indigenous_anc": "NAM",
     "Autosomes_European_anc": "EUR",
@@ -55,6 +55,7 @@ def _file_provenance(path):
 # Modo define-cohort
 # ---------------------------------------------------------------------------
 def define_cohort(args):
+    """Define la cohorte canónica y escribe su orden y procedencia."""
     with open(args.rare_samples, "r", encoding="utf-8") as fh:
         rare = [ln.strip() for ln in fh if ln.strip()]
     rare_set = set(rare)
@@ -65,7 +66,7 @@ def define_cohort(args):
     if "ID" not in header:
         sys.exit("ERROR: metadata sin columna 'ID'.")
 
-    # Dedup NO silencioso: colapsa filas EXACTAMENTE idénticas; aborta si difieren.
+    # Las filas duplicadas solo se colapsan si son idénticas; cualquier diferencia termina el proceso.
     by_id = {}
     for r in rows:
         by_id.setdefault(r["ID"], []).append(r)
@@ -80,7 +81,7 @@ def define_cohort(args):
             dup_report.append({"id": mid, "n_rows": len(recs), "action": "colapsado (filas idénticas)"})
             meta_ids.add(mid)
         else:
-            sys.exit(f"ERROR: ID duplicado con filas NO idénticas: {mid} ({len(recs)} filas, "
+            sys.exit(f"ERROR: ID duplicado con filas distintas: {mid} ({len(recs)} filas, "
                      f"{len(uniq)} distintas). Resolver a mano antes de fijar la cohorte.")
 
     cohort = sorted(rare_set & meta_ids)
@@ -118,12 +119,13 @@ def define_cohort(args):
 # Modo aggregate
 # ---------------------------------------------------------------------------
 def aggregate(args):
+    """Une canales de variables y publica la tabla final y su manifiesto."""
     import pandas as pd
 
     cohort = pd.read_csv(args.cohort, sep="\t")["sample_id"].astype(str).tolist()
     df = pd.DataFrame({"sample_id": cohort})
 
-    # --- Q + sexo (metadata), por NOMBRE de columna (no por posición) ---
+    # Q y sexo se leen por nombre de columna, no por posición.
     meta = pd.read_csv(args.metadata, sep="\t", dtype=str)
     meta = meta.drop_duplicates(subset=["ID"])  # dedup ya validado en define-cohort
     missing_q = [c for c in Q_COLUMN_TO_LABEL if c not in meta.columns]
@@ -152,8 +154,8 @@ def aggregate(args):
     sig["sample_id"] = sig["sample_id"].astype(str)
     n_sigma_not_in_cohort = int((~sig["sample_id"].isin(cohort)).sum())
     df = df.merge(sig, on="sample_id", how="left")
-    # flag_aislado = AUSENTE del summary de M14 (los 18 aislados) -> se mide por NaN ANTES
-    # del fillna; NO confundir con un total_shared_bp==0.0 que sí estuviera en el summary.
+    # flag_aislado indica ausencia del resumen de M14; se detecta por NaN antes
+    # del fillna. Un total_shared_bp==0.0 presente en el resumen se conserva como dato válido.
     df["flag_aislado"] = df["total_shared_bp"].isna()
     for c in ["n_sharing_partners", "n_segments_involved", "total_shared_bp", "n_chromosomes_with_sharing"]:
         if c in df.columns:
@@ -227,6 +229,7 @@ def aggregate(args):
 
 
 def main():
+    """Ejecuta la etapa de cohorte o la etapa de agregación."""
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="mode", required=True)
 

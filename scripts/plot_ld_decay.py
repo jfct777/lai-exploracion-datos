@@ -22,6 +22,7 @@ except ImportError:
 
 
 def parse_args():
+    """Define y devuelve los argumentos de línea de comandos."""
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--ld_decay", required=True, help="LD decay TSV file(s)", nargs="+")
     p.add_argument("--out_prefix", default="ld_decay", help="Output file prefix")
@@ -34,19 +35,19 @@ def parse_args():
 
 
 def plot_ld_decay_standard(df, out_path, max_dist_kb=1000, dpi=300):
-    """Standard LD decay plot: mean r² vs distance."""
+    """Grafica la media y mediana de r² según la distancia."""
     fig, ax = plt.subplots(figsize=(12, 7))
     
     df = df[df['bin'] <= max_dist_kb * 1000].copy()
     df['dist_kb'] = df['bin'] / 1000
     
-    # Plot mean and median
+    # Dibuja la media y la mediana.
     ax.plot(df['dist_kb'], df['mean_r2'], 'o-', color='steelblue', linewidth=2, 
             markersize=4, label='Mean r²', alpha=0.8)
     ax.plot(df['dist_kb'], df['median_r2'], 's-', color='darkorange', linewidth=2, 
             markersize=4, label='Median r²', alpha=0.8)
     
-    # Add reference lines
+    # Añade líneas de referencia.
     ax.axhline(y=0.2, color='red', linestyle='--', linewidth=1.5, alpha=0.6, label='r² = 0.2 (LD threshold)')
     ax.axhline(y=0.5, color='gray', linestyle=':', linewidth=1, alpha=0.5)
     
@@ -126,22 +127,22 @@ def plot_ld_decay_with_n_pairs(df, out_path, max_dist_kb=1000, dpi=300):
 
 
 def plot_ld_half_decay(df, out_path, dpi=300):
-    """Calculate and annotate LD half-decay distance."""
+    """Calcula y anota la distancia de semidecaimiento de LD."""
     fig, ax = plt.subplots(figsize=(12, 7))
     
     df = df[df['bin'] > 0].copy()
     df['dist_kb'] = df['bin'] / 1000
     
-    # Find half-decay distance (where r² drops to 50% of initial)
+    # Busca la distancia donde r² cae a la mitad de su valor inicial.
     r2_initial = df.iloc[0]['mean_r2']
     r2_half = r2_initial / 2
     
-    # Interpolate to find distance at r² = r2_half
+    # Interpola la distancia correspondiente a r² = r2_half.
     idx_below = df[df['mean_r2'] <= r2_half].index
     if len(idx_below) > 0:
         idx = idx_below[0]
         if idx > 0:
-            # Linear interpolation
+            # Interpolación lineal entre los dos intervalos vecinos.
             x0, y0 = df.loc[idx-1, ['dist_kb', 'mean_r2']]
             x1, y1 = df.loc[idx, ['dist_kb', 'mean_r2']]
             half_decay_kb = x0 + (r2_half - y0) * (x1 - x0) / (y1 - y0)
@@ -261,38 +262,39 @@ def plot_summary_panel(df, out_path, max_dist_kb=1000, dpi=300):
 
 
 def main():
+    """Carga las tablas de LD y genera las figuras configuradas."""
     args = parse_args()
     
     out_dir = Path(args.out_prefix).parent
     out_dir.mkdir(parents=True, exist_ok=True)
     
-    # Load LD decay data
+    # Carga las tablas de decaimiento de LD.
     dfs = []
     for ld_file in args.ld_decay:
         df = pd.read_csv(ld_file, sep='\t')
         dfs.append(df)
     
-    # Concatenate if multiple chromosomes
+    # Concatena las tablas cuando hay más de un cromosoma.
     df = pd.concat(dfs, ignore_index=True) if len(dfs) > 1 else dfs[0]
     
-    # Exclude sex chromosomes by default (LD estimates are biased due to hemizygosity)
+    # Excluye cromosomas sexuales por defecto para evitar el sesgo por hemicigosis.
     if not args.include_sex_chr and 'chr' in df.columns:
         sex_chr = ['X', 'Y', 'x', 'y', 'chrX', 'chrY', 'CHRX', 'CHRY']
         df = df[~df['chr'].astype(str).isin(sex_chr)]
         print(f"Excluded sex chromosomes. Using {df['chr'].nunique()} autosomes.")
     
-    # If multiple chromosomes, aggregate by bin
+    # Agrega varios cromosomas por intervalo de distancia.
     if 'chr' in df.columns and df['chr'].nunique() > 1:
         df = df.groupby('bin', as_index=False).agg({
             'n_pairs': 'sum',
             'mean_r2': 'mean',
-            'median_r2': 'mean'  # Average of medians across chromosomes
+            'median_r2': 'mean'  # Promedio de las medianas por cromosoma.
         })
     
-    # Sort by distance
+    # Ordena por distancia.
     df = df.sort_values('bin').reset_index(drop=True)
     
-    # Generate plots
+    # Genera las figuras solicitadas.
     fmt = args.format
     plot_ld_decay_standard(df, f"{args.out_prefix}_standard.{fmt}", max_dist_kb=args.max_dist_kb, dpi=args.dpi)
     plot_ld_decay_log_distance(df, f"{args.out_prefix}_log.{fmt}", max_dist_kb=args.max_dist_kb, dpi=args.dpi)
@@ -306,7 +308,7 @@ def main():
     if half_decay_kb:
         print(f"Half-decay distance: {half_decay_kb:.1f} kb")
     
-    # Find distance at r² = 0.2
+    # Busca la primera distancia donde r² baja a 0.2.
     df_below_02 = df[df['mean_r2'] <= 0.2]
     if len(df_below_02) > 0:
         dist_at_02 = df_below_02.iloc[0]['bin'] / 1000

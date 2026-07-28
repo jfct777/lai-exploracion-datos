@@ -93,6 +93,6 @@ echo "[6/6] Limpiando archivos temporales ..."
 rm -f _blacklist.bed _gaps.bed _ld_extended.bed
 
 echo ""
-echo "==> LISTO: ${OUTFILE}"
+echo "==> Listo: ${OUTFILE}"
 echo "==> Para usar en el workflow, verifica que nextflow.config apunte a:"
 echo "    exclude_regions_bed = \"${OUTFILE}\""

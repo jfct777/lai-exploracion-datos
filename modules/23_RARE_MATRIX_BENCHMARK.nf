@@ -425,7 +425,7 @@ workflow RARE_MATRIX_BENCHMARK {
     // Módulo 23 — Benchmark matriz rara individuo×variante: extracción + SMOKE técnico chr22
     // =========================================================================
     // Diseño reducido. La fuente de entrada es results_modtest_mac2/lai_rare.
-    // El fold 3 (TEST) NUNCA se decodifica: extract pasa solo IDs de TRAIN a `bcftools query -S`.
+    // El fold 3 (TEST) no se decodifica: extract pasa solo los ID de TRAIN a `bcftools query -S`.
     // El smoke es técnico (etiqueta permutada, sin CV/grilla/métricas). Procedencia calcada de M22.
     def do_rb_extract = params.enable_rare_bench_extract && params.run_rare_bench
     def do_rb_smoke   = params.enable_rare_bench_smoke   && params.run_rare_bench
@@ -449,7 +449,7 @@ workflow RARE_MATRIX_BENCHMARK {
         def rare_bench_cv_py           = file("${projectDir}/bin/rare_bench_cv.py")
         def reqRB = { val, name -> if( val == null ) throw new IllegalStateException("M23: falta --${name}"); return val }
 
-        // Procedencia de ARTEFACTO (estable, entra al cache-key vía val) — calcada de M22: commit por
+        // La procedencia del artefacto es estable y forma parte de la clave de caché. Como en M22, el commit se obtiene por
         // I/O de .git (git puede no estar en el PATH del nodo), sha256 del contenedor por coreutils.
         def shOutRB = { cmd -> try { def p = ['bash','-c',cmd].execute(); p.waitFor(); return p.exitValue()==0 ? p.text.trim() : '' } catch( ignored ) { return '' } }
         def resolveGitCommitRB = { dir ->

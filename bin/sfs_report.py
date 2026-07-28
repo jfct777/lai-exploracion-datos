@@ -11,6 +11,7 @@ import pandas as pd
 
 
 def parse_args():
+    """Define y devuelve los argumentos de línea de comandos."""
     p = argparse.ArgumentParser()
     p.add_argument("--vcf", required=True)
     p.add_argument("--chr", required=True)
@@ -48,6 +49,7 @@ def _count_samples(vcf: str, keep_samples: str | None) -> int:
 
 
 def main():
+    """Genera el informe del espectro de frecuencias."""
     args = parse_args()
 
     out_prefix = Path(args.out_prefix)

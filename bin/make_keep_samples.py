@@ -7,6 +7,7 @@ import pandas as pd
 
 
 def parse_args():
+    """Define y devuelve los argumentos de línea de comandos."""
     p = argparse.ArgumentParser()
     p.add_argument("--flags", required=True, help="flags_per_sample.tsv")
     p.add_argument("--out", required=True, help="Output keep_samples.txt")
@@ -16,6 +17,7 @@ def parse_args():
 
 
 def main():
+    """Genera la lista de muestras que superan los filtros de calidad."""
     args = parse_args()
     df = pd.read_csv(args.flags, sep="\t", dtype=str)
 

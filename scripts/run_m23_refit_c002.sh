@@ -6,7 +6,7 @@
 #SBATCH --time=120:00:00
 #SBATCH --requeue
 #SBATCH --nodelist=c002
-#SBATCH --output=/home/jose.tantalean/projects/lai-exploracion-datos/logs/m23_refit_%j.log
+#SBATCH --output=m23_refit_%j.log
 
 # Control acotado de convergencia para los modelos finales de E_full_elasticnet.
 # Reajusta los cuatro modelos finales con los hiperparámetros elegidos en la corrida base. Estos

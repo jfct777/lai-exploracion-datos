@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke tecnico de la matriz rara (M23) sobre UN cromosoma (chr22). NO es ciencia: no hace CV, no
+"""Smoke técnico de la matriz rara de M23 sobre chr22. No ejecuta CV ni
 selecciona modelos ni hiperparametros, no reporta metricas de acierto. Su unico proposito es validar
 que la maquinaria tecnica del benchmark corre sobre las dimensiones reales:
 
@@ -10,10 +10,10 @@ que la maquinaria tecnica del benchmark corre sobre las dimensiones reales:
   5. sparse-safety    -> la matriz permanece sparse en todo el pipeline (nunca se densifica)
   6. bloqueo fold 3   -> ninguna muestra de la matriz es TEST; n_filas == n_train
 
-El unico fit es TECNICO y con ETIQUETA PERMUTADA (destruye toda senal): SAGA elastic-net, C fijo,
+El único ajuste es técnico y usa una etiqueta permutada para destruir la señal: SAGA elastic-net, C fijo,
 l1_ratio fijo. Solo se reportan tiempo, memoria, convergencia (n_iter_ < max_iter) e iteraciones.
 La regla de retencion fold-fitted (MAC_train>=k, n_alt_carriers_train>=k, missingness, varianza) se
-aplica aqui sobre TODO TRAIN (no por-fold) porque el smoke no hace CV; la version por-fold es del
+se aplica sobre todo TRAIN porque el smoke no hace CV; la versión por fold corresponde al
 benchmark cientifico posterior, fuera de este smoke.
 """
 import argparse
@@ -37,6 +37,7 @@ def _peak_rss_mb():
 
 
 def main():
+    """Ejecuta el smoke técnico de la matriz rara y escribe sus métricas."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--matrix-npz", required=True, type=Path)
     ap.add_argument("--variants-tsv", required=True, type=Path)
@@ -61,7 +62,7 @@ def main():
     args = ap.parse_args()
     args.outdir.mkdir(parents=True, exist_ok=True)
 
-    checks = {}          # nombre -> {"status": PASS/FAIL, ...}
+    checks = {}          # Cada nombre guarda un estado PASS o FAIL y sus detalles.
     report = {"chrom": args.chrom, "sklearn_version": sklearn.__version__, "seed": args.seed}
 
     X = sp.load_npz(args.matrix_npz).tocsc()
@@ -85,7 +86,7 @@ def main():
         "matrix_rows": n_rows, "n_train_manifest": n_train_manifest,
     }
 
-    # --- retencion fold-fitted (sobre TODO TRAIN; el smoke no hace CV) ----------------------------
+    # Retención ajustada sobre todo TRAIN; el smoke no ejecuta CV.
     mac = variants["mac_train"].to_numpy()
     carriers = variants["n_alt_carriers_train"].to_numpy()
     missing_rate = variants["missing_rate_train"].to_numpy()
@@ -135,7 +136,7 @@ def main():
         "note": "MaxAbsScaler(copy=False) sparse; .tocsr() mantiene sparse; nunca .toarray()",
     }
 
-    # --- fit tecnico unico: SAGA elastic-net, ETIQUETA PERMUTADA (sin senal), C/l1_ratio fijos -----
+    # Ajuste técnico con SAGA elastic-net, etiqueta permutada y C/l1_ratio fijos.
     rng = np.random.RandomState(args.seed)
     y = np.array([int(label_of[s]) for s in samples])
     y_perm = rng.permutation(y)
@@ -151,8 +152,8 @@ def main():
     n_iter = int(np.ravel(clf.n_iter_)[0])
     converged = n_iter < args.smoke_max_iter
     checks["technical_fit"] = {
-        "status": "PASS" if converged else "FAIL",   # PASS solo si convergio (n_iter < max_iter)
-        "note": ("fit TECNICO con etiqueta PERMUTADA (sin senal); solo se reportan tiempo/memoria/"
+        "status": "PASS" if converged else "FAIL",   # PASS indica que n_iter quedó por debajo de max_iter.
+        "note": ("ajuste técnico con etiqueta permutada y sin señal; solo se reportan tiempo/memoria/"
                  "convergencia/iteraciones; ninguna metrica de acierto. PASS exige converged=true"),
         "solver": "saga", "penalty": "elasticnet",
         "C": args.smoke_c, "l1_ratio": args.smoke_l1_ratio,
@@ -171,10 +172,10 @@ def main():
             "min_alt_carriers_train": args.min_alt_carriers_train,
             "max_missing_train": args.max_missing_train,
             "min_variance_train": args.min_variance_train,
-            "note": "aplicada sobre TODO TRAIN en el smoke (sin CV); por-fold en el benchmark cientifico",
+            "note": "aplicada sobre todo TRAIN en el smoke sin CV; por fold en el benchmark científico",
         },
         "checks": checks,
-        "scope": ("SMOKE TECNICO chr22: sin CV, sin grilla, sin metricas cientificas; etiqueta permutada. "
+        "scope": ("Smoke técnico de chr22: sin CV, grilla ni métricas científicas; etiqueta permutada. "
                   "Fold 3 nunca cargado."),
     })
     (args.outdir / f"{args.chrom}.rare_bench_smoke_report.json").write_text(

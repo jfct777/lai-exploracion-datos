@@ -8,15 +8,15 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Provisioning de los PANELES EXTERNOS de referencia para el Módulo 21
+# Preparación de los paneles externos de referencia para el módulo 21.
 # (canal de presencia externa). Baja del bucket cada panel × cromosoma y lo
 # normaliza a la convención que consume el pipeline:
 #     <PANEL_DIR>/<panel_id>/chr<C>.vcf.gz (+ .tbi)
-# Esto es PROVISIONING (datos de referencia), separado del cómputo Nextflow —
-# por eso vive en tools/ y NO dentro de un proceso (igual que install_ancestral).
+# Esta preparación de datos de referencia se mantiene separada del cómputo de Nextflow.
+# Por eso se mantiene en tools/ y se ejecuta fuera del pipeline, igual que install_ancestral.
 # Idempotente: salta lo ya staged. Corre en Slurm (partición cpu), nunca en login.
 #
-# IMPORTANTE: los panel_id / drop_sample / pass_only de cada panel deben coincidir
+# Los valores panel_id, drop_sample y pass_only de cada panel deben coincidir
 # con params.presence_panels en nextflow.config (única fuente de verdad del consumo).
 # Aquí solo vive la URI del bucket (provisioning), que el pipeline no necesita conocer.
 # ---------------------------------------------------------------------------
@@ -58,4 +58,4 @@ for entry in "${PANELS[@]}"; do
   done
 done
 
-echo "DONE -> $PANEL_DIR"
+echo "Listo: $PANEL_DIR"

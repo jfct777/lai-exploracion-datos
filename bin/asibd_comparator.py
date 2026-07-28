@@ -1,33 +1,30 @@
 #!/usr/bin/env python3
-"""M18 — Common-variant asIBD comparator vs rare-variant co-sharing communities (M16.5).
+"""M18: comparación de asIBD común con comunidades de co-sharing raro de M16.5.
 
-Builds the COMMON-variant community structure, *at equal local ancestry*, from Nunes' asIBD
-(Refined IBD on the rephased WGS, stratified by local ancestry: anc1/anc2/anc3) using the SAME
-Leiden as M16.5, and compares it against the rare-variant communities. Reports ALL three
-ancestries and BOTH faces:
+Construye la estructura de comunidades de variantes comunes a igual ancestría local a partir del
+asIBD de Nunes. Los archivos contienen Refined IBD sobre WGS refaseado y están estratificados por
+ancestría local como anc1, anc2 y anc3. Se usa la misma configuración de Leiden de M16.5 y se
+comparan las tres ancestrías desde dos perspectivas:
 
-  - CONCORDANCE    : rare community already contained in the common >2cM arbiter -> reaffirms Nunes.
-  - COMPLEMENTARITY: rare community split structure the common asIBD collapses, AND supported by an
-                     orthogonal axis -> real resolution.
-  - FAILS          : not supported by the orthogonal axis -> excluded, with reason.
+  - concordancia: una comunidad rara ya está contenida en la partición común de más de 2 cM;
+  - complementariedad: la comunidad rara separa una estructura que asIBD colapsa y cuenta con
+    respaldo de un eje ortogonal;
+  - sin respaldo: la comunidad no pasa el criterio ortogonal y se excluye indicando el motivo.
 
-Design constraints (project rules) and review fixes applied:
-  * Report the 3 ancestries, not only NAM (feedback_all_communities_not_just_nam).
-  * Report concordance as a finding, not only divergence (feedback_report_all_validated_findings).
-  * NO temporal dating: M14 is unphased IBS in bp; this measures partition RESOLUTION, not Ne
-    (decision 2026-06-02-no-convertir-bp-a-cm). asIBD cM here is Nunes', used only for affinity.
-  * Pre-registered JOINT discriminant (decision 2026-06-03): a rare community = REAL resolution iff
-    (A) it predicts a FIXED, a-priori orthogonal axis (maternal mtDNA haplogroup) ABOVE A PERMUTATION
-    NULL  AND  (B) it is NOT contained in the >arbiter_min_cm common asIBD partition of its own
-    ancestry. "A OR B" is forbidden (feedback_baseline_normalized_axes_test_power_confound).
-    -- mtDNA is the fixed axis (the 9 validated founders are maternal); it is truly orthogonal to the
-       autosomal sharing graph. chrY / geography / finestructure are reported as INFORMATIVE only,
-       NEVER as criterion A (finestructure derives from the same common sharing as the arbiter).
-  * Affinity is NORMALIZED by local-ancestry dosage opportunity (summed cM / (dosage_a*dosage_b)) so
-    a pair is not "close" merely for carrying more of that ancestry's tract (review fix #3).
-  * No argmax labelling of individuals; full AFR/EUR/NAM/EAS vector reported per community.
+El análisis no estima fechas. M14 usa IBS no faseado en bp y aquí solo se mide la resolución de las
+particiones; los cM de asIBD provienen de Nunes y se usan como afinidad. Una comunidad rara se
+considera complementaria cuando muestra enriquecimiento del haplogrupo mitocondrial frente al null
+de permutaciones y no está contenida en la partición común de su propia ancestría. El mtDNA es el
+eje ortogonal fijo. chrY, geografía y finestructure se informan como contexto, pero no intervienen
+en ese criterio porque finestructure deriva del mismo sharing común.
 
-Reuses the M16.5 Leiden verbatim by importing from `ibd_community_enhanced` (sibling in bin/).
+La afinidad se normaliza por la oportunidad de ancestría local mediante
+cM acumulados / (dosage_a * dosage_b). Así se evita considerar cercana una pareja solo porque
+ambos individuos tienen una mayor proporción de esa ancestría. El informe conserva el vector
+AFR/EUR/NAM/EAS completo de cada comunidad, sin asignar individuos por argmax.
+
+La implementación reutiliza la configuración de Leiden de M16.5 importando
+`ibd_community_enhanced`, que se prepara junto a este script.
 """
 from __future__ import annotations
 
@@ -53,16 +50,17 @@ ANC_COLS = ["Autosomes_African_anc", "Autosomes_European_anc",
 ANC_SHORT = {"Autosomes_African_anc": "AFR", "Autosomes_European_anc": "EUR",
              "Autosomes_Indigenous_anc": "NAM", "Autosomes_EastAsian_anc": "EAS"}
 SHORT_TO_DOSE_COL = {v: k for k, v in ANC_SHORT.items()}
-# Hypothesis from Gnomix code order (African=0/European=1/Native=2 -> anc1/2/3). CONFIRMED at runtime
-# by `confirm_anc_mapping` using the MEAN LOCAL-ANCESTRY DOSAGE of the carriers (not argmax).
+# El orden inicial de Gnomix es African=0, European=1 y Native=2. confirm_anc_mapping comprueba
+# esta correspondencia durante la ejecución usando la dosis media de ancestría local, sin argmax.
 DEFAULT_ANC_MAP = "anc1=AFR,anc2=EUR,anc3=NAM"
-# Geography / finestructure are reported but NOT used as the orthogonal criterion (see module docstring).
+# Geografía y finestructure se informan como contexto, pero no forman parte del criterio ortogonal.
 INFORMATIVE_AXES = ["Region", "State", "finestructure_clusters", "CHRY_MAIN_HAPLOGROUP"]
-ORTHO_AXIS = "MTDNA_MAIN_HAPLOGROUP"  # fixed, a-priori, truly orthogonal (maternal lineage)
+ORTHO_AXIS = "MTDNA_MAIN_HAPLOGROUP"  # Eje fijo de linaje materno, independiente del grafo autosómico.
 EPS = 1e-6
 
 
 def parse_args() -> argparse.Namespace:
+    """Define y devuelve los argumentos de línea de comandos."""
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--leiden", required=True)
@@ -71,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--asibd_glob", default="anc*.gapfilled_ibd")
     ap.add_argument("--anc_map", default=DEFAULT_ANC_MAP)
     ap.add_argument("--resolution_col", default="community_res_1")
-    # Leiden config — MUST match the M16.5 winning run (corrida_C).
+    # Mantiene la configuración de Leiden usada en la corrida C de M16.5.
     ap.add_argument("--leiden_resolutions", default="0.5,0.8,1.0,1.2,1.5,2.0,3.0")
     ap.add_argument("--leiden_n_seeds", type=int, default=25)
     ap.add_argument("--leiden_min_community_size", type=int, default=3)
@@ -79,20 +77,21 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--affinity_weight", choices=["sum_cm", "n_seg", "max_cm"], default="sum_cm")
     ap.add_argument("--normalize_by_dosage", default="true",
-                    help="divide pair affinity by dosage_a*dosage_b of the file's ancestry (review fix #3)")
+                    help="divide la afinidad por dosage_a*dosage_b de la ancestría del archivo")
     ap.add_argument("--min_edge_weight", type=float, default=0.0)
     ap.add_argument("--arbiter_min_cm", type=float, default=2.0,
-                    help=">cM threshold for the per-ancestry Refined-IBD arbiter (Browning&Browning 2cM)")
+                    help="Umbral en cM del árbitro Refined-IBD por ancestría")
     ap.add_argument("--ortho_perm_n", type=int, default=2000,
-                    help="permutations for the mtDNA enrichment null (criterion A)")
+                    help="Cantidad de permutaciones para el null de enriquecimiento de mtDNA")
     ap.add_argument("--ortho_perm_alpha", type=float, default=0.05)
     ap.add_argument("--arbiter_containment", type=float, default=0.80,
-                    help="fraction of a rare community sitting in one arbiter community = 'contained' (B)")
+                    help="Fracción de una comunidad rara necesaria para considerarla contenida")
     ap.add_argument("--out_prefix", required=True)
     return ap.parse_args()
 
 
 def load_rare(path: str, res_col: str) -> pd.DataFrame:
+    """Carga las comunidades raras y normaliza los ID de muestra."""
     la = pd.read_csv(path, sep="\t", dtype={"sample_id": str})
     if res_col not in la.columns:
         raise SystemExit(f"resolution_col {res_col!r} not in {list(la.columns)}")
@@ -102,6 +101,7 @@ def load_rare(path: str, res_col: str) -> pd.DataFrame:
 
 
 def load_metadata(path: str, keep_ids: set[str]) -> pd.DataFrame:
+    """Carga metadatos para las muestras incluidas en el análisis."""
     md = pd.read_csv(path, sep="\t", dtype=str).drop_duplicates("ID")  # dedup BB-COVL-397
     for c in ANC_COLS:
         md[c] = pd.to_numeric(md.get(c), errors="coerce")
@@ -113,8 +113,10 @@ def load_metadata(path: str, keep_ids: set[str]) -> pd.DataFrame:
 
 
 def parse_asibd(path: Path, asibd_to_sample: dict[str, str], weight: str) -> pd.DataFrame:
-    """Stream gapfilled_ibd (id1 hap1 id2 hap2 chr start end cM); aggregate per unordered pair,
-    keeping only pairs whose BOTH ids map into the canonical cohort."""
+    """Lee gapfilled_ibd por streaming y agrega segmentos por pareja no ordenada.
+
+    Solo conserva parejas cuyos dos ID pertenecen a la cohorte canónica.
+    """
     agg_cm: dict[tuple[str, str], float] = {}
     agg_n: dict[tuple[str, str], int] = {}
     agg_max: dict[tuple[str, str], float] = {}
@@ -149,8 +151,11 @@ def parse_asibd(path: Path, asibd_to_sample: dict[str, str], weight: str) -> pd.
 
 def build_affinity(pair_df: pd.DataFrame, samples: list[str], min_w: float,
                    dose: dict[str, float] | None) -> sp.csr_matrix:
-    """Symmetric sparse affinity over `samples`. If `dose` given, divide each pair weight by
-    dosage_a*dosage_b (local-ancestry opportunity normalization, review fix #3)."""
+    """Construye la afinidad simétrica y dispersa sobre `samples`.
+
+    Cuando se proporciona `dose`, divide el peso por dosage_a*dosage_b para normalizar la
+    oportunidad de ancestría local.
+    """
     idx = {s: i for i, s in enumerate(samples)}
     n = len(samples)
     if pair_df.empty:
@@ -170,7 +175,7 @@ def build_affinity(pair_df: pd.DataFrame, samples: list[str], min_w: float,
 
 def common_partition(pair_df: pd.DataFrame, samples: list[str], args,
                      dose: dict[str, float] | None) -> np.ndarray:
-    """Same M16.5 Leiden on the common affinity; consensus-resolution membership aligned to samples."""
+    """Aplica Leiden de M16.5 a la afinidad común y alinea la partición con las muestras."""
     S = build_affinity(pair_df, samples, args.min_edge_weight, dose)
     g = sparse_to_igraph(S, samples)
     resolutions = [float(x) for x in args.leiden_resolutions.split(",")]
@@ -181,15 +186,17 @@ def common_partition(pair_df: pd.DataFrame, samples: list[str], args,
     col = f"community_res_{args.leiden_consensus_resolution:g}"
     if col not in assign_df.columns:
         col = [c for c in assign_df.columns if c.startswith("community_res_")][0]
-    # FIX (review): assign_df has NO sample_id column (only community_res_*); rows are aligned to the
-    # graph vertex order == `samples`. Build the Series directly on `samples`.
+    # assign_df no incluye sample_id; sus filas siguen el orden de los vértices del grafo. La serie se
+    # construye sobre `samples` para conservar esa correspondencia.
     return pd.Series(assign_df[col].to_numpy(), index=samples).reindex(samples).fillna(-1).to_numpy().astype(np.int64)
 
 
 def confirm_anc_mapping(per_anc_pairs: dict[str, pd.DataFrame], md: pd.DataFrame,
                         anc_map: dict[str, str]) -> dict[str, dict]:
-    """Audit the anc->ancestry map by MEAN LOCAL-ANCESTRY DOSAGE of the carriers (not argmax):
-    the file declared NAM should have the highest mean Autosomes_Indigenous_anc among its carriers."""
+    """Comprueba el mapa anc->ancestría mediante la dosis local media de los portadores.
+
+    El archivo declarado como NAM debe mostrar la mayor media de Autosomes_Indigenous_anc.
+    """
     md_i = md.set_index("sample_id")
     report = {}
     for anc, pdf in per_anc_pairs.items():
@@ -206,10 +213,12 @@ def confirm_anc_mapping(per_anc_pairs: dict[str, pd.DataFrame], md: pd.DataFrame
 
 def auto_detect_anc_map(per_anc_pairs: dict[str, pd.DataFrame],
                         md: pd.DataFrame) -> tuple[dict[str, str], dict]:
-    """Detect anc-file -> ancestry from cM-WEIGHTED dosage enrichment (NOT mean-of-carriers,
-    which fails because ~all individuals carry IBD in all files). For each anc file, weight each
-    pair's global-ancestry dosage by its shared cM; the ancestry whose dosage is most enriched
-    over the cohort mean identifies the file. Greedy 1-to-1 assignment. Returns (map, enrichment)."""
+    """Detecta la ancestría de cada archivo por enriquecimiento de dosis ponderado por cM.
+
+    La media simple de portadores no sirve porque casi todos los individuos tienen IBD en todos los
+    archivos. Por eso se pondera la dosis de cada pareja por los cM compartidos y se compara con la
+    media de la cohorte. La asignación entre archivo y ancestría es uno a uno.
+    """
     dose = {a: md.set_index("sample_id")[c].to_dict() for a, c in SHORT_TO_DOSE_COL.items()}
     gmean = {a: float(md[SHORT_TO_DOSE_COL[a]].mean()) for a in SHORT_TO_DOSE_COL}
     enr: dict[str, dict[str, float]] = {}
@@ -260,6 +269,7 @@ def _perm_pvalue(all_labels: np.ndarray, k: int, obs_frac: float, n_perm: int, s
 
 def concordance_table(md: pd.DataFrame, common_by_anc, arbiter_by_anc,
                       samples: list[str], args) -> pd.DataFrame:
+    """Resume concordancia y enriquecimiento entre particiones raras y comunes."""
     smap = {s: i for i, s in enumerate(samples)}
     md = md.set_index("sample_id")
     rare = md["rare_comm"]
@@ -270,11 +280,11 @@ def concordance_table(md: pd.DataFrame, common_by_anc, arbiter_by_anc,
         n = len(members)
         anc_vec = md.loc[members, ANC_COLS].mean()
         dom = ANC_SHORT[ANC_COLS[int(np.argmax(anc_vec.to_numpy()))]]
-        # (A) FIXED orthogonal axis = mtDNA, vs permutation null
+        # Criterio A: eje ortogonal fijo de mtDNA frente al null de permutaciones.
         mt_lab, mt_frac = _modal_fraction(md.loc[members, ORTHO_AXIS]) if ORTHO_AXIS in md.columns else ("NA", 0.0)
         p_perm = _perm_pvalue(mtdna_all, n, mt_frac, args.ortho_perm_n, args.seed + ci)
         predicts_ortho = p_perm < args.ortho_perm_alpha
-        # (B) containment in the arbiter OF ITS OWN dominant ancestry
+        # Criterio B: contención en el árbitro de su propia ancestría dominante.
         arb = arbiter_by_anc.get(dom)
         if arb is not None:
             lab = pd.Series([arb[smap[s]] for s in members if s in smap])
@@ -289,7 +299,7 @@ def concordance_table(md: pd.DataFrame, common_by_anc, arbiter_by_anc,
             category = "complement"      # A and B
         else:
             category = "reaffirm"        # supported, but common arbiter already contains it
-        # informative-only axes (reported, NOT criteria)
+        # Estos ejes se informan como contexto, pero no forman parte del criterio.
         info = {}
         for ax in INFORMATIVE_AXES:
             if ax in md.columns:
@@ -309,6 +319,7 @@ def concordance_table(md: pd.DataFrame, common_by_anc, arbiter_by_anc,
 
 
 def main() -> None:
+    """Ejecuta el comparador y escribe tablas y gráficos de salida."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = parse_args()
     anc_map = dict(kv.split("=") for kv in args.anc_map.split(","))
@@ -327,11 +338,11 @@ def main() -> None:
         per_anc_pairs[anc_key] = parse_asibd(f, asibd_to_sample, args.affinity_weight)
 
     detected_map, anc_enrichment = auto_detect_anc_map(per_anc_pairs, md)
-    anc_audit = confirm_anc_mapping(per_anc_pairs, md, anc_map)  # informative only (mean-of-carriers, weak)
-    LOG.info("anc map: declared=%s | DETECTED(cM-weighted)=%s | enrichment=%s",
+    anc_audit = confirm_anc_mapping(per_anc_pairs, md, anc_map)  # Referencia secundaria basada en medias.
+    LOG.info("anc map: declared=%s | detected(cM-weighted)=%s | enrichment=%s",
              anc_map, detected_map, json.dumps(anc_enrichment, ensure_ascii=False))
     declared_map = dict(anc_map)
-    anc_map = detected_map  # USE detected — declared (Gnomix 0/1/2 order) was unverified and WRONG
+    anc_map = detected_map  # Se usa el mapa detectado porque el orden declarado no estaba comprobado.
 
     rare_arr = md.set_index("sample_id")["rare_comm"].reindex(samples).to_numpy()
     md_i = md.set_index("sample_id")
@@ -341,7 +352,7 @@ def main() -> None:
         dose = md_i[SHORT_TO_DOSE_COL[anc]].to_dict() if (normalize and anc in SHORT_TO_DOSE_COL) else None
         memb = common_partition(pdf, samples, args, dose)
         common_by_anc[anc] = memb
-        # per-ancestry arbiter (>arbiter_min_cm on raw cM, NOT dosage-normalized: contención cruda)
+        # El árbitro por ancestría usa cM sin normalizar para medir la contención cruda.
         arb_pairs = pdf[pdf["raw_cm"] > args.arbiter_min_cm] if not pdf.empty else pdf
         arbiter_by_anc[anc] = common_partition(arb_pairs, samples, args, None)
         mask = (rare_arr >= 0) & (memb >= 0)
@@ -349,7 +360,7 @@ def main() -> None:
         ami = adjusted_mutual_info_score(rare_arr[mask], memb[mask]) if mask.sum() > 1 else float("nan")
         ari_rows.append({"ancestry": anc, "anc_file": anc_key, "ARI_rare_vs_common": round(ari, 4),
                          "AMI_rare_vs_common": round(ami, 4), "n_compared": int(mask.sum()),
-                         "NOTE": "ARI is the NULL expectation (distinct time-depths), descriptive only"})
+                         "NOTE": "ARI es una referencia descriptiva entre escalas temporales distintas"})
 
     conc = concordance_table(md, common_by_anc, arbiter_by_anc, samples, args)
 
@@ -364,15 +375,15 @@ def main() -> None:
         "anc_enrichment_cM_weighted": anc_enrichment, "anc_mapping_audit_weak_meanCarriers": anc_audit,
         "ari_by_ancestry": ari_rows, "category_counts": {k: int(v) for k, v in cats.items()},
         "arbiter_min_cm": args.arbiter_min_cm,
-        "discriminant": (f"JOINT pre-registered: REAL resolution (complement) = (A) mtDNA enrichment "
-                         f"beats permutation null (p<{args.ortho_perm_alpha}, FIXED axis) AND (B) not "
-                         f"contained (>{args.arbiter_containment}) in the >{args.arbiter_min_cm}cM "
-                         f"per-ancestry arbiter. 'A OR B' forbidden."),
-        "CAVEAT": ("ARI = null expectation, not evidence. mtDNA is the only criterion-A axis (truly "
-                   "orthogonal); chrY/geo/finestructure are informative only (finestructure derives "
-                   "from common sharing). Affinity dosage-normalized to avoid local-ancestry-dose "
-                   "confound. No temporal dating (M14 = unphased IBS in bp). Report ALL ancestries + "
-                   "concordance + complementarity + fails."),
+        "discriminant": (f"Discriminante conjunto: resolución complementaria = (A) enriquecimiento mtDNA "
+                         f"supera el null de permutaciones (p<{args.ortho_perm_alpha}) y (B) no está "
+                         f"contenida (>{args.arbiter_containment}) en el árbitro de "
+                         f">{args.arbiter_min_cm} cM de su ancestría. Deben cumplirse ambas condiciones."),
+        "CAVEAT": ("ARI se usa como referencia descriptiva y no como evidencia. mtDNA es el único eje "
+                   "del criterio A; chrY, geografía y finestructure solo aportan contexto. La afinidad "
+                   "se normaliza por dosis de ancestría local. No se realiza datación temporal porque "
+                   "M14 contiene IBS no faseado en bp. Se informan las tres ancestrías, la concordancia, "
+                   "la complementariedad y los casos sin respaldo."),
     }
     Path(f"{args.out_prefix}.summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False))
     LOG.info("done: %s", cats)

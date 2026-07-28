@@ -73,6 +73,7 @@ HISTOGRAM_COLUMNS = [
 
 
 def parse_args():
+    """Define y devuelve los argumentos de línea de comandos."""
     parser = argparse.ArgumentParser(
         description="Analyze per-individual pairwise distances between carrier rare SNPs by chromosome."
     )
@@ -182,6 +183,7 @@ def _read_header_samples(input_path):
 
 
 def validate_input_schema(input_path, input_format):
+    """Comprueba el formato y las columnas requeridas del archivo de variantes."""
     if input_format != "vcf_rare":
         _fail(
             f"Unsupported input format '{input_format}'. This module expects upstream rare-only VCF.gz inputs."
@@ -220,6 +222,7 @@ def _read_sample_ids_file(path):
 
 
 def load_selected_samples(header_samples, sample_ids_file, max_samples):
+    """Selecciona muestras conservando el orden del encabezado del archivo."""
     header_set = set(header_samples)
 
     if sample_ids_file:
@@ -270,6 +273,7 @@ def _is_carrier_gt(gt_value):
 
 
 def parse_genotypes_by_sample(input_path, chrom, selected_samples):
+    """Extrae por muestra las posiciones de las variantes portadas."""
     positions_by_sample = {sample_id: array("I") for sample_id in selected_samples}
     query_cmd = [
         "bcftools",
@@ -417,6 +421,7 @@ def _write_placeholder_plot(base_path, plot_config, title, message):
 
 
 def build_histogram_edges(min_log10_bp, max_log10_bp, n_bins):
+    """Construye los límites logarítmicos del histograma de distancias."""
     if not math.isfinite(min_log10_bp) or not math.isfinite(max_log10_bp):
         _fail("Histogram min/max log10 distance must be finite.")
     if max_log10_bp <= min_log10_bp:
@@ -496,6 +501,7 @@ def stream_pairwise_histogram_counts(
     nearest_neighbor_k=1,
     abort_if_pairs_exceed=None,
 ):
+    """Acumula distancias por bloques sin materializar todos los pares en memoria."""
     pos = np.asarray(positions, dtype=np.int64)
     n_positions = pos.size
     raw_pairs = int(n_positions * (n_positions - 1) // 2)
@@ -605,6 +611,7 @@ def summarize_distance_distribution_from_histogram(
     accumulator,
     status,
 ):
+    """Calcula conteos, cuantiles y momentos a partir de un histograma."""
     used_pairs = int(accumulator["n_pairs_used"])
     raw_pairs = int(accumulator["n_pairs_raw"])
 
@@ -664,6 +671,7 @@ def summarize_distance_distribution_from_histogram(
 
 
 def write_histogram_table(path, sample_id, chrom, hist_counts, hist_edges):
+    """Escribe los intervalos y conteos del histograma de una muestra."""
     df = pd.DataFrame(
         {
             "sample_id": [sample_id] * hist_counts.size,
@@ -679,6 +687,7 @@ def write_histogram_table(path, sample_id, chrom, hist_counts, hist_edges):
 
 
 def generate_hist_plot(hist_counts, hist_edges, base_path, plot_config, title, note_lines=None):
+    """Genera la figura del histograma con la configuración indicada."""
     palette = _journal_palette(plot_config["palette"])
     if int(np.sum(hist_counts)) == 0:
         _write_placeholder_plot(base_path, plot_config, title, "No valid distance pairs were available.")
@@ -732,6 +741,7 @@ def _write_json(path, payload):
 
 
 def aggregate_histograms_by_chromosome(histograms):
+    """Suma histogramas individuales por cromosoma."""
     if not histograms:
         return None
     total = np.zeros_like(histograms[0], dtype=np.int64)
@@ -777,6 +787,7 @@ def _cohort_summary_from_rows(chrom, selected_samples, rows, hist_counts, hist_e
 
 
 def scan_mode(args):
+    """Analiza un cromosoma y escribe resultados por muestra y cohorte."""
     if not args.input or not args.chr:
         _fail("scan mode requires --input and --chr")
     if args.min_carrier_snps_per_individual_chr < 2:
@@ -1033,6 +1044,7 @@ def _load_cohort_jsons(paths):
 
 
 def write_report(individual_df, chromosome_df, cohort_summary, output_dir):
+    """Escribe el informe HTML de distancias individuales y agregadas."""
     output_dir = Path(output_dir)
     report_path = output_dir / "report.html"
 
@@ -1166,6 +1178,7 @@ def write_report(individual_df, chromosome_df, cohort_summary, output_dir):
 
 
 def aggregate_mode(args):
+    """Combina las salidas cromosómicas en un resultado genómico."""
     if not args.individual_summary or not args.cohort_summary:
         _fail("aggregate mode requires --individual-summary and --cohort-summary files.")
 
@@ -1244,6 +1257,7 @@ def aggregate_mode(args):
 
 
 def main():
+    """Selecciona el modo solicitado y ejecuta el análisis."""
     args = parse_args()
     if args.mode == "scan":
         scan_mode(args)

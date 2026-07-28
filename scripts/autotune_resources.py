@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
-"""
-Auto-tune resource allocation for DNABR QC Nextflow pipeline.
+"""Ajusta los recursos del pipeline Nextflow de control de calidad de DNABR.
 
-Detects environment (laptop/WSL or HPC/Slurm) and generates optimized
-resource configuration for each module based on available hardware.
+Detecta si la ejecución usa laptop, WSL o Slurm y genera una configuración adaptada al hardware
+disponible.
 
-References:
-- bcftools threading: https://samtools.github.io/bcftools/howtos/scaling.html
-  (--threads only helps with I/O compression, not processing)
-- plink2 threading: https://www.cog-genomics.org/plink/2.0/parallel
-  (--threads provides real parallelization for computation)
+Referencias:
+- bcftools: https://samtools.github.io/bcftools/howtos/scaling.html
+- plink2: https://www.cog-genomics.org/plink/2.0/parallel
 """
 
 import argparse
@@ -21,67 +18,66 @@ from pathlib import Path
 
 
 def parse_args():
+    """Define y devuelve los argumentos de línea de comandos."""
     p = argparse.ArgumentParser(
-        description="Auto-tune Nextflow resource configuration for DNABR QC pipeline"
+        description="Ajusta la configuración de recursos de Nextflow para DNABR"
     )
     p.add_argument(
         "--mode",
         required=True,
         choices=["laptop", "slurm"],
-        help="Environment mode: laptop (local) or slurm (HPC)",
+        help="Entorno de ejecución: laptop local o slurm en HPC",
     )
     p.add_argument(
         "--out",
         default="conf/auto_resources.config",
-        help="Output Nextflow config file (default: conf/auto_resources.config)",
+        help="Archivo de configuración de salida",
     )
     p.add_argument(
         "--safety-margin",
         type=float,
         default=0.8,
-        help="Safety margin for resource allocation (0.0-1.0, default: 0.8)",
+        help="Margen de seguridad para asignar recursos, entre 0.0 y 1.0",
     )
     p.add_argument(
         "--max-forks-heavy",
         type=int,
         default=None,
-        help="Max parallel forks for heavy processes: qc_plink_missing_het, "
-             "ld_decay_from_pgen, tag_snps_from_pgen (default: auto)",
+        help="Máximo de procesos pesados en paralelo; por defecto se calcula automáticamente",
     )
     p.add_argument(
         "--partition",
         default="cpu",
-        help="Slurm partition to query with sinfo (default: cpu). "
-             "Only used in slurm mode.",
+        help="Partición de Slurm que se consulta con sinfo",
     )
     p.add_argument(
         "--cpus",
         type=int,
         default=None,
-        help="Override detected CPU count (useful for testing or non-standard environments)",
+        help="Sobrescribe la cantidad de CPU detectada",
     )
     p.add_argument(
         "--mem-gb",
         type=float,
         default=None,
-        help="Override detected total memory in GB",
+        help="Sobrescribe la memoria total detectada en GB",
     )
     p.add_argument(
         "--dry-run",
         action="store_true",
-        help="Preview computed resources without writing the config file",
+        help="Muestra los recursos calculados sin escribir el archivo de configuración",
     )
     return p.parse_args()
 
 
 def _sinfo_query(partition):
-    """Query sinfo for the minimum CPUs and memory across nodes in a partition.
+    """Consulta el mínimo de CPU y memoria entre los nodos de una partición.
 
-    Uses the *minimum* across nodes so the config is safe for every node in
-    the partition.  Returns (cpus, mem_mb) or (None, None) on failure.
+    Usa el mínimo para que la configuración sea válida en cualquier nodo. Devuelve
+    (cpus, mem_mb) o (None, None) si la consulta falla.
     """
     try:
-        # %c = CPUs per node,  %m = memory per node in MB
+        # %c indica CPU por nodo y %m memoria por nodo en MB.
         result = subprocess.run(
             ["sinfo", "--noheader", "-p", partition, "-o", "%c %m"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -95,7 +91,7 @@ def _sinfo_query(partition):
             parts = line.split()
             if len(parts) < 2:
                 continue
-            # sinfo may append '+' to indicate "or more"
+            # sinfo puede añadir '+' para indicar "o más".
             cpus = int(parts[0].rstrip("+"))
             mem_mb = int(parts[1].rstrip("+"))
             if min_cpus is None or cpus < min_cpus:
@@ -108,12 +104,12 @@ def _sinfo_query(partition):
 
 
 def get_available_cpus(partition=None):
-    """Detect available CPUs.
+    """Detecta la cantidad de CPU disponibles.
 
-    Priority:
-    1. sinfo (if partition given — works from login nodes)
-    2. SLURM_CPUS_PER_TASK / SLURM_JOB_CPUS_PER_NODE (inside a job)
-    3. os.cpu_count() (local fallback)
+    Prioridad:
+    1. sinfo si se indicó una partición.
+    2. SLURM_CPUS_PER_TASK o SLURM_JOB_CPUS_PER_NODE dentro de un job.
+    3. os.cpu_count() como alternativa local.
     """
     if partition:
         cpus, _ = _sinfo_query(partition)
@@ -131,12 +127,12 @@ def get_available_cpus(partition=None):
 
 
 def get_total_memory_gb(partition=None):
-    """Detect total memory in GB.
+    """Detecta la memoria total disponible en GB.
 
-    Priority:
-    1. sinfo (if partition given — works from login nodes)
-    2. SLURM_MEM_PER_NODE / SLURM_MEM_PER_CPU (inside a job)
-    3. /proc/meminfo MemTotal (local fallback)
+    Prioridad:
+    1. sinfo, si se indicó una partición.
+    2. SLURM_MEM_PER_NODE o SLURM_MEM_PER_CPU dentro de un job.
+    3. MemTotal de /proc/meminfo como alternativa local.
     """
     if partition:
         _, mem_mb = _sinfo_query(partition)
@@ -153,7 +149,7 @@ def get_total_memory_gb(partition=None):
         cpus = get_available_cpus()
         return (int(slurm_mem_per_cpu) * cpus) / 1024.0
 
-    # Fallback to /proc/meminfo (Linux/WSL) — use MemTotal for determinism
+    # Como alternativa local, usa MemTotal de /proc/meminfo.
     try:
         with open("/proc/meminfo", "r") as f:
             for line in f:
@@ -163,27 +159,27 @@ def get_total_memory_gb(partition=None):
     except Exception:
         pass
 
-    # Conservative default
+    # Valor conservador si no fue posible detectar la memoria.
     return 8.0
 
 
 def _ceil_mem(val):
-    """Round memory up to next integer GB using math.ceil to avoid under-allocation."""
+    """Redondea la memoria hacia arriba para evitar una asignación insuficiente."""
     return math.ceil(val)
 
 
 def compute_module_resources(total_cpus, total_mem_gb, safety_margin, mode):
     """
-    Compute resource allocation for each module based on available hardware.
+    Calcula los recursos de cada módulo según el hardware disponible.
     
-    Strategy:
-    - bcftools modules: threads capped at 2-4 (I/O bound, not CPU bound)
-    - plink2 modules: threads scale with available CPUs (real parallelization)
-    - threads always <= cpus to prevent Slurm oversubscription
-    - Memory: proportional to module intensity, rounded up with math.ceil
-    - maxForks: limit heavy processes on laptops
+    Estrategia:
+    - bcftools usa entre dos y cuatro hilos porque está limitado por I/O.
+    - plink2 escala con las CPU disponibles.
+    - La cantidad de hilos nunca supera las CPU asignadas.
+    - La memoria depende del costo de cada módulo y se redondea hacia arriba.
+    - maxForks limita los procesos pesados en laptops.
     
-    Returns dict with structure:
+    Devuelve un diccionario con esta estructura:
     {
         'module_name': {
             'cpus': int,
@@ -196,39 +192,37 @@ def compute_module_resources(total_cpus, total_mem_gb, safety_margin, mode):
     safe_cpus = max(1, int(total_cpus * safety_margin))
     safe_mem_gb = total_mem_gb * safety_margin
     
-    # Laptop mode: more conservative, limit concurrency
+    # En laptop se limita el paralelismo de forma conservadora.
     if mode == "laptop":
-        # bcftools: I/O-bound, cap at 4 threads (diminishing returns)
+        # bcftools está limitado por I/O y usa como máximo cuatro hilos.
         bcftools_cpus = min(4, max(2, safe_cpus // 4))
         bcftools_mem = max(2, safe_mem_gb / 8)
 
-        # plink2: real parallelization — scale up to 6 cpus for 16-core laptops
+        # plink2 puede usar hasta seis CPU en una laptop de 16 núcleos.
         plink_cpus = min(6, max(2, safe_cpus // 2))
         plink_mem = max(4, safe_mem_gb / 4)
-        plink_mem_heavy = max(6, safe_mem_gb / 3)  # LD decay needs more memory
+        plink_mem_heavy = max(6, safe_mem_gb / 3)  # El cálculo de LD requiere más memoria.
 
         python_cpus = 1
         python_mem = max(2, safe_mem_gb / 8)
         heavy_maxforks = 2
-    else:  # slurm mode — sized for ~2700 WGS samples per chromosome
-        # bcftools: streaming I/O but wide VCF records (one GT per sample);
-        # multi-threaded compression buffers add up.  Cap 16 GB.
+    else:  # En Slurm se dimensiona para unas 2700 muestras WGS por cromosoma.
+        # bcftools procesa registros VCF anchos y sus buffers de compresión consumen memoria.
         bcftools_cpus = min(4, max(2, safe_cpus // 4))
         bcftools_mem = max(4, min(16, safe_mem_gb / 8))  # cap at 16 GB
 
-        # plink2: genotype matrix ~5 GB for chr1 (7M var × 2723 samples)
-        # plus working memory.  Cap at 32 GB standard, 64 GB for LD.
+        # La matriz de genotipos de chr1 ocupa cerca de 5 GB y requiere memoria de trabajo adicional.
         plink_cpus = min(8, max(2, safe_cpus // 2))
         plink_mem = max(12, min(32, safe_mem_gb / 5))  # cap at 32 GB
         plink_mem_heavy = max(24, min(64, safe_mem_gb / 3))  # LD --r2-unphased, cap 64 GB
         plink_mem_tag = max(16, min(48, safe_mem_gb / 4))  # indep-pairwise, cap 48 GB
 
-        # Python scripts: pandas on millions of variants × 2723 samples
+        # Los scripts de Python procesan millones de variantes con pandas.
         python_cpus = 1
         python_mem = max(4, min(16, safe_mem_gb / 8))  # cap at 16 GB
-        heavy_maxforks = None  # no limit on HPC
+        heavy_maxforks = None  # En HPC no se fija un límite adicional.
     
-    # INVARIANT: threads must always be <= cpus to avoid oversubscription
+    # Los hilos nunca deben superar las CPU asignadas.
     bcftools_threads = min(bcftools_cpus, 4, max(1, safe_cpus // 4))
     plink_threads = plink_cpus  # threads == cpus for plink2
     
@@ -269,7 +263,7 @@ def compute_module_resources(total_cpus, total_mem_gb, safety_margin, mode):
             "threads": 1,
             "maxForks": 1,
         },
-        # Modules 07-11: downstream population-genetics
+        # Módulos 07 a 11 de genética de poblaciones.
         "sfs_from_filtered_vcf": {
             "cpus": python_cpus,
             "memory": f"{_ceil_mem(python_mem)} GB",
@@ -306,7 +300,7 @@ def compute_module_resources(total_cpus, total_mem_gb, safety_margin, mode):
 
 
 def generate_nextflow_config(resources, out_path):
-    """Generate Nextflow config file with computed resources."""
+    """Genera el archivo de Nextflow con los recursos calculados."""
     process_names = {
         "preprocess_norm_leftalign": "PREPROCESS_NORM_LEFTALIGN",
         "preprocess_filter_snv_biallelic_pass": "PREPROCESS_FILTER_SNV_BIALLELIC_PASS",
@@ -314,7 +308,7 @@ def generate_nextflow_config(resources, out_path):
         "qc_plink_make_pgen": "QC_PLINK_MAKE_PGEN",
         "qc_plink_missing_het": "QC_PLINK_MISSING_HET",
         "qc_aggregate_report_py": "QC_AGGREGATE_REPORT_PY",
-        # Modules 07-11
+        # Módulos 07 a 11.
         "sfs_from_filtered_vcf": "SFS_FROM_FILTERED_VCF",
         "build_ancestral_tsv_from_fasta": "BUILD_ANCESTRAL_TSV_FROM_FASTA",
         "daf_dsfs_from_ancestral_tsv": "DAF_DSFS_FROM_ANCESTRAL_TSV",
@@ -323,10 +317,10 @@ def generate_nextflow_config(resources, out_path):
     }
     
     lines = [
-        "// Auto-generated resource configuration",
+        "// Configuración de recursos generada automáticamente",
         "// Este archivo se actualiza con scripts/autotune_resources.py",
         "//",
-        "// To use this config:",
+        "// Uso:",
         "//   nextflow run main.nf -profile local_docker -c conf/auto_resources.config ...",
         "",
         "params {",
@@ -368,14 +362,15 @@ def generate_nextflow_config(resources, out_path):
     with open(out_path, "w") as f:
         f.write("\n".join(lines))
     
-    print(f"✓ Generated resource config: {out_path}")
+    print(f"✓ Configuración de recursos generada: {out_path}")
 
 
-# Heavy plink2 modules whose maxForks should be overridden together
+# Módulos pesados de plink2 cuyo maxForks se ajusta en conjunto.
 HEAVY_MODULES = ["qc_plink_missing_het", "ld_decay_from_pgen", "tag_snps_from_pgen"]
 
 
 def main():
+    """Estima recursos desde trazas y actualiza la configuración generada."""
     args = parse_args()
     
     partition = args.partition if args.mode == "slurm" else None
@@ -383,33 +378,33 @@ def main():
     total_mem_gb = args.mem_gb if args.mem_gb is not None else get_total_memory_gb(partition)
     source = "sinfo" if (partition and args.cpus is None) else ("override" if args.cpus is not None else "local")
     
-    print(f"Detected environment: {args.mode}")
-    print(f"  Total CPUs: {total_cpus} (source: {source})")
-    print(f"  Total Memory: {total_mem_gb:.1f} GB (source: {source})")
-    print(f"  Safety margin: {args.safety_margin * 100:.0f}%")
+    print(f"Entorno detectado: {args.mode}")
+    print(f"  CPU totales: {total_cpus} (fuente: {source})")
+    print(f"  Memoria total: {total_mem_gb:.1f} GB (fuente: {source})")
+    print(f"  Margen de seguridad: {args.safety_margin * 100:.0f}%")
     print()
     
     resources = compute_module_resources(
         total_cpus, total_mem_gb, args.safety_margin, args.mode
     )
     
-    # Apply --max-forks-heavy to all 3 heavy modules
+    # Aplica --max-forks-heavy a los tres módulos pesados.
     if args.max_forks_heavy is not None:
         for mod in HEAVY_MODULES:
             resources[mod]["maxForks"] = args.max_forks_heavy
     
-    print("Computed resource allocation:")
+    print("Recursos calculados:")
     for module_key, res in resources.items():
         print(f"  {module_key}:")
         print(f"    cpus={res['cpus']}, memory={res['memory']}, threads={res['threads']}, maxForks={res['maxForks']}")
     print()
     
     if args.dry_run:
-        print("--dry-run: config NOT written.")
+        print("--dry-run: no se escribió la configuración.")
     else:
         generate_nextflow_config(resources, args.out)
         print()
-        print("Usage:")
+        print("Uso:")
         print(f"  nextflow run main.nf -profile slurm_singularity -c {args.out} ...")
 
 

@@ -3,7 +3,7 @@ nextflow.enable.dsl=2
 // ---------------------------------------------------------------------------
 // Module 19 — Rare variants on LAI painting (per-chromosome publication figure)
 // ---------------------------------------------------------------------------
-// Por cromosoma genera una figura de 3 paneles que muestra DONDE caen las
+// Por cromosoma genera una figura de tres paneles que muestra dónde caen las
 // variantes raras (MAF<1%, upstream lai_rare) respecto al painting de ancestria
 // local de Gnomix (.msp por cromosoma):
 //   (a) karyograma por-haplotipo (todos los haplotipos pintados);

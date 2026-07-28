@@ -11,7 +11,7 @@ import platform
 from importlib import metadata
 from pathlib import Path
 
-# Valores de procedencia que significan "no pude calcularlo": el preflight fail-closed los RECHAZA.
+# Valores que indican que la procedencia no pudo calcularse; preflight los rechaza.
 _MISSING = {"", "unavailable", "unknown", None}
 
 
@@ -25,10 +25,12 @@ def sha256_file(path):
 
 
 def sha256_text(text):
+    """Calcula sha256 sobre texto codificado en UTF-8."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def lib_version(dist):
+    """Devuelve la versión instalada de una distribución o None si no existe."""
     try:
         return metadata.version(dist)
     except metadata.PackageNotFoundError:
@@ -42,19 +44,24 @@ _THREAD_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "N
 
 
 def pin_env():
-    """FUERZA las env vars de 1-hilo (no `setdefault`: un entorno con OMP=4 heredado romperia el
-    determinismo). Es el pin de IMPORT-TIME: OpenBLAS/MKL leen estas vars al cargarse, asi que DEBE
-    llamarse ANTES de importar numpy/sklearn. No afecta el n_jobs de joblib (paralelismo de PROCESOS)."""
+    """Fija las variables de entorno para que cada biblioteca use un hilo.
+
+    No usa `setdefault` porque un valor heredado como OMP=4 rompería el determinismo. OpenBLAS y MKL
+    leen estas variables al cargarse, así que debe llamarse antes de importar numpy y sklearn. No
+    modifica n_jobs de joblib ni el paralelismo entre procesos.
+    """
     for var in _THREAD_VARS:
         os.environ[var] = "1"
 
 
 def pin_threadpools():
-    """Pin REAL en runtime via threadpoolctl (independiente de las env vars y de que BLAS ya se haya
-    cargado): limita TODOS los pools nativos (OpenBLAS/MKL/OpenMP) a 1 hilo. Debe llamarse DESPUES de
-    importar numpy/sklearn. Guarda el limitador en una global para que no se recolecte. FAIL-CLOSED: si
-    threadpoolctl no esta, el pin real NO se puede garantizar -> aborta (el determinismo numerico es
-    requisito, no opcional). Devuelve el estado de hilos, que ENTRA a la huella fail-closed."""
+    """Aplica en runtime el límite de hilos mediante threadpoolctl.
+
+    Limita los pools nativos de OpenBLAS, MKL y OpenMP a un hilo aunque BLAS ya esté cargado.
+    Debe llamarse después de importar numpy y sklearn. El limitador se conserva en una variable
+    global para evitar que el recolector lo libere. Si threadpoolctl no está disponible, el proceso
+    termina porque no puede garantizar el determinismo numérico.
+    """
     global _THREAD_LIMITER
     try:
         import threadpoolctl
@@ -73,37 +80,35 @@ def _canonical(obj):
 
 def compute_fingerprint(code_files, input_files, config, container_sha256, thread_env=None,
                         input_hashes=None):
-    """Huella científica fail-closed que namespacea los checkpoints y valida la reanudación.
+    """Calcula la huella científica que identifica los checkpoints de una ejecución.
 
     Comprueba cuatro elementos para evitar que una reanudación mezcle resultados incompatibles:
-      - CÓDIGO: sha256 de rare_bench_cv.py + _common.py (edición durante desarrollo no cambia el
-        contenedor → sin esto se mezclarían script-v1 y script-v2).
-      - DATOS: sha256 de las 4 entradas (matrix/samples/split/modeling_master). SOLO EL PREFLIGHT las
-        HASHEA (única lectura del .npz para calcular su sha256); las tareas HEREDAN esos hashes vía
-        `input_hashes` → nadie re-HASHEA el .npz por tarea. Las tareas D/E SÍ cargan
-        la matriz para entrenar; lo que no repiten es el hash completo.
-      - CONFIG científica: hash canónico del dict `config` (deny-by-default: el llamador excluye
-        n_jobs/outdir/checkpoint_dir/mode/set/fold — los operativos).
-      - ENTORNO numérico: container_sha256 (subsume versión de librerías) + pin real de hilos BLAS.
+      - Código: sha256 de rare_bench_cv.py y _common.py. Una edición durante el desarrollo no cambia
+        el contenedor; sin esta huella podrían mezclarse dos versiones de los scripts.
+      - Datos: sha256 de las cuatro entradas. Preflight calcula las huellas una vez y las tareas las
+        reciben mediante `input_hashes`. Las tareas D y E cargan la matriz para entrenar, pero no
+        vuelven a leerla solo para calcular su hash.
+      - Configuración científica: hash canónico del diccionario `config`. El llamador excluye los
+        parámetros operativos n_jobs, outdir, checkpoint_dir, mode, set y fold.
+      - Entorno numérico: sha256 del contenedor y límite efectivo de hilos de BLAS.
 
-    FAIL-CLOSED: si no puede calcular CUALQUIER hash o si container_sha256 es un placeholder de
-    'no disponible', aborta. Nunca produce una huella con campos 'unavailable'.
+    Si algún hash no puede calcularse o el sha256 del contenedor no está disponible, la ejecución
+    termina sin producir una huella incompleta.
     """
     if container_sha256 in _MISSING:
         raise SystemExit(f"[fingerprint] container_sha256 ausente/placeholder ({container_sha256!r}) "
                          "-> fail-closed: no se puede garantizar el stack numérico.")
     try:
         code = {Path(p).name: sha256_file(p) for p in code_files}
-        expected = set(input_files)  # ROLES (claves del dict): estables ante renombres de archivo
+        expected = set(input_files)  # Las claves describen la función del archivo y no dependen de su nombre.
         if input_hashes is not None:
-            # Tareas: heredan el hash del preflight; NO re-HASHEAN la matriz (aunque la cargan para
-            # entrenar). Validar completitud (fail-closed).
+            # Las tareas heredan las huellas de preflight y no vuelven a calcularlas.
             if set(input_hashes) != expected or any(v in _MISSING for v in input_hashes.values()):
                 raise SystemExit(f"[fingerprint] input_hashes heredados incompletos/invalidos "
                                  f"({sorted(input_hashes)} vs {sorted(expected)}) -> fail-closed")
             inputs = dict(input_hashes)
         else:
-            # Preflight (o monolitico): unico que HASHEA las 4 entradas (lee el .npz para sha256), por ROL.
+            # Preflight y el modo monolítico calculan las huellas de las cuatro entradas por función.
             inputs = {role: sha256_file(path) for role, path in input_files.items()}
     except OSError as exc:
         raise SystemExit(f"[fingerprint] no se pudo hashear una entrada/código -> fail-closed: {exc}")
@@ -125,8 +130,8 @@ def compute_fingerprint(code_files, input_files, config, container_sha256, threa
         },
     }
     # ID compacto que namespacea el checkpoint: cubre config + datos + código + entorno.
-    # thread_env ENTRA al hash (no depende del contenedor: es del entorno de lanzamiento; sin el pin
-    # BLAS correcto hay no-determinismo numérico). versions queda como provenance legible pero fuera
+    # thread_env forma parte del hash porque depende del entorno de lanzamiento; sin el límite
+    # correcto de BLAS habría variación numérica. versions queda como procedencia legible, pero fuera
     # del hash: el container_sha256 ya las subsume.
     fp["fingerprint_id"] = sha256_text(_canonical({
         "config_hash": config_hash,
@@ -154,11 +159,12 @@ def assert_fingerprint_matches(reference, current, context=""):
 
 
 def read_json(path):
+    """Carga un archivo JSON desde la ruta indicada."""
     return json.loads(Path(path).read_text())
 
 
 def write_json(path, obj):
     """Escritura simple. En el modelo Nextflow-particionado la atomicidad la da el orquestador: una
-    tarea que muere NO publica su output, así que el agregador nunca ve un JSON parcial. No se
+    una tarea que termina con error no publica su salida, así que el agregador no recibe JSON parciales. No se
     reimplementa el checkpoint atómico (esa era la vía descartada)."""
     Path(path).write_text(json.dumps(obj, indent=2, ensure_ascii=False))

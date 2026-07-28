@@ -477,7 +477,7 @@ workflow {
     } else if( do_rare_tracts || do_distance_modes || do_rare_in_lai || do_rare_on_lai || do_presence_channel || do_feature_build || (do_painting && !params.painting_aggregate_only) ) {
         // Discovery path: lai_rare no se genera live, se descubre del dir configurado.
         // Cada módulo consumidor declara (label, dir, glob). Regla general: todos los
-        // consumidores habilitados deben apuntar al MISMO dir+glob (si difieren, lanza con
+        // Los consumidores habilitados deben apuntar al mismo directorio y glob. Si difieren, usa
         // un mensaje claro). Añadir un consumidor nuevo = una línea en este mapa.
         def lai_rare_consumers = [
             [enabled: do_rare_tracts,                                  label: 'rare_tract (M12)',   dir: params.rare_tract_input_dir,    glob: params.rare_tract_input_glob],
@@ -849,9 +849,9 @@ workflow {
     }
 
     // -----------------------------------------------------------------------
-    // 21  Build presence channel (canal de presencia externa / NO-privacidad)
+    // 21: canal de presencia externa
     // -----------------------------------------------------------------------
-    // Para cada panel NAM externo PRE-STAGED y cada cromosoma, clasifica si el ALELO raro de
+    // Para cada panel NAM externo preparado y cada cromosoma, clasifica si el alelo raro de
     // DNABR aparece afuera (PRESENT_ALLELE refuta privacidad; ABSENT no confirma founder).
     // Multi-panel parametrizable (params.presence_panels): NAMBR-128 VQSR vs 71-native .raw =
     // comparación apples-to-apples (--panel-pass-only por panel). Per (panel×chr) ANALYZE ->
@@ -929,7 +929,7 @@ workflow {
     }
 
     // -----------------------------------------------------------------------
-    // 20  Build feature store (NÚCLEO V.02-A: Q + Σℓ + densidad por individuo)
+    // 20: feature store V.02-A con Q, Σℓ y densidad por individuo
     // -----------------------------------------------------------------------
     // Primera tabla oficial de features por individuo = piso reproducible de V.02.
     // Cohorte certificada (rare ∩ metadata, dedup) + Σℓ de M14 + densidad PSC por-chr.
@@ -959,7 +959,7 @@ workflow {
         def ch_psc = COUNT_RARE_DENSITY(ch_fb_rare).psc
 
         // (3) AGGREGATE: cohorte + Σℓ + todos los PSC + metadata -> feature_store + manifest
-        // ch_psc.collect() emite UNA lista con los N PSC; combine la APLANA dentro del tuple,
+        // ch_psc.collect() emite una lista con los N PSC y combine la aplana dentro de la tupla,
         // así que se reconstruye por slicing (all[0]=cohort, all[1..-1]=los N PSC como lista)
         // para que entren como UN solo path(psc_files) al proceso. sigma/meta/py = valores estáticos.
         def ch_fb_agg_in = ch_cohort
@@ -1110,8 +1110,8 @@ workflow {
         if( !asibd_meta_f.exists() ) {
             throw new IllegalStateException("asibd_metadata not found: ${asibd_meta_f}")
         }
-        // BOTH scripts staged: asibd_comparator.py imports ibd_community_enhanced.py
-        // to reuse the EXACT M16.5 Leiden (the import needs the sibling in the work dir).
+        // Se preparan ambos scripts porque asibd_comparator.py importa ibd_community_enhanced.py
+        // para reutilizar la configuración de Leiden de M16.5.
         def asibd_py     = file("${projectDir}/bin/asibd_comparator.py")
         def asibd_lib_py = file("${projectDir}/bin/ibd_community_enhanced.py")
         channel.value(asibd_files)
@@ -1219,7 +1219,7 @@ workflow {
     // -----------------------------------------------------------------------
     // Cadena lineal de procesos únicos (value channels). EVALUATE_TEST desactivado por
     // defecto + doble llave (force+reason); publica en un subdirectorio del resultado,
-    // NUNCA al artefacto canónico. VERIFY_TEST_HASH sólo verifica el sha256 del TEST
+    // y nunca al artefacto canónico. VERIFY_TEST_HASH sólo comprueba el sha256 del fold de test
     // congelado (independiente, no reabre el fold 3).
     def do_build_master     = params.enable_build_modeling_master && params.run_model_pipeline
     def do_build_split      = params.enable_build_split_manifest  && params.run_model_pipeline
@@ -1246,13 +1246,13 @@ workflow {
         def req = { val, name -> if( val == null ) throw new IllegalStateException("M22: falta --${name}"); return val }
 
         // --- Información reproducible para los manifiestos de cada etapa ---
-        // Se computa UNA vez en el head node (solo cuando M22 corre) porque el sha256 del .sif NO es
+        // Se calcula una vez en el nodo principal cuando corre M22, porque el sha256 del .sif no es
         // visible desde dentro del contenedor. Llega a cada proceso como JSON en base64 (shell-safe:
         // el comando Nextflow literal puede llevar comillas/espacios). Las versiones de librerías y
-        // de python las lee write_stage_manifest.py DENTRO del contenedor. Fallbacks explícitos: si
+        // de Python las lee write_stage_manifest.py dentro del contenedor. Si
         // git o sha256sum no responden se registra 'unknown'/'unavailable', nunca un valor inventado.
         // sha256 del contenedor: coreutils siempre está en el nodo. El commit, en cambio, se resuelve
-        // leyendo .git/ directamente (Groovy I/O, sin binario git) porque `git` puede NO estar en el
+        // leyendo .git/ directamente con Groovy, porque el binario `git` puede no estar en el
         // PATH del nodo de cómputo. La lectura directa funciona también en el sistema compartido.
         def shOut = { cmd -> try { def p = ['bash','-c',cmd].execute(); p.waitFor(); return p.exitValue()==0 ? p.text.trim() : '' } catch( ignored ) { return '' } }
         def resolveGitCommit = { dir ->
@@ -1273,7 +1273,7 @@ workflow {
         def container_sha = shOut("sha256sum '${params.container_image}' 2>/dev/null | cut -d' ' -f1") ?: 'unavailable'
         if( !container_sha ) container_sha = 'unavailable'
         // Procedencia estable del resultado: entra al cache-key de cada proceso vía
-        // `val prov_b64`. NO incluye el comando Nextflow: `workflow.commandLine` cambia con `-resume`
+        // `val prov_b64`. El comando de Nextflow queda fuera porque `workflow.commandLine` cambia con `-resume`
         // y, al ser input `val` interpolado en el script, rompería el cache. El comando se guarda
         // en run_provenance.json, fuera del cache-key.
         def prov_map = [
@@ -1341,16 +1341,16 @@ workflow {
             )
         }
 
-        // --- 22d  EVALUATE_TEST (TEST CERRADO — desactivado por defecto) ---
+        // --- 22d  EVALUATE_TEST (fold de test cerrado; desactivado por defecto) ---
         if( do_evaluate_test ) {
-            // CANDADO REAL de evaluación única a nivel de orquestación: el assert de Python vive en
+            // La orquestación limita la evaluación a una ejecución; la validación de Python vive en
             // `--outdir .` (work dir efímero, siempre vacío) → no protege dentro de Nextflow. Aquí sí:
             // si el resultado YA está publicado, exige --model_pipeline_force_evaluate_test (+ reason).
             def published = file("${params.model_pipeline_results_dir}/test_eval/evaluate_test_results.json")
             if( published.exists() && !params.model_pipeline_force_evaluate_test )
                 throw new IllegalStateException(
-                    "M22: evaluate_test_results.json YA existe en ${published} — la evaluación en TEST es "
-                    + "ÚNICA. Para re-evaluar usa --model_pipeline_force_evaluate_test true + "
+                    "M22: evaluate_test_results.json ya existe en ${published}; la evaluación del fold de test se "
+                    + "realiza una sola vez. Para repetirla usa --model_pipeline_force_evaluate_test true + "
                     + "--model_pipeline_force_evaluate_test_reason '<razón>'.")
             def mm = file("${params.model_pipeline_results_dir}/modeling_master/modeling_master.tsv")
             def sm = file("${params.model_pipeline_results_dir}/split/split_manifest.tsv")

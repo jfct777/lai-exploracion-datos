@@ -2,33 +2,33 @@
 """
 Mapeo de variantes raras (MAF<1%) sobre el painting de ancestría local (LAI Gnomix).
 
-Pregunta del comité: ¿dónde caen las variantes raras respecto a los tractos de
+Pregunta del análisis: ¿dónde caen las variantes raras respecto a los tractos de
 ancestría local (Native_American / European / African) del paper de Nunes 2025?
 
-ENFOQUE Y SALVAGUARDAS (ver registro metodológico: crosswalk-ids-rare-lai-metadata,
+Enfoque y salvaguardas (ver registro metodológico: crosswalk-ids-rare-lai-metadata,
 2026-06-01-painting-gnomix-local-desbloqueo):
 
-1. CROSSWALK CERTIFICADO (N=2619): rare_id == metadata.ID  →  LAI_id = {Cohort}_{ID}.
-   metadata_cleaned.txt tiene BB-COVL-397 DUPLICADO → drop_duplicates obligatorio.
+1. Crosswalk comprobado (N=2619): rare_id == metadata.ID → LAI_id = {Cohort}_{ID}.
+   metadata_cleaned.txt contiene dos filas de BB-COVL-397 y requiere deduplicación.
 
-2. FASE: el rare VCF trae fase PARCIAL/inconsistente (mezcla 0/1, 1/0, 0|1, 1|1).
-   NO se usa esa fase para asignar haplotipo: su correspondencia de orden (.0/.1)
-   con el scaffold SHAPEIT4 del LAI (.msp) NO está certificada → usarla mis-asignaría.
+2. Fase: el VCF raro contiene fase parcial o inconsistente (mezcla 0/1, 1/0, 0|1, 1|1).
+   Esa fase no se usa para asignar haplotipo porque la correspondencia de orden (.0/.1)
+   con el scaffold SHAPEIT4 de LAI (.msp) no está certificada.
    El conteo n_alt=count("1") es robusto al separador (|/) y al orden, así que es
-   exacto igual. El .msp da la ancestría local de AMBOS haplotipos. Atribución:
+   exacto igual. El .msp da la ancestría local de ambos haplotipos. Atribución:
      - homocigoto-alt (1/1): cada haplotipo porta una copia → exacto sin fase.
      - heterocigoto (0/1) en tracto homocigoto-ancestral (hap0==hap1): exacto sin fase.
-     - heterocigoto (0/1) en tracto het-ancestral (hap0!=hap1): AMBIGUO (no sabemos
-       qué haplotipo porta el alelo). Se reporta aparte; en el resultado primario solo
-       cuentan las atribuciones EXACTAS. Sensibilidad: reparto fraccional 0.5/0.5.
+     - heterocigoto (0/1) en tracto het-ancestral (hap0!=hap1): ambiguo porque no sabemos
+       qué haplotipo porta el alelo. Se reporta aparte; en el resultado primario solo
+       cuentan las atribuciones exactas. Sensibilidad: reparto fraccional 0.5/0.5.
 
-3. BASELINE POSICIONAL: "X% de raras en tractos NAM" no significa nada solo. Se compara
-   contra la fracción de ancestría local de la COHORTE en esas mismas posiciones
+3. Baseline posicional: "X% de raras en tractos NAM" no se interpreta por sí solo. Se compara
+   contra la fracción de ancestría local de la cohorte en esas mismas posiciones
    (expected = suma de baseline_seg sobre los mismos eventos). Enrichment = obs/exp.
 
-   ⚠️ CAVEAT (no removible aquí): el baseline posicional NO elimina la tautología a
+   Limitación: el baseline posicional no elimina la tautología a
    nivel-individuo (burden de raras ∝ ancestría NAM, Nunes Fig 1A). Eso requiere la
-   residualización + null condicional (Paso 2 del plan). Este script es DESCRIPTIVO.
+   residualización y un null condicional. Este script es descriptivo.
 
 Códigos de ancestría en el .msp: African=0, European=1, Native-American=2.
 """
@@ -46,6 +46,7 @@ ANC_NAMES = {0: "African", 1: "European", 2: "Native_American"}
 
 
 def parse_args():
+    """Define y devuelve los argumentos de línea de comandos."""
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--msp", required=True, help="Painting Gnomix .msp (chr-específico)")
     p.add_argument("--rare_vcf", required=True, help="VCF de variantes raras (chr-específico, bgzip+tbi)")
@@ -54,7 +55,7 @@ def parse_args():
     p.add_argument("--out_prefix", required=True, help="Prefijo de salida")
     p.add_argument("--bcftools", default="bcftools", help="Ruta al binario bcftools")
     p.add_argument("--emit_windows_bp", type=int, default=0,
-                   help="Si >0, emite <prefix>.windows.tsv con copias EXACTAS por "
+                   help="Si >0, emite <prefix>.windows.tsv con copias exactas por "
                         "ancestria y territorio pintado por ancestria, por ventana de "
                         "este tamano (bp). Para densidad posicional estratificada. "
                         "Default 0 = no emite (modulo inalterado).")
@@ -98,7 +99,7 @@ def parse_msp(msp_path, rare_to_lai):
     hap_headers = header[hap_start:]
     lai_ids_in_crosswalk = set(rare_to_lai.values())
 
-    # Mapear LAI_id -> índices de columna (.0, .1) DENTRO del bloque de haplotipos,
+    # Se mapea LAI_id a los índices de columna .0 y .1 dentro del bloque de haplotipos,
     # reteniendo solo individuos del crosswalk.
     col0, col1 = {}, {}
     for j, h in enumerate(hap_headers):
@@ -138,6 +139,7 @@ def segment_baseline(codes):
 
 
 def main():
+    """Cruza variantes raras con segmentos de ancestría local y agrega resultados."""
     args = parse_args()
     rare_to_lai = load_crosswalk(args.metadata)
     spos, epos, codes, lai_to_cols, n_indiv = parse_msp(args.msp, rare_to_lai)
@@ -145,10 +147,10 @@ def main():
     painted_min, painted_max = int(spos[0]), int(epos[-1])
 
     # Acumuladores
-    obs_exact = np.zeros(3)        # copias de alelo raro con ancestría EXACTA
+    obs_exact = np.zeros(3)        # Copias del alelo raro con ancestría exacta.
     obs_frac = np.zeros(3)         # incluye ambiguos repartidos 0.5/0.5 (sensibilidad)
-    exp_copies = np.zeros(3)       # baseline esperado para la métrica FRACCIONAL (todos los eventos, n_alt-weighted)
-    exp_exact = np.zeros(3)        # baseline esperado para la métrica EXACTA (SOLO eventos con atribución exacta) — bugfix 2026-06-02
+    exp_copies = np.zeros(3)       # Baseline de la métrica fraccional sobre todos los eventos.
+    exp_exact = np.zeros(3)        # Baseline de los eventos con atribución exacta.
     n_events = n_copies = 0
     n_skip_not2619 = n_unassignable = n_ambiguous_copies = 0
 
@@ -194,24 +196,24 @@ def main():
             continue
         n_events += 1
         n_copies += n_alt
-        # Esperado posicional para la métrica FRACCIONAL: cada copia "esperaría" la
+        # Esperado posicional para la métrica fraccional: cada copia aporta la
         # composición de la cohorte en el seg (todas las copias, incl. ambiguas).
         exp_copies += n_alt * baseline[i]
 
-        ex = np.zeros(3)                    # copias EXACTAS atribuidas en este evento
+        ex = np.zeros(3)                    # Copias exactas atribuidas en este evento.
         if n_alt == 2:                      # homocigoto-alt: una copia por haplotipo → exacto
             ex[a0] += 1; ex[a1] += 1
             obs_frac[a0] += 1; obs_frac[a1] += 1
-            exp_exact += 2 * baseline[i]    # 2 copias EXACTAS → baseline esperado x2
+            exp_exact += 2 * baseline[i]    # Dos copias exactas aportan dos veces el baseline.
         else:                               # heterocigoto: 1 copia
             if a0 == a1:                    # tracto homocigoto-ancestral → exacto
                 ex[a0] += 1
                 obs_frac[a0] += 1
-                exp_exact += baseline[i]    # 1 copia EXACTA → baseline esperado x1
+                exp_exact += baseline[i]    # Una copia exacta aporta una vez el valor esperado.
             else:                           # het-ancestral → ambiguo (sin fase)
                 n_ambiguous_copies += 1
                 obs_frac[a0] += 0.5; obs_frac[a1] += 0.5
-                # exp_exact NO acumula: no hay copia con atribución exacta aquí
+                # exp_exact no acumula porque aquí no existe una copia con atribución exacta.
         obs_exact += ex
         if win_bp > 0 and ex.any():
             obs_exact_win[(pos - painted_min) // win_bp] += ex
@@ -225,13 +227,14 @@ def main():
     chr_comp = (baseline * seg_bp[:, None]).sum(axis=0) / seg_bp.sum()
 
     def ratios(obs, exp):
+        """Calcula proporciones observadas y enriquecimientos frente al baseline."""
         tot = obs.sum()
         frac = obs / tot if tot > 0 else np.zeros(3)
         exp_frac = exp / exp.sum() if exp.sum() > 0 else np.zeros(3)
         enr = np.divide(frac, exp_frac, out=np.zeros(3), where=exp_frac > 0)
         return frac, exp_frac, enr
 
-    # exact usa el baseline de SOLO eventos exactos; fractional usa el de todos (bugfix 2026-06-02)
+    # exact usa el baseline de eventos exactos; fractional usa el conjunto completo.
     frac_e, exp_frac, enr_e = ratios(obs_exact, exp_exact)
     frac_f, _, enr_f = ratios(obs_frac, exp_copies)
 
@@ -253,7 +256,7 @@ def main():
         "expected_fraction_positional_baseline": {ANC_NAMES[a]: round(exp_frac[a], 4) for a in (0, 1, 2)},
         "enrichment_exact_obs_over_exp": {ANC_NAMES[a]: round(enr_e[a], 4) for a in (0, 1, 2)},
         "enrichment_with_ambiguous_fractional": {ANC_NAMES[a]: round(enr_f[a], 4) for a in (0, 1, 2)},
-        "CAVEAT": "Descriptivo. El baseline posicional NO remueve la tautología "
+        "CAVEAT": "Descriptivo. El baseline posicional no elimina la tautología "
                   "burden-raras ∝ NAM a nivel-individuo (requiere residualización, Paso 2).",
     }
 

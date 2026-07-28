@@ -37,6 +37,7 @@ def _lib_version(dist):
 
 
 def main():
+    """Construye y escribe el manifiesto reproducible de una etapa."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", required=True, help="nombre de la etapa (proceso Nextflow)")
     ap.add_argument("--input", action="append", default=[], type=Path,

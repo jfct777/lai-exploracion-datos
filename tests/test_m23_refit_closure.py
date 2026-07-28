@@ -98,6 +98,7 @@ def aggregate(outdir, abc_json, refits, max_iter=2000):
 
 
 def edit_refits(outdir, fn):
+    """Aplica una modificación controlada a los JSON sintéticos de reajuste."""
     for f in sorted(outdir.glob("*.refit.json")):
         obj = json.loads(f.read_text())
         fn(obj)
@@ -105,6 +106,7 @@ def edit_refits(outdir, fn):
 
 
 def main():
+    """Ejecuta los casos de cierre, ensamblado y validación estricta."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--baseline-dir", required=True, type=Path,
                     help="directorio publicado de la corrida base (abc_results.json, preflight.json, "
@@ -126,11 +128,12 @@ def main():
     failures = []
 
     def check(name, ok, detail=""):
-        print(f"  {'OK  ' if ok else 'FALLA'} {name}{('  -> ' + detail) if detail else ''}")
+        """Registra una comprobación y acumula los casos fallidos."""
+        print(f"  {'ok   ' if ok else 'falla'} {name}{('  -> ' + detail) if detail else ''}")
         if not ok:
             failures.append(name)
 
-    print("== VEREDICTOS ==")
+    print("Veredictos")
     for scenario, expected in [("converge_igual", "CIERRE_CON_CAVEAT"),
                                ("no_converge", "SIGUE_SIN_CONVERGER"),
                                ("material", "DETENERSE_Y_REVISAR"),
@@ -142,7 +145,7 @@ def main():
             got = json.loads((tmp / "rare_bench_refit_results.json").read_text())["closure"]["verdict"]
         check(f"{scenario} -> {expected}", got == expected, f"rc={rc} veredicto={got}")
 
-    print("== INVARIANTE DE ENSAMBLADO ==")
+    print("Invariante de ensamblado")
     build_refits(base_dir, tmp, "identico")
     rc, out = aggregate(tmp, abc, refits)
     ok = rc == 0
@@ -159,7 +162,7 @@ def main():
     else:
         check("delta vs C reproduce el publicado", False, f"rc={rc}")
 
-    print("== GUARDAS (todas deben ABORTAR) ==")
+    print("Comprobaciones que deben abortar")
     build_refits(base_dir, tmp, "converge_igual")
     abc_otro = tmp / "abc_otro.json"
     d = json.loads(abc.read_text())
@@ -196,9 +199,9 @@ def main():
     print()
     print(f"directorio de trabajo: {tmp}")
     if failures:
-        print(f"HAY {len(failures)} PRUEBA(S) EN FALLA: {failures}")
+        print(f"Fallaron {len(failures)} pruebas: {failures}")
         return 1
-    print("TODAS LAS PRUEBAS PASARON")
+    print("Todas las pruebas pasaron")
     return 0
 
 

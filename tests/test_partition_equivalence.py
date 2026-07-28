@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Equivalencia entre los modos monolítico y particionado del benchmark M23 con datos sintéticos.
 
-Exige que el modo particionado (abc + 8 folds por (set,fold) + aggregate) produzca EXACTAMENTE los
-mismos campos CIENTIFICOS que el monolitico de referencia. Ignora `operational` (tiempos/modo/traza).
+Exige que el modo particionado (abc + 8 folds por set y fold + aggregate) produzca los mismos
+campos científicos que el monolítico de referencia. Ignora `operational` (tiempos/modo/traza).
 Valida únicamente la equivalencia lógica del mecanismo de reanudación. Debe ejecutarse dentro del
 contenedor del pipeline:
 
@@ -69,9 +69,10 @@ data = ["--matrix-npz", str(WORK / "matrix.npz"), "--samples-tsv", str(WORK / "s
 
 
 def run(tag, extra):
+    """Ejecuta un modo del benchmark y termina si el proceso falla."""
     r = subprocess.run([PY, str(BIN)] + data + sci + extra, capture_output=True, text=True)
     if r.returncode != 0:
-        print(f"[test] FALLO modo {tag}:\n{r.stdout}\n{r.stderr}")
+        print(f"[test] falló el modo {tag}:\n{r.stdout}\n{r.stderr}")
         sys.exit(1)
     print(f"[test] ok {tag}")
 
@@ -97,12 +98,12 @@ SCIENTIFIC = ["per_set_summary", "contrasts", "anti_leakage_retained_cols_differ
               "n_variants_input", "outer_folds", "prevalence_train"]
 mismatches = [k for k in SCIENTIFIC if mono.get(k) != part.get(k)]
 
-print("\n[test] === RESULTADO ===")
+print("\n[test] resultado")
 print(f"[test] E-C monolitico:   {mono['contrasts']['PRIMARY_delta_balacc_E_minus_C']}")
 print(f"[test] E-C particionado: {part['contrasts']['PRIMARY_delta_balacc_E_minus_C']}")
 if mismatches:
-    print(f"[test] FALLO: difieren campos cientificos: {mismatches}")
+    print(f"[test] hay diferencias en los campos científicos: {mismatches}")
     for k in mismatches:
         print(f"   {k}: mono={json.dumps(mono.get(k))[:300]} part={json.dumps(part.get(k))[:300]}")
     sys.exit(1)
-print("[test] OK EQUIVALENCIA EXACTA: campos cientificos identicos monolitico == particionado")
+print("[test] ok: los campos científicos del modo monolítico y el particionado son idénticos")

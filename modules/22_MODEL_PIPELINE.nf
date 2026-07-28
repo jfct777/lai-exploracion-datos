@@ -10,12 +10,12 @@ nextflow.enable.dsl=2
 // + VERIFY_TEST_HASH (independiente, solo integridad del TEST congelado).
 //
 // Validaciones:
-//  - EVALUATE_TEST DESACTIVADO por defecto; doble llave (force + reason) en main.nf.
+//  - EVALUATE_TEST está desactivado por defecto y requiere force y reason en main.nf.
 //    Publica en un subdirectorio del resultado, nunca sobre el archivo canónico congelado.
-//  - VERIFY_TEST_HASH es SOLO sha256 del JSON congelado; nunca importa sklearn/pandas ni
+//  - VERIFY_TEST_HASH calcula el sha256 del JSON congelado; no importa sklearn o pandas ni
 //    carga TRAIN/TEST → no puede reabrir el fold 3.
 //  - Los scripts se pasan como path() para stagearlos en el work dir. EVALUATE_TEST recibe
-//    ADEMÁS model_primary_cv.py aunque no lo invoque: evaluate_test.py hace
+//    También necesita model_primary_cv.py aunque no lo invoque directamente, porque evaluate_test.py hace
 //    `from model_primary_cv import ...` y el sibling debe estar en el cwd del task
 //    (mismo precedente que M18 COMPARE_ASIBD_COMMON).
 //  - Manifiesto sha256 por etapa vía bin/write_stage_manifest.py (bin/ está en el PATH del worker).
@@ -151,9 +151,9 @@ process MODEL_PRIMARY_CV {
     """
 }
 
-// TEST CERRADO — desactivado por defecto (enable_evaluate_test=false + doble llave en main.nf).
-// model_cv_py se stagea SOLO para el `from model_primary_cv import ...` de evaluate_test.py
-// (no se invoca aquí); NO borrar ese input pensando que es muerto.
+// Evaluación del fold de test desactivada por defecto mediante enable_evaluate_test y main.nf.
+// model_cv_py se incluye para el `from model_primary_cv import ...` de evaluate_test.py. No se ejecuta
+// directamente, pero sigue siendo una entrada necesaria.
 process EVALUATE_TEST {
     tag "evaluate_test"
 
@@ -196,7 +196,7 @@ process EVALUATE_TEST {
     """
 }
 
-// Integridad del TEST congelado — SOLO sha256, sin importar sklearn/pandas ni cargar TEST.
+// Integridad del test congelado mediante sha256, sin importar sklearn o pandas ni cargar los datos.
 process VERIFY_TEST_HASH {
     tag "verify_test_hash"
 

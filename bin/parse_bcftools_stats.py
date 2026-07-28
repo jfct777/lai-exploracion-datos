@@ -5,6 +5,7 @@ import re
 
 
 def parse_args():
+    """Define y devuelve los argumentos de línea de comandos."""
     p = argparse.ArgumentParser()
     p.add_argument("--chr", required=True)
     p.add_argument("--in", dest="in_path", required=True)
@@ -13,6 +14,7 @@ def parse_args():
 
 
 def main():
+    """Convierte la salida de bcftools stats en tablas resumidas."""
     args = parse_args()
 
     n_sites = None

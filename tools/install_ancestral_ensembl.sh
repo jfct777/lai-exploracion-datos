@@ -2,10 +2,10 @@
 set -euo pipefail
 
 # ============================================================================
-# Download and prepare Ensembl ancestral FASTA for HPC (Aesop/CIDACS)
+# Descarga y preparación del FASTA ancestral de Ensembl para el HPC.
 # ============================================================================
-# Usage: bash install_ancestral_ensembl.sh [RELEASE]
-# Example: bash install_ancestral_ensembl.sh 113
+# Uso: bash install_ancestral_ensembl.sh [RELEASE]
+# Ejemplo: bash install_ancestral_ensembl.sh 113
 # ============================================================================
 
 DEST_DIR="/scratch/trusted/genbr/genbr_bioinfo/projects/DNABR_QC/reference/ensembl_ancestral"
@@ -48,13 +48,13 @@ mkdir -p "${WORK_DIR}"
 echo "[INFO] Extracting tarball..."
 tar -xzf "${TARBALL}" -C "${WORK_DIR}"
 
-# Ensembl ancestral FASTA comes as separate files per chromosome
-# Need to concatenate: 1-22, X, Y, MT in order
+# Ensembl distribuye el FASTA ancestral en un archivo por cromosoma.
+# Se concatenan 1-22, X, Y y MT en ese orden.
 EXTRACTED_DIR=$(find "${WORK_DIR}" -maxdepth 2 -type d -name "homo_sapiens_ancestor_GRCh38" | head -n 1)
 
 if [[ -z "${EXTRACTED_DIR}" || ! -d "${EXTRACTED_DIR}" ]]; then
-  echo "[ERROR] Could not find extracted directory 'homo_sapiens_ancestor_GRCh38'" >&2
-  echo "[ERROR] Inspect directory: ${WORK_DIR}" >&2
+  echo "[ERROR] No se encontró el directorio extraído 'homo_sapiens_ancestor_GRCh38'" >&2
+  echo "[ERROR] Revisa el directorio: ${WORK_DIR}" >&2
   ls -lah "${WORK_DIR}" >&2 || true
   exit 1
 fi
@@ -62,7 +62,7 @@ fi
 echo "[INFO] Found extracted directory: ${EXTRACTED_DIR}"
 echo "[INFO] Concatenating individual chromosome FASTA files..."
 
-# Build list of FASTA files in correct order: 1-22, X, Y, MT
+# Construye la lista de FASTA en el orden 1-22, X, Y y MT.
 FASTA_FILES=()
 for CHR in {1..22} X Y MT; do
   FA="${EXTRACTED_DIR}/homo_sapiens_ancestor_${CHR}.fa"
@@ -75,7 +75,7 @@ for CHR in {1..22} X Y MT; do
 done
 
 if [[ ${#FASTA_FILES[@]} -eq 0 ]]; then
-  echo "[ERROR] No individual chromosome FASTA files found in ${EXTRACTED_DIR}" >&2
+  echo "[ERROR] No se encontraron archivos FASTA por cromosoma en ${EXTRACTED_DIR}" >&2
   ls -lh "${EXTRACTED_DIR}"/*.fa 2>&1 || true
   exit 1
 fi
@@ -85,11 +85,11 @@ cat "${FASTA_FILES[@]}" > "${OUT_FA}"
 
 echo "[INFO] Concatenation complete. Verifying output..."
 if [[ ! -s "${OUT_FA}" ]]; then
-  echo "[ERROR] Output FASTA is empty or does not exist: ${OUT_FA}" >&2
+  echo "[ERROR] El FASTA de salida está vacío o no existe: ${OUT_FA}" >&2
   exit 1
 fi
 
-# Check for samtools (host or container)
+# Busca samtools en el host y, si no está, intenta usar el contenedor.
 SAMTOOLS_CMD="samtools"
 CONTAINER_IMAGE="${CONTAINER_IMAGE:-$HOME/images/dnabr-qc_27-01-2026.sif}"
 
@@ -98,8 +98,8 @@ if ! command -v samtools >/dev/null 2>&1; then
     echo "[INFO] samtools not found on host, using Singularity container..."
     SAMTOOLS_CMD="singularity exec ${CONTAINER_IMAGE} samtools"
   else
-    echo "[ERROR] samtools not found on host and container not available." >&2
-    echo "[ERROR] Install samtools or load bcftools/samtools module:" >&2
+    echo "[ERROR] No se encontró samtools en el host ni un contenedor disponible." >&2
+    echo "[ERROR] Instala samtools o carga el módulo bcftools/samtools:" >&2
     echo "  module load samtools" >&2
     echo "  # or" >&2
     echo "  micromamba activate nf" >&2

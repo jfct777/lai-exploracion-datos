@@ -1,12 +1,12 @@
 nextflow.enable.dsl=2
 
 // ---------------------------------------------------------------------------
-// Module 20 — Build feature store (NÚCLEO V.02-A: Q + Σℓ + densidad por individuo)
+// Módulo 20: feature store V.02-A con Q, Σℓ y densidad por individuo
 // ---------------------------------------------------------------------------
 // Tabla de características por individuo (una fila por persona). Reúne Q, presencia
 // NAMBR, anotaciones y el espectro {ℓ_i} en un formato reproducible.
 //
-// Columnas: Q (orden LITERAL NAM/EUR/EAS/AFR), Σℓ (total_shared_bp de M14; aislados→0),
+// Columnas: Q en orden NAM/EUR/EAS/AFR, Σℓ (total_shared_bp de M14; aislados→0),
 // densidad de raras (3 lecturas: dosis ALT, sitios-portador, sitios-no-missing), flags.
 //
 // Topología (mismo molde que M17/M21):

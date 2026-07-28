@@ -48,6 +48,7 @@ TRACT_COLUMNS = [
 
 
 def parse_args():
+    """Define y devuelve los argumentos de línea de comandos."""
     parser = argparse.ArgumentParser(
         description="Detect and summarize enriched tracts of rare SNPs from upstream rare-only VCFs."
     )
@@ -144,6 +145,7 @@ def _read_vcf_header_lines(input_path):
 
 
 def validate_input_schema(input_path, input_format):
+    """Comprueba que el archivo de entrada tenga el formato y las columnas esperadas."""
     if input_format != "vcf_rare":
         _fail(
             f"Unsupported input format '{input_format}'. This module expects upstream rare-only VCF.gz inputs."
@@ -171,6 +173,7 @@ def validate_input_schema(input_path, input_format):
 
 
 def compute_maf(*_args, **_kwargs):
+    """Rechaza el cálculo de MAF cuando el flujo requiere una frecuencia ya definida."""
     _fail(
         "Rare SNP tract analysis does not recalculate rareza or MAF. "
         "Provide upstream rare-only VCFs with INFO/AC, INFO/AN and INFO/AF."
@@ -178,6 +181,7 @@ def compute_maf(*_args, **_kwargs):
 
 
 def load_input_data(input_path, input_format, chrom, maf_threshold):
+    """Carga las variantes del cromosoma y devuelve posiciones y frecuencias filtradas."""
     validate_input_schema(input_path, input_format)
 
     positions = array("Q")
@@ -276,10 +280,12 @@ def load_input_data(input_path, input_format, chrom, maf_threshold):
 
 
 def identify_rare_snps(data, maf_threshold):
+    """Selecciona las variantes cuya frecuencia es menor o igual al umbral."""
     return data["positions"]
 
 
 def build_window_scores(chrom, positions, window_size_snps, step_size_snps):
+    """Construye ventanas por número de SNP y calcula su densidad de variantes raras."""
     if positions.size < window_size_snps:
         return pd.DataFrame(columns=WINDOW_SCORE_COLUMNS)
 
@@ -311,6 +317,7 @@ def build_window_scores(chrom, positions, window_size_snps, step_size_snps):
 
 
 def call_enriched_windows(window_df, enrichment_percentile, threshold_scope):
+    """Marca las ventanas que superan el percentil de enriquecimiento configurado."""
     if window_df.empty:
         return window_df.assign(enrichment_threshold=np.nan, is_enriched=False), {}
 
@@ -333,6 +340,7 @@ def call_enriched_windows(window_df, enrichment_percentile, threshold_scope):
 
 
 def merge_windows_into_tracts(window_df, max_gap_windows):
+    """Une ventanas enriquecidas cercanas en tractos continuos."""
     rows = []
     for chrom, sub_df in window_df.groupby("chrom", sort=False):
         enriched = sub_df[sub_df["is_enriched"]].sort_values("window_id").reset_index(drop=True)
@@ -424,6 +432,7 @@ def _finalize_tract(state, tract_counter):
 
 
 def load_genetic_map(path):
+    """Carga y normaliza el mapa genético opcional."""
     if not path:
         return {}
 
@@ -456,6 +465,7 @@ def load_genetic_map(path):
 
 
 def interpolate_cm(chrom, positions, genetic_map):
+    """Interpola posiciones genéticas en centimorgans para un cromosoma."""
     chrom_key = str(chrom)
     if chrom_key not in genetic_map:
         return np.full(len(positions), np.nan, dtype=float)
@@ -472,6 +482,7 @@ def interpolate_cm(chrom, positions, genetic_map):
 
 
 def compute_tract_lengths(tract_df, genetic_map, use_cm_if_available):
+    """Añade longitudes físicas y genéticas a cada tracto."""
     if tract_df.empty:
         return tract_df
 
@@ -508,6 +519,7 @@ def summarize_distributions(
     input_dir,
     use_cm_if_available,
 ):
+    """Resume por cromosoma y genoma las distribuciones de ventanas y tractos."""
     summary_by_chrom = {}
     for item in per_chr_summaries:
         summary_by_chrom[str(item["chrom"])] = {
@@ -609,6 +621,7 @@ def _distribution_metrics(values):
 
 
 def load_metadata(path):
+    """Carga metadatos opcionales para anotaciones y gráficos."""
     if not path:
         return {}
 
@@ -721,6 +734,7 @@ def _set_plot_style(plot_dpi):
 
 
 def generate_plots(tract_df, window_df, thresholds, metadata, output_dir, plot_config):
+    """Genera las figuras configuradas para ventanas y tractos."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     _set_plot_style(plot_config["dpi"])
@@ -1306,6 +1320,7 @@ def _plot_rare_density_by_chromosome(window_df, thresholds, out_path, palette=No
 
 
 def write_placeholder_plot(out_path, title, message):
+    """Escribe una figura informativa cuando no hay datos suficientes para graficar."""
     fig, ax = plt.subplots(figsize=(8.4, 4.8), constrained_layout=True)
     ax.axis("off")
     ax.text(0.5, 0.62, title, ha="center", va="center", fontsize=15, fontweight="bold")
@@ -1315,6 +1330,7 @@ def write_placeholder_plot(out_path, title, message):
 
 
 def write_report(summary, tract_df, output_dir, maf_threshold, threshold_scope, enrichment_percentile):
+    """Escribe el informe HTML con métodos, resultados y limitaciones."""
     output_dir = Path(output_dir)
     report_path = output_dir / "report.html"
 
@@ -1453,6 +1469,7 @@ def _ensure_output_parent(path):
 
 
 def scan_mode(args):
+    """Ejecuta el análisis de un cromosoma y publica sus resultados."""
     if not args.input or not args.chr or not args.out_window_scores or not args.out_summary_json:
         _fail("scan mode requires --input, --chr, --out-window-scores and --out-summary-json")
     if args.window_size_snps <= 1 or args.step_size_snps <= 0:
@@ -1497,6 +1514,7 @@ def scan_mode(args):
 
 
 def aggregate_mode(args):
+    """Combina resultados cromosómicos en tablas, figuras e informe genómico."""
     if not args.window_scores or not args.per_chr_summary:
         _fail(
             "aggregate mode requires per-chromosome window scores and summaries. "
@@ -1628,6 +1646,7 @@ def aggregate_mode(args):
 
 
 def main():
+    """Selecciona el modo solicitado y ejecuta el análisis."""
     args = parse_args()
     if args.mode == "scan":
         scan_mode(args)

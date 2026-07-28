@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Extrae la matriz sparse individuo x variante rara de UN cromosoma, solo para las muestras de
-TRAIN. El fold de TEST NUNCA se decodifica: bcftools query -S recibe unicamente los IDs de TRAIN,
+TRAIN. El fold de TEST no se decodifica: bcftools query -S recibe únicamente los ID de TRAIN,
 de modo que el genotipo de TEST no se lee del VCF en ningun momento (bloqueo del fold 3 a nivel de
 lectura, no solo a nivel de filtro posterior).
 
 Fuente del label (M14): results_modtest_mac2/lai_rare/*.rare.vcf.gz (raras MAC>=2, biallelic split,
 FORMAT=GT). El alt-dosage (0/1/2) se acumula en una CSC (n_train x n_variants); los ceros (incluidos
-los faltantes imputados a 0) NO se materializan -> sparsity preservada, sin densificar nunca.
+los faltantes imputados a cero no se materializan, por lo que se conserva la matriz sparse.
 
-Se comprobo en disco (bcftools 1.16) que `bcftools query -S <file>` conserva el ORDEN del archivo de
+Se comprobó con bcftools 1.16 que `bcftools query -S <file>` conserva el orden del archivo de
 muestras: por eso el orden de filas de la matriz == orden de train_samples.txt, deterministico.
 
 Salidas:
@@ -47,8 +47,8 @@ def _alt_dosage(gt):
 
 
 def _emitted_sample_order(vcf, samples_file):
-    """Orden EXACTO de muestras que `bcftools query -S` va a emitir == columnas del header del subset
-    (`bcftools view -h -S`). Se usa para ASERTAR identidad Y orden contra train_ids antes de construir
+    """Devuelve el orden de muestras que emite `bcftools query -S` y que usa el encabezado del subset.
+    (`bcftools view -h -S`). Se usa para comprobar identidad y orden frente a train_ids antes de construir
     la matriz: si difiere, la asignacion columna->muestra seria incorrecta -> se aborta fail-closed."""
     proc = subprocess.run(["bcftools", "view", "-h", "-S", str(samples_file), str(vcf)],
                           capture_output=True, text=True)
@@ -61,6 +61,7 @@ def _emitted_sample_order(vcf, samples_file):
 
 
 def main():
+    """Extrae la matriz rara de un cromosoma para las muestras de entrenamiento."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--vcf", required=True, type=Path, help="VCF rare de un cromosoma (bgzip+tbi)")
     ap.add_argument("--split-manifest", required=True, type=Path)
@@ -83,8 +84,8 @@ def main():
     if not train_ids:
         _fail(f"0 muestras con split=='{args.train_label}' en {args.split_manifest}")
 
-    # --- Bloqueo del fold 3 (fail-closed): ningun ID de TRAIN puede ser tambien TEST; el set que se
-    # le pasa a bcftools -S es EXCLUSIVAMENTE TRAIN. Si esto falla, se aborta antes de tocar el VCF.
+    # Bloqueo del fold 3: ningún ID de TRAIN puede pertenecer también a TEST. La lista enviada a
+    # bcftools -S contiene únicamente TRAIN; si esto falla, se aborta antes de leer el VCF.
     leak = sorted(set(train_ids) & test_ids)
     if leak:
         _fail(f"{len(leak)} IDs aparecen en TRAIN y TEST a la vez (fuga): {leak[:5]}...")
@@ -93,7 +94,7 @@ def main():
     samples_file.write_text("\n".join(train_ids) + "\n")
     n_train = len(train_ids)
 
-    # --- ASSERT de identidad Y orden: las muestras que bcftools emitira con -S deben ser EXACTAMENTE
+    # Se comprueban identidad y orden: las muestras que bcftools emite con -S deben coincidir con
     # train_ids, en el mismo orden. Sin esto, el indice de columna i del stream podria no corresponder
     # a train_ids[i] (asignacion muestra->fila incorrecta). Fail-closed antes de leer un solo genotipo.
     emitted = _emitted_sample_order(args.vcf, samples_file)
@@ -103,7 +104,7 @@ def main():
               f"(emitidas={len(emitted)}, train={len(train_ids)}, posiciones distintas={n_diff}); "
               f"no se construye la matriz")
 
-    # --- Stream de genotipos SOLO de TRAIN. -S restringe las columnas en el propio bcftools: el GT de
+    # Se leen los genotipos de TRAIN. -S restringe las columnas en bcftools, por lo que el GT de
     # TEST no se emite ni se decodifica. El orden de columnas == orden de train_samples.txt (verificado).
     query_fmt = r"%CHROM\t%POS\t%REF\t%ALT[\t%GT]\n"
     cmd = ["bcftools", "query", "-S", str(samples_file), "-f", query_fmt, str(args.vcf)]

@@ -2,14 +2,14 @@
 """Módulo 21 — canal de presencia externa por cromosoma y panel.
 
 La interpretación es asimétrica: si un alelo raro de DNABR aparece en un panel NAM externo, no es
-privado de DNABR (refuta privacidad); su AUSENCIA del panel NO confirma founder (la contaminan
-ausencia-por-muestreo + artefacto de calling). El canal defendible es BINARIO present(allele)/unknown.
+privado de DNABR y descarta privacidad; su ausencia del panel no confirma founder porque intervienen
+ausencia por muestreo y artefactos de calling). El canal defendible es binario: present/unknown.
 No se aplica un modelo Beta-Binomial ni un tercer estado de callability.
 
 Clasifica cada SNV raro bialélico de DNABR (target) de UN cromosoma contra UN panel en:
   - PRESENT_ALLELE   : el panel tiene fila en esa POS y el ALT target está entre sus alelos (AC>0).
-  - PRESENT_POS_ONLY : el panel tiene fila en esa POS, mismo REF, pero el ALT target NO está
-                       (matchea posición, no alelo) -> ambiguo, NO cuenta como presencia del alelo.
+  - PRESENT_POS_ONLY : el panel tiene una fila en esa posición y el mismo REF, pero no contiene el ALT
+                       objetivo. Es un caso ambiguo y no cuenta como presencia del alelo.
   - REF_MISMATCH     : hay fila del panel en esa POS pero con REF distinto al target (no es la misma
                        variante; en hg38 left-aligned debe ser ~0 -> aserción de QC).
   - ABSENT_FROM_PANEL: no hay fila del panel en esa POS (variante no segrega / no interrogada).
@@ -18,14 +18,14 @@ Validaciones aplicadas:
   (1) PROVENANCE incluye el sha256 del propio script (reproducible aunque el commit no lo fije aún).
   (4) contador REF_MISMATCH (esperado ~0 en VCFs hg38 normalizados; >0 = normalización aguas arriba).
   (5) conteo PASS/non-PASS del panel + ``--panel-pass-only`` para que la comparación entre paneles de
-      distinto régimen de filtrado (VQSR-PASS vs .raw) sea apples-to-apples REAL, no confundida.
+      distinto régimen de filtrado (VQSR-PASS frente a .raw) sea comparable y no quede confundida.
   (EC57) sensibilidad CON/SIN una muestra (p.ej. EC57, 1 DNABR dentro del panel NAMBR): atribución
       exacta por genotipo en UNA pasada; reporta cuántos PRESENT_ALLELE se pierden al excluirla.
 
-NO convierte bp->cM, no infiere edad, no fasea, no usa espectral, no calcula AUC, no estima DAF con
+No convierte bp a cM, no infiere edad, no fasea, no usa métodos espectrales, no calcula AUC ni estima DAF con
 un modelo. Solo observables + comparación honesta.
 
-SALIDAS (a outdir):
+Salidas en outdir:
   <prefix>.external_presence.audit.tsv.gz   tabla por target (observables + flags EC57)
   <prefix>.external_presence.summary.json   conteos + estratificación + delta EC57 + filtro del panel
   <prefix>.manifest.json                    panel_id/version, schema, sha256, drop_sample, pass_only
@@ -47,10 +47,10 @@ import numpy as np
 import pysam
 from cyvcf2 import VCF
 
-# Reutiliza helpers PUROS de contexto genómico (DRY). En Nextflow ambos scripts se stagean en el
+# Reutiliza funciones de contexto genómico. En Nextflow ambos scripts se preparan en el
 # mismo work dir (path inputs) -> ``__file__``.parent los encuentra; standalone, viven juntos en bin/.
-sys.path.insert(0, str(Path(__file__).parent))  # .parent (NO resolve): apunta al work dir donde
-# Nextflow stagea AMBOS scripts como symlinks; resolve() seguiría el symlink al bin/ del repo, que
+sys.path.insert(0, str(Path(__file__).parent))  # .parent apunta al directorio de trabajo donde
+# Nextflow prepara ambos scripts como enlaces simbólicos; resolve() seguiría el enlace al bin/ del repo, que
 # puede no estar montado dentro del contenedor Singularity.
 from genomic_context import (  # noqa: E402
     load_bed_chrom,
@@ -68,7 +68,7 @@ STATES = ("PRESENT_ALLELE", "PRESENT_POS_ONLY", "REF_MISMATCH", "ABSENT_FROM_PAN
 
 # --------------------------------------------------------------------- preindexado del panel
 def _accum_slot(alts: dict, a: str, ac_full: int, ac_drop: int) -> None:
-    """Inserta/actualiza el slot del alelo ``a`` por MAX (no suma). Si la MISMA POS aparece en
+    """Inserta o actualiza el alelo ``a`` tomando el máximo, sin sumar. Si una posición aparece en
     varias filas del panel (multialélico split por ``bcftools norm -m-any``), sumar haría doble
     conteo de AC y doble descuento del drop (ac_drop negativo). MAX es coherente con el an por-POS."""
     slot = alts.get(a)
@@ -83,9 +83,9 @@ def index_panel(panel_vcf: Path, chrom: str, drop_sample: str | None, pass_only:
                 ) -> tuple[dict[int, dict], dict]:
     """pos(1-based) -> {an_full, an_drop, ref, alts:{ALT:{ac_full,ac_drop}}}.
 
-    AC/AN de los GENOTIPOS (build-agnóstico, NO de INFO). Solo SNVs (ref/alt de 1 base). Para
+    AC/AN de los genotipos, no del campo INFO. Solo usa SNV con REF y ALT de una base. Para
     multialélicos guarda AC por ALT. ``drop_sample`` (p.ej. EC57) se atribuye por genotipo en la
-    MISMA pasada: ac_drop = ac_full - (contribución del sample); an_drop = an_full - (2 si llamado).
+    misma pasada: ac_drop = ac_full - contribución de la muestra; an_drop = an_full - 2 si fue llamada.
 
     ``pass_only``: si True, omite filas cuyo FILTER no sea PASS (cyvcf2: ``var.FILTER is None`` == PASS).
     Siempre cuenta n_pass / n_nonpass del panel para separar el efecto del filtro del tamaño muestral."""
@@ -101,9 +101,9 @@ def index_panel(panel_vcf: Path, chrom: str, drop_sample: str | None, pass_only:
     n_rows = n_snv = n_pass = n_nonpass = 0
     for var in vcf(it_chrom):
         n_rows += 1
-        # cyvcf2: var.FILTER es None tanto para PASS como para '.' (sin filtrar) -> NO distingue.
+        # cyvcf2 devuelve None para PASS y para '.', por lo que no permite distinguirlos.
         # var.FILTERS sí (verificado en datos reales 2026-06-22): PASS->['PASS']; '.' (raw)->[];
-        # rechazo->['<etiqueta>']. Para comparar paneles, PASS debe ser EXPLÍCITO,
+        # rechazo->['<etiqueta>']. Para comparar paneles, PASS debe aparecer de forma explícita;
         # así el panel .raw (todo '.') cuenta como non-PASS y frac_nonpass documenta el régimen.
         is_pass = "PASS" in var.FILTERS
         if is_pass:
@@ -183,11 +183,12 @@ def classify(panel_rec, ref_target: str, alt_target: str, use_drop: bool) -> tup
     ac = slot["ac_drop"] if use_drop else slot["ac_full"]
     if ac > 0:
         return "PRESENT_ALLELE", ac, an
-    # el alelo existía en el panel completo pero TODO su soporte venía del sample dropeado
+    # El alelo existía en el panel completo, pero todo su soporte venía de la muestra excluida.
     return "PRESENT_POS_ONLY", 0, an
 
 
 def file_sha256(path: Path) -> str:
+    """Calcula sha256 de un archivo por bloques."""
     h = hashlib.sha256()
     with open(path, "rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
@@ -196,6 +197,7 @@ def file_sha256(path: Path) -> str:
 
 
 def git_commit(repo: Path) -> str:
+    """Devuelve el commit actual del repositorio o una cadena vacía."""
     try:
         return subprocess.check_output(["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
                                        text=True, stderr=subprocess.DEVNULL).strip()
@@ -204,6 +206,7 @@ def git_commit(repo: Path) -> str:
 
 
 def main() -> int:
+    """Audita presencia externa por panel y escribe resultados y procedencia."""
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--dnabr-rare-vcf", required=True, type=Path)
@@ -329,8 +332,8 @@ def main() -> int:
             "lost_when_drop": lost_when_drop,
             "frac_present_lost_when_drop": lost_when_drop / max(n_present, 1),
         } if has_drop else None,
-        "interpretation": ("Canal de presencia externa / NO-privacidad. PRESENT_ALLELE refuta "
-                           "privacidad del alelo; ABSENT_FROM_PANEL NO confirma founder. Sin "
+        "interpretation": ("Canal de presencia externa. PRESENT_ALLELE descarta "
+                           "privacidad del alelo; ABSENT_FROM_PANEL no confirma founder. Sin "
                            "Beta-Binomial ni un tercer estado de callability."),
     }
     (args.outdir / f"{args.out_prefix}.external_presence.summary.json").write_text(

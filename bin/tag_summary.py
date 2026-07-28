@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 def parse_args():
+    """Define y devuelve los argumentos de línea de comandos."""
     p = argparse.ArgumentParser()
     p.add_argument("--chr", required=True)
     p.add_argument("--prune_in", required=True)
@@ -27,6 +28,7 @@ def _count_lines(path: str) -> int:
 
 
 def main():
+    """Resume los SNP etiqueta producidos por cromosoma."""
     args = parse_args()
 
     summary = {
