@@ -5,7 +5,7 @@ exploratorio de datos genómicos. Está implementado con Nextflow DSL2 y diseña
 para ejecutar cada proceso como un trabajo independiente en un clúster Slurm,
 dentro de una imagen Singularity.
 
-La rama `hpc-cidacs` reúne el flujo principal, los módulos de análisis, la
+La rama `hpc` reúne el flujo principal, los módulos de análisis, la
 configuración de recursos y la receta del contenedor. Los datos individuales,
 metadatos clínicos, referencias, resultados y registros de ejecución deben
 permanecer fuera del repositorio.
@@ -137,7 +137,7 @@ Descargue únicamente la rama HPC:
 
 ```bash
 git clone \
-  --branch hpc-cidacs \
+  --branch hpc \
   --single-branch \
   https://github.com/jfct777/lai-exploracion-datos.git
 
