@@ -25,6 +25,28 @@ import groovy.json.JsonOutput
 //  - Matriz siempre sparse (CSC/CSR); nunca se densifica.
 //  - Cada etapa escribe un manifiesto sha256 mediante bin/write_stage_manifest.py.
 
+process WRITE_RARE_BENCH_RUN_PROVENANCE {
+    tag "run_provenance_${params.rare_bench_stage_subdir}"
+
+    publishDir "${params.rare_bench_results_dir}/${params.rare_bench_stage_subdir}", mode: 'copy', overwrite: false
+
+    cpus   1
+    memory '1 GB'
+    time   '10m'
+
+    input:
+    val run_prov_b64
+
+    output:
+    path "run_provenance.json"
+
+    script:
+    """
+    set -euo pipefail
+    printf '%s' '${run_prov_b64}' | base64 -d > run_provenance.json
+    """
+}
+
 process EXTRACT_RARE_MATRIX_CHR {
     tag "extract_chr${chrom}"
 
@@ -467,7 +489,7 @@ workflow RARE_MATRIX_BENCHMARK {
             } catch( ignored ) { return 'unknown' }
         }
         def rb_git_commit    = resolveGitCommitRB(projectDir.toString()) ?: 'unknown'
-        def rb_container_sha = shOutRB("sha256sum '${params.container_image}' 2>/dev/null | cut -d' ' -f1") ?: 'unavailable'
+        def rb_container_sha = params.container_digest ?: shOutRB("sha256sum '${params.container_image}' 2>/dev/null | cut -d' ' -f1") ?: 'unavailable'
         if( !rb_container_sha ) rb_container_sha = 'unavailable'
         def rb_prov_map = [
             git_commit       : rb_git_commit,
@@ -487,11 +509,10 @@ workflow RARE_MATRIX_BENCHMARK {
             launch_dir       : workflow.launchDir.toString(),
             project_dir      : projectDir.toString(),
         ]
-        // Cada etapa guarda run_provenance.json en su propio subdirectorio. Así una segunda corrida no
-        // reemplaza la procedencia de la anterior y el manifiesto puede usar una ruta relativa.
-        def rb_rp_dir = new File("${params.rare_bench_results_dir}/${params.rare_bench_stage_subdir}")
-        rb_rp_dir.mkdirs()
-        new File(rb_rp_dir, 'run_provenance.json').text = JsonOutput.prettyPrint(JsonOutput.toJson(rb_run_prov))
+        // Cada etapa publica su procedencia en el mismo subdirectorio que sus resultados.
+        // La tarea separada permite usar GCS sin tratar una URI como si fuera un directorio local.
+        def rb_run_prov_b64 = JsonOutput.prettyPrint(JsonOutput.toJson(rb_run_prov)).bytes.encodeBase64().toString()
+        WRITE_RARE_BENCH_RUN_PROVENANCE(channel.value(rb_run_prov_b64))
 
         // split_manifest congelado (M22): entrada obligatoria (sin inferencias no sustentadas), fuente única del fold 3.
         def rb_split = file(reqRB(params.rare_bench_split_manifest, 'rare_bench_split_manifest'))

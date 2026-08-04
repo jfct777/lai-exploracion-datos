@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+config_file="${repo_dir}/conf/google_batch.config"
+
+if [[ -z "${DNABR_RUN_ID:-}" ]]; then
+  echo "Falta DNABR_RUN_ID. Ejemplo: export DNABR_RUN_ID=qc-chr22-20260804" >&2
+  exit 2
+fi
+
+if [[ ! "${DNABR_RUN_ID}" =~ ^[a-z0-9][a-z0-9._-]{2,63}$ ]]; then
+  echo "DNABR_RUN_ID debe usar minúsculas, números, punto, guion o guion bajo." >&2
+  exit 2
+fi
+
+resume=false
+for arg in "$@"; do
+  if [[ "${arg}" == "-resume" ]]; then
+    resume=true
+    break
+  fi
+done
+
+if [[ "${1:-}" == "run" && "${resume}" == false ]]; then
+  result_prefix="gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/${DNABR_RUN_ID}/**"
+  set +e
+  check_output=$(gcloud storage ls "${result_prefix}" 2>&1)
+  check_status=$?
+  set -e
+
+  if [[ ${check_status} -eq 0 ]]; then
+    echo "La ejecución ${DNABR_RUN_ID} ya tiene resultados. Usa otro nombre o -resume." >&2
+    exit 3
+  fi
+  if [[ "${check_output}" != *"matched no objects"* ]]; then
+    echo "No se pudo comprobar si el destino está libre:" >&2
+    echo "${check_output}" >&2
+    exit 4
+  fi
+fi
+
+export NXF_SYNTAX_PARSER=v1
+exec nextflow -c "${config_file}" "$@"

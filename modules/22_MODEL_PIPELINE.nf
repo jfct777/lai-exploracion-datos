@@ -20,6 +20,28 @@ nextflow.enable.dsl=2
 //    (mismo precedente que M18 COMPARE_ASIBD_COMMON).
 //  - Manifiesto sha256 por etapa vía bin/write_stage_manifest.py (bin/ está en el PATH del worker).
 
+process WRITE_MODEL_RUN_PROVENANCE {
+    tag "run_provenance"
+
+    publishDir "${params.model_pipeline_results_dir}", mode: 'copy', overwrite: false
+
+    cpus   1
+    memory '1 GB'
+    time   '10m'
+
+    input:
+    val run_prov_b64
+
+    output:
+    path "run_provenance.json"
+
+    script:
+    """
+    set -euo pipefail
+    printf '%s' '${run_prov_b64}' | base64 -d > run_provenance.json
+    """
+}
+
 process BUILD_MODELING_MASTER {
     tag "modeling_master"
 

@@ -28,7 +28,7 @@ include { RARE_ON_LAI_PAINTING } from './modules/19_RARE_ON_LAI_PAINTING'
 include { COMPARE_ASIBD_COMMON } from './modules/18_COMMON_ASIBD_COMPARATOR'
 include { BUILD_PRESENCE_LCR_MASK; ANALYZE_PRESENCE_CHANNEL; AGGREGATE_PRESENCE_CHANNEL } from './modules/21_BUILD_PRESENCE_CHANNEL'
 include { DEFINE_COHORT; COUNT_RARE_DENSITY; AGGREGATE_FEATURE_STORE } from './modules/20_BUILD_FEATURE_STORE'
-include { BUILD_MODELING_MASTER; BUILD_SPLIT_MANIFEST; MODEL_PRIMARY_CV; EVALUATE_TEST; VERIFY_TEST_HASH } from './modules/22_MODEL_PIPELINE'
+include { WRITE_MODEL_RUN_PROVENANCE; BUILD_MODELING_MASTER; BUILD_SPLIT_MANIFEST; MODEL_PRIMARY_CV; EVALUATE_TEST; VERIFY_TEST_HASH } from './modules/22_MODEL_PIPELINE'
 include { RARE_MATRIX_BENCHMARK } from './modules/23_RARE_MATRIX_BENCHMARK'
 
 // ---------------------------------------------------------------------------
@@ -43,7 +43,7 @@ def discoverNormVcfs(String outdir) {
             def m = (norm_vcf.getName() =~ reNorm)
             if( !m.matches() ) throw new IllegalArgumentException("Cannot extract chr from ${norm_vcf.getName()}")
             def chr = m[0][1]
-            def norm_tbi = file("${norm_vcf}.tbi")
+            def norm_tbi = norm_vcf.resolveSibling("${norm_vcf.getName()}.tbi")
             if( !norm_tbi.exists() ) throw new IllegalStateException("Missing .tbi for ${norm_vcf}")
             tuple(chr, norm_vcf, norm_tbi)
         }
@@ -61,7 +61,7 @@ def discoverFilteredVcfs(String outdir) {
             def m = (vcf_gz.getName() =~ reVcf)
             if( !m.matches() ) throw new IllegalArgumentException("Cannot extract chr from ${vcf_gz.getName()}")
             def chr = m[0][1]
-            def tbi = file("${vcf_gz}.tbi")
+            def tbi = vcf_gz.resolveSibling("${vcf_gz.getName()}.tbi")
             if( !tbi.exists() ) throw new IllegalStateException("Missing .tbi for filtered VCF: ${vcf_gz}")
             tuple(chr, vcf_gz, tbi)
         }
@@ -95,8 +95,8 @@ def discoverPgenTriplets(String outdir) {
             def m = (pgen.getName() =~ rePgen)
             if( !m.matches() ) throw new IllegalArgumentException("Cannot extract chr from ${pgen.getName()}")
             def chr = m[0][1]
-            def pvar = file(pgen.toString().replaceFirst(/\.pgen$/, '.pvar'))
-            def psam = file(pgen.toString().replaceFirst(/\.pgen$/, '.psam'))
+            def pvar = pgen.resolveSibling(pgen.getName().replaceFirst(/\.pgen$/, '.pvar'))
+            def psam = pgen.resolveSibling(pgen.getName().replaceFirst(/\.pgen$/, '.psam'))
             if( !pvar.exists() || !psam.exists() ) throw new IllegalStateException("Missing pvar/psam for ${pgen}")
             tuple(chr, pgen, pvar, psam)
         }
@@ -114,7 +114,7 @@ def discoverAncestralTsvs(String outdir) {
             def m = (tsv_gz.getName() =~ reAnc)
             if( !m.matches() ) throw new IllegalArgumentException("Cannot extract chr from ${tsv_gz.getName()}")
             def chr = m[0][1]
-            def summary = file(tsv_gz.toString().replaceFirst(/\.ancestral\.tsv\.gz$/, '.ancestral.summary.json'))
+            def summary = tsv_gz.resolveSibling(tsv_gz.getName().replaceFirst(/\.ancestral\.tsv\.gz$/, '.ancestral.summary.json'))
             if( !summary.exists() ) throw new IllegalStateException("Missing summary JSON for ${tsv_gz}")
             tuple(chr, tsv_gz, summary)
         }
@@ -164,7 +164,7 @@ def discoverLaiRareVcfs(String inputDir, String globPattern) {
             def m = (vcf_gz.getName() =~ reRare)
             if( !m.matches() ) throw new IllegalArgumentException("Cannot extract chr from ${vcf_gz.getName()}")
             def chr = m[0][1]
-            def tbi = file("${vcf_gz}.tbi")
+            def tbi = vcf_gz.resolveSibling("${vcf_gz.getName()}.tbi")
             if( !tbi.exists() ) throw new IllegalStateException("Missing .tbi for rare VCF: ${vcf_gz}")
             tuple(chr, vcf_gz, tbi)
         }
@@ -186,7 +186,7 @@ def discoverPaintingPerChr(String perChrDir) {
             def m = (seg_gz.getName() =~ reSeg)
             if( !m.matches() ) throw new IllegalArgumentException("Cannot extract chr from ${seg_gz.getName()}")
             def chr = m[0][1]
-            def summary = file(seg_gz.toString().replaceFirst(/\.pairwise_segments\.tsv\.gz$/, '.sharing_scan.summary.json'))
+            def summary = seg_gz.resolveSibling(seg_gz.getName().replaceFirst(/\.pairwise_segments\.tsv\.gz$/, '.sharing_scan.summary.json'))
             if( !summary.exists() ) throw new IllegalStateException("Missing scan summary JSON for ${seg_gz}")
             tuple(chr, seg_gz, summary)
         }
@@ -225,7 +225,7 @@ def discoverPresencePanelVcfs(String panelDir, String panelId) {
         .map { vcf ->
             def m = (vcf.getName() =~ reVcf)
             if( !m.matches() ) throw new IllegalArgumentException("Cannot extract chr from ${vcf.getName()}")
-            def tbi = file("${vcf}.tbi")
+            def tbi = vcf.resolveSibling("${vcf.getName()}.tbi")
             if( !tbi.exists() ) throw new IllegalStateException(
                 "Missing .tbi for panel VCF: ${vcf}. Run tools/stage_presence_panels.sh first.")
             tuple(m[0][1], vcf, tbi)
@@ -403,7 +403,7 @@ workflow {
                     throw new IllegalArgumentException("VCF filename does not match chr_regex: ${vcf_gz.getName()}")
                 }
                 def chr = m[0][1]
-                def vcf_tbi = file("${vcf_gz}.tbi")
+                def vcf_tbi = vcf_gz.resolveSibling("${vcf_gz.getName()}.tbi")
                 if( !vcf_tbi.exists() ) {
                     throw new IllegalStateException("Missing index (.tbi) for ${vcf_gz}")
                 }
@@ -1270,7 +1270,7 @@ workflow {
             } catch( ignored ) { return 'unknown' }
         }
         def git_commit    = resolveGitCommit(projectDir.toString()) ?: 'unknown'
-        def container_sha = shOut("sha256sum '${params.container_image}' 2>/dev/null | cut -d' ' -f1") ?: 'unavailable'
+        def container_sha = params.container_digest ?: shOut("sha256sum '${params.container_image}' 2>/dev/null | cut -d' ' -f1") ?: 'unavailable'
         if( !container_sha ) container_sha = 'unavailable'
         // Procedencia estable del resultado: entra al cache-key de cada proceso vía
         // `val prov_b64`. El comando de Nextflow queda fuera porque `workflow.commandLine` cambia con `-resume`
@@ -1284,9 +1284,8 @@ workflow {
         ]
         def prov_b64 = JsonOutput.toJson(prov_map).bytes.encodeBase64().toString()
         def ch_prov  = channel.value(prov_b64)
-        // Comando Nextflow literal y contexto de ejecución en run_provenance.json, escrito una vez
-        // junto a los subdirectorios de etapa. Al no ser entrada de ningún proceso, -resume
-        // no lo considera y los procesos de cómputo se reutilizan.
+        // El comando y el contexto de ejecución se publican con una tarea pequeña. Esto funciona
+        // tanto en un sistema de archivos local como en GCS y no altera la caché de las tareas científicas.
         def run_prov = [
             git_commit       : git_commit,
             nextflow_command : workflow.commandLine,
@@ -1296,9 +1295,8 @@ workflow {
             launch_dir       : workflow.launchDir.toString(),
             project_dir      : projectDir.toString(),
         ]
-        def rp_dir = new File("${params.model_pipeline_results_dir}")
-        rp_dir.mkdirs()
-        new File(rp_dir, 'run_provenance.json').text = JsonOutput.prettyPrint(JsonOutput.toJson(run_prov))
+        def run_prov_b64 = JsonOutput.prettyPrint(JsonOutput.toJson(run_prov)).bytes.encodeBase64().toString()
+        WRITE_MODEL_RUN_PROVENANCE(channel.value(run_prov_b64))
 
         // --- 22a  BUILD_MODELING_MASTER (o descubre su output previo) ---
         def ch_modeling_master
