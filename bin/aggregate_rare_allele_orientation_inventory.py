@@ -268,6 +268,28 @@ def main() -> None:
             "requires": "corrected M14 windows/segments on chr1-21 followed by M16.5 reconstruction",
             "do_not_infer_from": ["site fractions", "burden correlations", "marginal dosage changes"],
         },
+        "m18_impact": {
+            "status": "direct_dependency_not_quantifiable_from_marginal_inventory",
+            "dependency": (
+                "M18 compares common-variant asIBD against M16.5 Leiden assignments, "
+                "which are derived directly from the M14 graph"
+            ),
+            "requires": (
+                "corrected M14 windows/segments, M16.5 reconstruction and then a new M18 comparison"
+            ),
+            "historical_result_policy": (
+                "preserve as a comparison against historical ALT-coded M14/M16.5 communities"
+            ),
+        },
+        "shared_alt_semantics_without_direct_m14_dependency": {
+            "modules": ["M17", "M19", "M21"],
+            "status": "semantic_review_required_not_recomputed_here",
+            "explanation": (
+                "These modules consume the same rare VCF and count or match ALT, but do not consume "
+                "M14 windows, segments or graph outputs"
+            ),
+            "do_not_conflate_with": "the direct M14 -> M16.5 -> M18/M22/M23 dependency chain",
+        },
         "regression_gates": {
             "chr22_m14_subset_alt_major": args.expected_chr22_alt_major_m14,
             "chr22_total_sites": args.expected_chr22_sites,
