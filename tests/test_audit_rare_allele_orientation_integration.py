@@ -20,6 +20,7 @@ try:
         detect_pairwise_segments_direct,
         parse_genotypes_carrier_sets,
     )
+    from audit_rare_allele_orientation import interval_overlap_summary, window_comparison
 except ModuleNotFoundError:
     pd = None
 
@@ -29,6 +30,45 @@ except ModuleNotFoundError:
     "integration test requires the production M14 Python stack, bcftools and samtools",
 )
 class AuditIntegrationTest(unittest.TestCase):
+    def test_interval_and_window_comparisons_are_border_aware(self):
+        reference = pd.DataFrame({
+            "chrom": ["22", "22"],
+            "sample_a": ["a", "a"],
+            "sample_b": ["b", "b"],
+            "start_pos": [100, 300],
+            "end_pos": [200, 400],
+        })
+        current = pd.DataFrame({
+            "chrom": ["22"],
+            "sample_a": ["a"],
+            "sample_b": ["b"],
+            "start_pos": [150],
+            "end_pos": [350],
+        })
+        overlap = interval_overlap_summary(reference, current)
+        self.assertEqual(overlap["pairwise_interval_overlap_bp"], 102)
+        self.assertAlmostEqual(
+            overlap["historical_pairwise_bp_fraction_overlapped"], 102 / 202
+        )
+        self.assertAlmostEqual(
+            overlap["current_pairwise_bp_fraction_overlapped"], 102 / 201
+        )
+        self.assertEqual(overlap["interval_set_jaccard_vs_historical"], 0.0)
+
+        historical_windows = pd.DataFrame({
+            "chrom": ["22"] * 3,
+            "start_pos": [1, 101, 201],
+            "end_pos": [100, 200, 300],
+            "n_sharing_pairs": [1, 2, 3],
+        })
+        current_windows = historical_windows.copy()
+        current_windows["n_sharing_pairs"] = [1, 4, 2]
+        comparison = window_comparison(historical_windows, current_windows)
+        self.assertEqual(comparison["windows_with_changed_pair_count"], 2)
+        self.assertEqual(comparison["total_window_pair_count_historical"], 6)
+        self.assertEqual(comparison["total_window_pair_count_current"], 7)
+        self.assertIsNotNone(comparison["window_pair_count_spearman_vs_historical"])
+
     def test_end_to_end_reproduces_historical_and_detects_alt_major(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -118,6 +158,12 @@ class AuditIntegrationTest(unittest.TestCase):
             self.assertEqual(report["status"], "PASS")
             self.assertTrue(report["historical_reproduction"]["segments_equal"])
             self.assertTrue(report["historical_reproduction"]["windows_equal"])
+            self.assertEqual(
+                report["mode_comparisons"]["historical_alt"][
+                    "historical_pairwise_bp_fraction_overlapped"
+                ],
+                1.0,
+            )
             self.assertEqual(report["orientation_summary"]["counts"]["alt_major_sites"], 1)
             self.assertEqual(report["orientation_summary"]["counts"]["tie_sites"], 1)
             self.assertLess(

@@ -228,6 +228,109 @@ def segment_set(df: pd.DataFrame) -> set[tuple]:
     return set(map(tuple, df.itertuples(index=False, name=None)))
 
 
+def interval_set(df: pd.DataFrame) -> set[tuple[str, str, int, int]]:
+    if df.empty:
+        return set()
+    return set(
+        zip(
+            df["sample_a"].astype(str),
+            df["sample_b"].astype(str),
+            df["start_pos"].astype(int),
+            df["end_pos"].astype(int),
+        )
+    )
+
+
+def _merged_intervals(df: pd.DataFrame) -> dict[tuple[str, str], list[tuple[int, int]]]:
+    grouped: dict[tuple[str, str], list[tuple[int, int]]] = defaultdict(list)
+    for row in df.itertuples(index=False):
+        grouped[(str(row.sample_a), str(row.sample_b))].append(
+            (int(row.start_pos), int(row.end_pos))
+        )
+
+    merged: dict[tuple[str, str], list[tuple[int, int]]] = {}
+    for pair, intervals in grouped.items():
+        current: list[list[int]] = []
+        for start, end in sorted(intervals):
+            if not current or start > current[-1][1] + 1:
+                current.append([start, end])
+            else:
+                current[-1][1] = max(current[-1][1], end)
+        merged[pair] = [(start, end) for start, end in current]
+    return merged
+
+
+def interval_overlap_summary(reference: pd.DataFrame, current: pd.DataFrame) -> dict:
+    """Compare pair-specific genomic coverage without requiring identical borders."""
+
+    reference_intervals = _merged_intervals(reference)
+    current_intervals = _merged_intervals(current)
+
+    def total_bp(grouped: dict[tuple[str, str], list[tuple[int, int]]]) -> int:
+        return sum(end - start + 1 for intervals in grouped.values() for start, end in intervals)
+
+    overlap_bp = 0
+    for pair in reference_intervals.keys() & current_intervals.keys():
+        left = reference_intervals[pair]
+        right = current_intervals[pair]
+        left_idx = right_idx = 0
+        while left_idx < len(left) and right_idx < len(right):
+            left_start, left_end = left[left_idx]
+            right_start, right_end = right[right_idx]
+            overlap_bp += max(0, min(left_end, right_end) - max(left_start, right_start) + 1)
+            if left_end <= right_end:
+                left_idx += 1
+            else:
+                right_idx += 1
+
+    reference_bp = total_bp(reference_intervals)
+    current_bp = total_bp(current_intervals)
+    return {
+        "pairwise_interval_overlap_bp": int(overlap_bp),
+        "historical_pairwise_bp_fraction_overlapped": (
+            overlap_bp / reference_bp if reference_bp else 1.0
+        ),
+        "current_pairwise_bp_fraction_overlapped": (
+            overlap_bp / current_bp if current_bp else 1.0
+        ),
+        "interval_set_jaccard_vs_historical": jaccard(
+            interval_set(reference), interval_set(current)
+        ),
+    }
+
+
+def _safe_correlation(left: np.ndarray, right: np.ndarray, method: str) -> float | None:
+    left_series = pd.Series(left)
+    right_series = pd.Series(right)
+    if left_series.nunique(dropna=True) < 2 or right_series.nunique(dropna=True) < 2:
+        return None
+    return float(left_series.corr(right_series, method=method))
+
+
+def window_comparison(reference: pd.DataFrame, current: pd.DataFrame) -> dict:
+    keys = ["chrom", "start_pos", "end_pos"]
+    columns = keys + ["n_sharing_pairs"]
+    merged = reference[columns].merge(
+        current[columns], on=keys, how="outer", suffixes=("_historical", "_current"),
+        validate="one_to_one", indicator=True,
+    )
+    if not (merged["_merge"] == "both").all():
+        raise SystemExit("Window coordinates differ between historical and sensitivity modes")
+    historical = merged["n_sharing_pairs_historical"].to_numpy(dtype=float)
+    current_values = merged["n_sharing_pairs_current"].to_numpy(dtype=float)
+    return {
+        "windows_with_changed_pair_count": int(np.count_nonzero(historical != current_values)),
+        "total_window_pair_count_historical": int(historical.sum()),
+        "total_window_pair_count_current": int(current_values.sum()),
+        "window_pair_count_pearson_vs_historical": _safe_correlation(
+            historical, current_values, "pearson"
+        ),
+        "window_pair_count_spearman_vs_historical": _safe_correlation(
+            historical, current_values, "spearman"
+        ),
+    }
+
+
 def jaccard(left: set, right: set) -> float:
     union = left | right
     return 1.0 if not union else len(left & right) / len(union)
@@ -486,6 +589,7 @@ def main() -> None:
     comparison_rows = []
     comparisons = {}
     for mode in MODES:
+        current_windows = mode_frames[mode][0]
         current_segments = mode_frames[mode][1]
         current_pairs = pair_set(current_segments)
         current_segment_set = segment_set(current_segments)
@@ -501,7 +605,22 @@ def main() -> None:
                 mode_summaries[mode]["total_shared_bp"]
                 - mode_summaries["historical_alt"]["total_shared_bp"]
             ),
+            **interval_overlap_summary(hist_segments, current_segments),
+            **window_comparison(mode_frames["historical_alt"][0], current_windows),
         }
+        for scope, mask in (("all", np.ones(n_samples, dtype=bool)), ("train", train_mask)):
+            for measure, values_by_mode in (
+                ("dosage", dosage_by_mode),
+                ("carrier_sites", carrier_sites_by_mode),
+            ):
+                historical_values = values_by_mode["historical_alt"][mask]
+                current_values = values_by_mode[mode][mask]
+                row[f"{scope}_{measure}_pearson_vs_historical"] = _safe_correlation(
+                    historical_values, current_values, "pearson"
+                )
+                row[f"{scope}_{measure}_spearman_vs_historical"] = _safe_correlation(
+                    historical_values, current_values, "spearman"
+                )
         comparison_rows.append(row)
         comparisons[mode] = row
     pd.DataFrame(comparison_rows).to_csv(
@@ -528,6 +647,17 @@ def main() -> None:
         "carrier_incidences": {mode: int(incidence[mode]) for mode in MODES},
         "train_carrier_incidences": {mode: int(train_incidence[mode]) for mode in MODES},
         "train_dosage_sum": {mode: int(train_dosage[mode]) for mode in MODES},
+        "sensitivity_fractions": {
+            "alt_major_site_fraction": counts["alt_major_sites"] / counts["total_sites"],
+            "historical_carrier_incidence_at_alt_major_fraction": (
+                (incidence["historical_alt"] - incidence["exclude_alt_major"])
+                / incidence["historical_alt"]
+            ),
+            "historical_train_dosage_at_alt_major_fraction": (
+                (train_dosage["historical_alt"] - train_dosage["exclude_alt_major"])
+                / train_dosage["historical_alt"]
+            ),
+        },
         "production_parameters_from_canonical_summary": production_params,
         "reference_contig": reference_contig,
         "field_definitions": {
