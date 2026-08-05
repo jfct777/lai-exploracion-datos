@@ -1,0 +1,9 @@
+.git
+.nextflow
+.codegraph
+graphify-out
+work
+nxf_work*
+*.log
+__pycache__
+*.pyc

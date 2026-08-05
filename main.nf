@@ -30,6 +30,7 @@ include { BUILD_PRESENCE_LCR_MASK; ANALYZE_PRESENCE_CHANNEL; AGGREGATE_PRESENCE_
 include { DEFINE_COHORT; COUNT_RARE_DENSITY; AGGREGATE_FEATURE_STORE } from './modules/20_BUILD_FEATURE_STORE'
 include { WRITE_MODEL_RUN_PROVENANCE; BUILD_MODELING_MASTER; BUILD_SPLIT_MANIFEST; MODEL_PRIMARY_CV; EVALUATE_TEST; VERIFY_TEST_HASH } from './modules/22_MODEL_PIPELINE'
 include { RARE_MATRIX_BENCHMARK } from './modules/23_RARE_MATRIX_BENCHMARK'
+include { AUDIT_RARE_ALLELE_ORIENTATION; WRITE_ALLELE_ORIENTATION_AUDIT_RUN_PROVENANCE } from './modules/24_RARE_ALLELE_ORIENTATION_AUDIT'
 
 // ---------------------------------------------------------------------------
 // Helper: discover normalized VCFs from outdir/01_norm/
@@ -299,6 +300,8 @@ workflow {
     def rare_snp_tract_py       = file("${projectDir}/bin/rare_snp_tract_distribution.py")
     def individual_distance_modes_py = file("${projectDir}/bin/individual_snp_distance_modes.py")
     def rare_allele_sharing_painter_py = file("${projectDir}/bin/rare_allele_sharing_painter.py")
+    def rare_allele_orientation_py = file("${projectDir}/bin/rare_allele_orientation.py")
+    def audit_rare_allele_orientation_py = file("${projectDir}/bin/audit_rare_allele_orientation.py")
     def ibd_community_enhanced_py = file("${projectDir}/bin/ibd_community_enhanced.py")
     def rare_in_lai_py          = file("${projectDir}/bin/rare_variants_in_lai_tracts.py")
     def aggregate_rare_in_lai_py = file("${projectDir}/bin/aggregate_rare_in_lai.py")
@@ -307,6 +310,7 @@ workflow {
     def genomic_context_py         = file("${projectDir}/bin/genomic_context.py")
     def aggregate_presence_py      = file("${projectDir}/bin/aggregate_presence_channel.py")
     def build_feature_store_py     = file("${projectDir}/bin/build_feature_store.py")
+    def write_stage_manifest_py    = file("${projectDir}/bin/write_stage_manifest.py")
 
     def empty_placeholder = file("${projectDir}/conf/empty.txt")
     if( !empty_placeholder.exists() ) {
@@ -339,6 +343,7 @@ workflow {
     def do_asibd_comparator = params.enable_asibd_comparator
     def do_presence_channel = params.enable_presence_channel
     def do_feature_build = params.enable_feature_build
+    def do_allele_orientation_audit = params.enable_allele_orientation_audit
 
     if( do_rare_tracts && params.rare_tract_input_format != 'vcf_rare' ) {
         throw new IllegalStateException("This project currently supports rare SNP tracts only from upstream rare VCFs (rare_tract_input_format='vcf_rare').")
@@ -366,6 +371,9 @@ workflow {
     }
     if( do_painting && do_lai_rare && params.lai_rare_keep_format && !params.lai_rare_keep_format.split(',').collect { it.trim() }.contains('GT') ) {
         throw new IllegalStateException("Rare allele sharing painting requires FORMAT/GT in lai_rare outputs. Set lai_rare_keep_format to include GT.")
+    }
+    if( do_allele_orientation_audit && do_lai_rare && params.lai_rare_keep_format && !params.lai_rare_keep_format.split(',').collect { it.trim() }.contains('GT') ) {
+        throw new IllegalStateException("Allele-orientation audit requires FORMAT/GT in lai_rare outputs. Set lai_rare_keep_format to include GT.")
     }
 
     def any_downstream = params.run_downstream && (
@@ -474,7 +482,7 @@ workflow {
         }
         def lai_rare_out = LAI_RARE_BIALELIC_ONLY(ch_lai_input)
         ch_lai_rare_vcfs = lai_rare_out.rare_vcfs
-    } else if( do_rare_tracts || do_distance_modes || do_rare_in_lai || do_rare_on_lai || do_presence_channel || do_feature_build || (do_painting && !params.painting_aggregate_only) ) {
+    } else if( do_rare_tracts || do_distance_modes || do_rare_in_lai || do_rare_on_lai || do_presence_channel || do_feature_build || do_allele_orientation_audit || (do_painting && !params.painting_aggregate_only) ) {
         // Discovery path: lai_rare no se genera live, se descubre del dir configurado.
         // Cada módulo consumidor declara (label, dir, glob). Regla general: todos los
         // Los consumidores habilitados deben apuntar al mismo directorio y glob. Si difieren, usa
@@ -487,6 +495,7 @@ workflow {
             [enabled: do_rare_on_lai,                                  label: 'rare_on_lai (M19)',   dir: params.rare_on_lai_input_dir,   glob: params.rare_on_lai_input_glob],
             [enabled: do_presence_channel,                             label: 'presence_channel (M21)', dir: params.presence_channel_input_dir, glob: params.presence_channel_input_glob],
             [enabled: do_feature_build,                                label: 'feature_build (M20)', dir: params.feature_build_input_dir,    glob: params.feature_build_input_glob],
+            [enabled: do_allele_orientation_audit,                     label: 'allele_orientation_audit (M24)', dir: params.allele_orientation_audit_input_dir, glob: params.allele_orientation_audit_input_glob],
         ].findAll { it.enabled }
 
         lai_rare_consumers.each { c ->
@@ -773,6 +782,81 @@ workflow {
             .set { ch_painting_agg_in }
 
         AGGREGATE_RARE_ALLELE_SHARING(ch_painting_agg_in)
+    }
+
+    // -----------------------------------------------------------------------
+    // 24  Auditoría ALT vs alelo menor (un cromosoma, sin entrenamiento)
+    // -----------------------------------------------------------------------
+    if( do_allele_orientation_audit ) {
+        def audit_chr = params.allele_orientation_audit_chromosome.toString().replaceFirst('(?i)^chr', '')
+        if( !(audit_chr ==~ /\d+/) || audit_chr.toInteger() < 1 || audit_chr.toInteger() > 22 ) {
+            throw new IllegalStateException(
+                "M24: allele_orientation_audit_chromosome debe ser un autosoma 1..22; recibió ${audit_chr}"
+            )
+        }
+
+        def canonical_dir = params.allele_orientation_audit_canonical_m14_per_chr_dir
+        if( !canonical_dir ) throw new IllegalStateException("M24: falta allele_orientation_audit_canonical_m14_per_chr_dir")
+        if( !params.allele_orientation_audit_split_manifest )
+            throw new IllegalStateException("M24: falta allele_orientation_audit_split_manifest")
+
+        def canonical_prefix = "dnabr.hg38.2723.chr${audit_chr}"
+        def canonical_windows = file("${canonical_dir}/${canonical_prefix}.sharing_windows.tsv.gz")
+        def canonical_segments = file("${canonical_dir}/${canonical_prefix}.pairwise_segments.tsv.gz")
+        def canonical_summary = file("${canonical_dir}/${canonical_prefix}.sharing_scan.summary.json")
+        def split_manifest = file(params.allele_orientation_audit_split_manifest)
+        def reference_fasta = file(params.ref_fasta)
+        def reference_fai = file("${params.ref_fasta}.fai")
+
+        // Stable artefact provenance enters the scientific task cache key.
+        // The literal Nextflow command is emitted separately so -resume does
+        // not invalidate the audit computation.
+        def resolveAuditGitCommit = { dir ->
+            try {
+                def head = new File("${dir}/.git/HEAD").text.trim()
+                if( !head.startsWith('ref:') ) return head
+                def ref = head.substring(4).trim()
+                def refFile = new File("${dir}/.git/${ref}")
+                if( refFile.exists() ) return refFile.text.trim()
+                def packed = new File("${dir}/.git/packed-refs")
+                if( packed.exists() )
+                    for( line in packed.readLines() )
+                        if( line.endsWith(" ${ref}")) return line.split(' ')[0]
+            } catch( ignored ) { }
+            return 'unknown'
+        }
+        def audit_git_commit = resolveAuditGitCommit(projectDir.toString())
+        def audit_container_path = params.m14_analysis_container_image ?: params.container_image
+        def audit_container_sha = params.m14_analysis_container_digest ?: params.container_digest ?: 'unavailable'
+        def audit_prov = [
+            git_commit       : audit_git_commit,
+            nextflow_version : workflow.nextflow.version.toString(),
+            container_path   : audit_container_path,
+            container_sha256 : audit_container_sha,
+        ]
+        def audit_prov_b64 = JsonOutput.toJson(audit_prov).bytes.encodeBase64().toString()
+        def audit_run_prov = audit_prov + [
+            nextflow_command : workflow.commandLine,
+            launch_dir       : workflow.launchDir.toString(),
+            project_dir      : projectDir.toString(),
+            scientific_scope : 'chr-level allele-orientation sensitivity; no model training',
+        ]
+        def audit_run_prov_b64 = JsonOutput.prettyPrint(JsonOutput.toJson(audit_run_prov)).bytes.encodeBase64().toString()
+        WRITE_ALLELE_ORIENTATION_AUDIT_RUN_PROVENANCE(channel.value(audit_run_prov_b64))
+
+        def ch_orientation_audit = ch_lai_rare_vcfs
+            .filter { chr, _vcf, _tbi -> chr.toString().replaceFirst('(?i)^chr', '') == audit_chr }
+            .map { chr, vcf, vcf_tbi ->
+                tuple(
+                    audit_chr, vcf, vcf_tbi,
+                    reference_fasta, reference_fai,
+                    canonical_windows, canonical_segments, canonical_summary,
+                    split_manifest,
+                    audit_rare_allele_orientation_py, rare_allele_orientation_py,
+                    rare_allele_sharing_painter_py, write_stage_manifest_py,
+                )
+            }
+        AUDIT_RARE_ALLELE_ORIENTATION(ch_orientation_audit, channel.value(audit_prov_b64))
     }
 
     // -----------------------------------------------------------------------

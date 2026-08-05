@@ -467,7 +467,9 @@ def parse_genotypes_carrier_sets(input_path, chrom, selected_samples):
         if temp_samples is not None:
             Path(temp_samples.name).unlink(missing_ok=True)
 
+    proc.stdout.close()
     stderr = proc.stderr.read()
+    proc.stderr.close()
     return_code = proc.wait()
     if return_code != 0:
         _fail(f"bcftools query failed for {input_path}: {stderr.strip()}")

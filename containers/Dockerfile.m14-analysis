@@ -1,0 +1,13 @@
+FROM us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/dnabr-qc@sha256:3baca87521291075c1ea5c7b17a3706a5030adda65174313fbc203c1a1324b35
+
+LABEL org.opencontainers.image.title="dnabr-qc-m14-analysis" \
+      org.opencontainers.image.description="Pinned M14/M24 scientific Python dependencies for dnaBr-lai" \
+      org.opencontainers.image.source="https://github.com/jfct777/lai-exploracion-datos"
+
+# The base QC image intentionally contains only numpy/pandas/matplotlib.
+# M14's sparse carrier matrices and parallel pair scan additionally require
+# scipy and joblib.  Install them at image-build time, never inside Batch jobs.
+RUN python3 -m pip install --no-cache-dir --break-system-packages \
+      scipy==1.17.0 \
+      joblib==1.5.2 \
+    && python3 -c "import joblib, numpy, pandas, scipy; print(numpy.__version__, pandas.__version__, scipy.__version__, joblib.__version__)"
