@@ -30,7 +30,11 @@ include { BUILD_PRESENCE_LCR_MASK; ANALYZE_PRESENCE_CHANNEL; AGGREGATE_PRESENCE_
 include { DEFINE_COHORT; COUNT_RARE_DENSITY; AGGREGATE_FEATURE_STORE } from './modules/20_BUILD_FEATURE_STORE'
 include { WRITE_MODEL_RUN_PROVENANCE; BUILD_MODELING_MASTER; BUILD_SPLIT_MANIFEST; MODEL_PRIMARY_CV; EVALUATE_TEST; VERIFY_TEST_HASH } from './modules/22_MODEL_PIPELINE'
 include { RARE_MATRIX_BENCHMARK } from './modules/23_RARE_MATRIX_BENCHMARK'
-include { AUDIT_RARE_ALLELE_ORIENTATION; WRITE_ALLELE_ORIENTATION_AUDIT_RUN_PROVENANCE } from './modules/24_RARE_ALLELE_ORIENTATION_AUDIT'
+include {
+    AUDIT_RARE_ALLELE_ORIENTATION;
+    WRITE_ALLELE_ORIENTATION_AUDIT_RUN_PROVENANCE
+} from './modules/24_RARE_ALLELE_ORIENTATION_AUDIT'
+include { RARE_ALLELE_ORIENTATION_INVENTORY } from './subworkflows/24_RARE_ALLELE_ORIENTATION_INVENTORY'
 
 // ---------------------------------------------------------------------------
 // Helper: discover normalized VCFs from outdir/01_norm/
@@ -302,6 +306,8 @@ workflow {
     def rare_allele_sharing_painter_py = file("${projectDir}/bin/rare_allele_sharing_painter.py")
     def rare_allele_orientation_py = file("${projectDir}/bin/rare_allele_orientation.py")
     def audit_rare_allele_orientation_py = file("${projectDir}/bin/audit_rare_allele_orientation.py")
+    def inventory_rare_allele_orientation_py = file("${projectDir}/bin/inventory_rare_allele_orientation.py")
+    def aggregate_rare_allele_orientation_inventory_py = file("${projectDir}/bin/aggregate_rare_allele_orientation_inventory.py")
     def ibd_community_enhanced_py = file("${projectDir}/bin/ibd_community_enhanced.py")
     def rare_in_lai_py          = file("${projectDir}/bin/rare_variants_in_lai_tracts.py")
     def aggregate_rare_in_lai_py = file("${projectDir}/bin/aggregate_rare_in_lai.py")
@@ -344,6 +350,7 @@ workflow {
     def do_presence_channel = params.enable_presence_channel
     def do_feature_build = params.enable_feature_build
     def do_allele_orientation_audit = params.enable_allele_orientation_audit
+    def do_allele_orientation_inventory = params.enable_allele_orientation_inventory
 
     if( do_rare_tracts && params.rare_tract_input_format != 'vcf_rare' ) {
         throw new IllegalStateException("This project currently supports rare SNP tracts only from upstream rare VCFs (rare_tract_input_format='vcf_rare').")
@@ -372,8 +379,8 @@ workflow {
     if( do_painting && do_lai_rare && params.lai_rare_keep_format && !params.lai_rare_keep_format.split(',').collect { it.trim() }.contains('GT') ) {
         throw new IllegalStateException("Rare allele sharing painting requires FORMAT/GT in lai_rare outputs. Set lai_rare_keep_format to include GT.")
     }
-    if( do_allele_orientation_audit && do_lai_rare && params.lai_rare_keep_format && !params.lai_rare_keep_format.split(',').collect { it.trim() }.contains('GT') ) {
-        throw new IllegalStateException("Allele-orientation audit requires FORMAT/GT in lai_rare outputs. Set lai_rare_keep_format to include GT.")
+    if( (do_allele_orientation_audit || do_allele_orientation_inventory) && do_lai_rare && params.lai_rare_keep_format && !params.lai_rare_keep_format.split(',').collect { it.trim() }.contains('GT') ) {
+        throw new IllegalStateException("Allele-orientation stages require FORMAT/GT in lai_rare outputs. Set lai_rare_keep_format to include GT.")
     }
 
     def any_downstream = params.run_downstream && (
@@ -482,7 +489,7 @@ workflow {
         }
         def lai_rare_out = LAI_RARE_BIALELIC_ONLY(ch_lai_input)
         ch_lai_rare_vcfs = lai_rare_out.rare_vcfs
-    } else if( do_rare_tracts || do_distance_modes || do_rare_in_lai || do_rare_on_lai || do_presence_channel || do_feature_build || do_allele_orientation_audit || (do_painting && !params.painting_aggregate_only) ) {
+    } else if( do_rare_tracts || do_distance_modes || do_rare_in_lai || do_rare_on_lai || do_presence_channel || do_feature_build || do_allele_orientation_audit || do_allele_orientation_inventory || (do_painting && !params.painting_aggregate_only) ) {
         // Discovery path: lai_rare no se genera live, se descubre del dir configurado.
         // Cada módulo consumidor declara (label, dir, glob). Regla general: todos los
         // Los consumidores habilitados deben apuntar al mismo directorio y glob. Si difieren, usa
@@ -496,6 +503,7 @@ workflow {
             [enabled: do_presence_channel,                             label: 'presence_channel (M21)', dir: params.presence_channel_input_dir, glob: params.presence_channel_input_glob],
             [enabled: do_feature_build,                                label: 'feature_build (M20)', dir: params.feature_build_input_dir,    glob: params.feature_build_input_glob],
             [enabled: do_allele_orientation_audit,                     label: 'allele_orientation_audit (M24)', dir: params.allele_orientation_audit_input_dir, glob: params.allele_orientation_audit_input_glob],
+            [enabled: do_allele_orientation_inventory,                 label: 'allele_orientation_inventory (M24)', dir: params.allele_orientation_inventory_input_dir, glob: params.allele_orientation_inventory_input_glob],
         ].findAll { it.enabled }
 
         lai_rare_consumers.each { c ->
@@ -857,6 +865,19 @@ workflow {
                 )
             }
         AUDIT_RARE_ALLELE_ORIENTATION(ch_orientation_audit, channel.value(audit_prov_b64))
+    }
+
+    // -----------------------------------------------------------------------
+    // 24  Inventario autosómico ALT vs alelo menor (sin topología ni ML)
+    // -----------------------------------------------------------------------
+    if( do_allele_orientation_inventory ) {
+        RARE_ALLELE_ORIENTATION_INVENTORY(
+            ch_lai_rare_vcfs,
+            inventory_rare_allele_orientation_py,
+            rare_allele_orientation_py,
+            aggregate_rare_allele_orientation_inventory_py,
+            write_stage_manifest_py,
+        )
     }
 
     // -----------------------------------------------------------------------
