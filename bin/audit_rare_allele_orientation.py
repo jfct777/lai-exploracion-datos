@@ -15,8 +15,10 @@ import gzip
 import hashlib
 import json
 import platform
+import resource
 import subprocess
 import tempfile
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -293,7 +295,7 @@ def interval_overlap_summary(reference: pd.DataFrame, current: pd.DataFrame) -> 
         "current_pairwise_bp_fraction_overlapped": (
             overlap_bp / current_bp if current_bp else 1.0
         ),
-        "interval_set_jaccard_vs_historical": jaccard(
+        "exact_interval_record_jaccard_vs_historical": jaccard(
             interval_set(reference), interval_set(current)
         ),
     }
@@ -349,6 +351,7 @@ def mode_summary(mode: str, variants: list, windows: pd.DataFrame, segments: pd.
 
 
 def main() -> None:
+    started_monotonic = time.monotonic()
     args = parse_args()
     if args.n_jobs < 1:
         raise SystemExit("--n-jobs must be >=1")
@@ -668,11 +671,14 @@ def main() -> None:
             "carrier_site_count": "Número de sitios retenidos donde el individuo porta al menos una copia del alelo contado.",
             "dosage_sum": "Suma de copias del alelo contado en sitios retenidos con genotipo diploide completo.",
             "callable_sites": "Número de sitios retenidos con las dos copias del genotipo observadas; no es callability por base.",
+            "exact_interval_record_jaccard": "Jaccard de registros con par, inicio y fin exactamente iguales; no mide solapamiento genómico por bases.",
             "is_train": "Marca de pertenencia a TRAIN usada solo para resúmenes de carga, nunca como etiqueta objetivo.",
         },
     }
     write_json(outdir / f"chr{chrom}.orientation_summary.json", orientation_summary)
 
+    self_usage = resource.getrusage(resource.RUSAGE_SELF)
+    child_usage = resource.getrusage(resource.RUSAGE_CHILDREN)
     audit = {
         "status": "PASS",
         "scope": "single_chromosome_sensitivity_no_model_training",
@@ -694,6 +700,14 @@ def main() -> None:
             "numpy": np.__version__,
             "pandas": pd.__version__,
             "bcftools": bcftools_version(),
+        },
+        "resource_usage": {
+            "analysis_wall_seconds": time.monotonic() - started_monotonic,
+            "self_max_rss_kib": int(self_usage.ru_maxrss),
+            "largest_reaped_child_max_rss_kib": int(child_usage.ru_maxrss),
+            "self_cpu_seconds": self_usage.ru_utime + self_usage.ru_stime,
+            "reaped_children_cpu_seconds": child_usage.ru_utime + child_usage.ru_stime,
+            "measurement_limit": "Linux ru_maxrss for children is the largest reaped child, not peak aggregate RSS of the full process tree.",
         },
         "inputs": {
             "vcf_sha256": sha256(args.vcf),

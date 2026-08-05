@@ -53,7 +53,7 @@ class AuditIntegrationTest(unittest.TestCase):
         self.assertAlmostEqual(
             overlap["current_pairwise_bp_fraction_overlapped"], 102 / 201
         )
-        self.assertEqual(overlap["interval_set_jaccard_vs_historical"], 0.0)
+        self.assertEqual(overlap["exact_interval_record_jaccard_vs_historical"], 0.0)
 
         historical_windows = pd.DataFrame({
             "chrom": ["22"] * 3,
@@ -156,6 +156,8 @@ class AuditIntegrationTest(unittest.TestCase):
 
             report = json.loads((outdir / "chr22.audit_report.json").read_text())
             self.assertEqual(report["status"], "PASS")
+            self.assertGreater(report["resource_usage"]["analysis_wall_seconds"], 0)
+            self.assertGreater(report["resource_usage"]["self_max_rss_kib"], 0)
             self.assertTrue(report["historical_reproduction"]["segments_equal"])
             self.assertTrue(report["historical_reproduction"]["windows_equal"])
             self.assertEqual(
