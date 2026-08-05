@@ -87,7 +87,7 @@ process AUDIT_RARE_ALLELE_ORIENTATION {
     """
     set -euo pipefail
 
-    python3 ${audit_py} \\
+    PYTHONPATH=. python3 ${audit_py} \\
       --vcf ${vcf} \\
       --reference-fasta ${reference_fasta} \\
       --canonical-summary ${canonical_summary} \\
