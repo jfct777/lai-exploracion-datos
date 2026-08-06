@@ -217,7 +217,8 @@ process AGGREGATE_RARE_ALLELE_SHARING {
 
     input:
     tuple path(pairwise_segment_files), path(scan_summary_files), path(scan_manifest_files),
-          path(rare_allele_sharing_painter_py), path(write_stage_manifest_py)
+          path(rare_allele_sharing_painter_py), path(rare_allele_orientation_py),
+          path(write_stage_manifest_py)
     val provenance_b64
 
     output:
@@ -280,7 +281,7 @@ process AGGREGATE_RARE_ALLELE_SHARING {
     python3 ${write_stage_manifest_py} \\
       --stage AGGREGATE_RARE_ALLELE_SHARING \\
       ${segment_inputs} ${summary_inputs} ${manifest_inputs} \\
-      --input ${rare_allele_sharing_painter_py} \\
+      --input ${rare_allele_sharing_painter_py} --input ${rare_allele_orientation_py} \\
       --output all_pairwise_segments.tsv.gz \\
       --output chromosome_sharing_summary.tsv \\
       --output global_sharing_summary.json \\

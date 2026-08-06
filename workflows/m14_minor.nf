@@ -95,7 +95,7 @@ workflow {
         .join(chSummaries.map { values -> tuple('aggregate', values) })
         .join(chManifests.map { values -> tuple('aggregate', values) })
         .map { _key, segments, summaries, manifests ->
-            tuple(segments, summaries, manifests, painterPy, manifestPy)
+            tuple(segments, summaries, manifests, painterPy, orientationPy, manifestPy)
         }
     AGGREGATE_RARE_ALLELE_SHARING(chAggregate, channel.value(provenanceB64))
 

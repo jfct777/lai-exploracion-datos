@@ -793,7 +793,8 @@ workflow {
             .join(ch_painting_manifests_keyed)
             .map { _key, segment_files, summary_files, manifest_files ->
                 tuple(segment_files, summary_files, manifest_files,
-                      rare_allele_sharing_painter_py, write_stage_manifest_py)
+                      rare_allele_sharing_painter_py, rare_allele_orientation_py,
+                      write_stage_manifest_py)
             }
             .set { ch_painting_agg_in }
 
