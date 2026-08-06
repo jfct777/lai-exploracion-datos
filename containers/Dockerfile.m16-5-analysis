@@ -14,4 +14,5 @@ RUN python3 -m pip install --no-cache-dir --break-system-packages \
       umap-learn==0.5.11 \
       seaborn==0.13.2 \
       adjustText==1.3.0 \
-    && python3 -c "import importlib.metadata as m; import adjustText, igraph, leidenalg, numpy, pandas, scipy, seaborn, sklearn, umap; print(numpy.__version__, pandas.__version__, scipy.__version__, sklearn.__version__, igraph.__version__, m.version('leidenalg'), umap.__version__)"
+      colorcet==3.1.0 \
+    && python3 -c "import importlib.metadata as m; import adjustText, colorcet, igraph, leidenalg, numpy, pandas, scipy, seaborn, sklearn, umap; print(numpy.__version__, pandas.__version__, scipy.__version__, sklearn.__version__, igraph.__version__, m.version('leidenalg'), umap.__version__, colorcet.__version__)"

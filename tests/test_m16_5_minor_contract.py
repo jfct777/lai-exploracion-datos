@@ -33,7 +33,7 @@ class M165MinorContractTest(unittest.TestCase):
     def test_cloud_image_is_digest_pinned_and_labeled(self) -> None:
         cloud = (ROOT / "conf/google_batch.config").read_text(encoding="utf-8")
         self.assertIn("m16_5_analysis_container_image", cloud)
-        self.assertIn("@sha256:3f27b2536bdd", cloud)
+        self.assertIn("@sha256:3e9381d165b1", cloud)
         self.assertIn("resourceLabels = [team: 'frank']", cloud)
 
 
