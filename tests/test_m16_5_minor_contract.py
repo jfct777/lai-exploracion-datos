@@ -36,6 +36,15 @@ class M165MinorContractTest(unittest.TestCase):
         self.assertIn("@sha256:3e9381d165b1", cloud)
         self.assertIn("resourceLabels = [team: 'frank']", cloud)
 
+    def test_cloud_resources_follow_measured_m16_5_profile(self) -> None:
+        cloud = (ROOT / "conf/google_batch.config").read_text(encoding="utf-8")
+        self.assertIn(
+            "withName: 'IBD_COMMUNITY_ENHANCED'               { "
+            "container = params.m16_5_analysis_container_image; cpus = 8; "
+            "memory = '16 GB'; time = '1h'; disk = '50 GB'; maxForks = 1 }",
+            cloud,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
