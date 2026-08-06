@@ -96,7 +96,8 @@ process ANALYZE_RARE_ALLELE_SHARING {
 
     input:
     tuple val(chr), path(vcf_gz), path(vcf_tbi),
-          path(canonical_summary), path(rare_allele_sharing_painter_py), path(rare_allele_orientation_py),
+          path(canonical_summary, stageAs: 'canonical/*'),
+          path(rare_allele_sharing_painter_py), path(rare_allele_orientation_py),
           path(write_stage_manifest_py)
     val(sample_ids_payload_b64)
     val(provenance_b64)

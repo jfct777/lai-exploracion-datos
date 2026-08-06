@@ -50,11 +50,12 @@ workflow {
         .bytes.encodeBase64().toString()
     WRITE_M14_RUN_PROVENANCE(channel.value(runProvenanceB64))
 
-    def painterPy = file("${projectDir}/bin/rare_allele_sharing_painter.py")
-    def orientationPy = file("${projectDir}/bin/rare_allele_orientation.py")
-    def manifestPy = file("${projectDir}/bin/write_stage_manifest.py")
-    def comparePy = file("${projectDir}/bin/compare_m14_orientation.py")
-    def auditPy = file("${projectDir}/bin/audit_rare_allele_orientation.py")
+    def repoDir = projectDir.resolve('..')
+    def painterPy = file("${repoDir}/bin/rare_allele_sharing_painter.py")
+    def orientationPy = file("${repoDir}/bin/rare_allele_orientation.py")
+    def manifestPy = file("${repoDir}/bin/write_stage_manifest.py")
+    def comparePy = file("${repoDir}/bin/compare_m14_orientation.py")
+    def auditPy = file("${repoDir}/bin/audit_rare_allele_orientation.py")
 
     def reVcf = ~/dnabr\.hg38\.2723\.chr(\d+)\.rare\.vcf\.gz$/
     def chVcfs = channel
