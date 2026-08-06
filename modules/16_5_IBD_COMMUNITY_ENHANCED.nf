@@ -51,7 +51,7 @@ nextflow.enable.dsl=2
 process IBD_COMMUNITY_ENHANCED {
     tag "ibd_community_enhanced"
 
-    publishDir "${params.ibd_enhanced_results_dir}", mode: 'copy'
+    publishDir "${params.ibd_enhanced_results_dir}", mode: 'copy', overwrite: false
 
     cpus params.cpus
     memory params.memory
@@ -210,7 +210,7 @@ process IBD_COMMUNITY_ENHANCED {
     ln -sf "\$(readlink -f ${pair_summary})"       m14_inputs/${pair_stage_name}
     ln -sf "\$(readlink -f ${individual_summary})" m14_inputs/${individual_stage_name}
 
-    python3 ${ibd_script} \\
+    /usr/bin/time -v python3 ${ibd_script} \\
         --mode all \\
         --input-dir m14_inputs \\
         --output-dir ./ \\

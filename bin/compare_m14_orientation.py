@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--historical-dir", required=True, type=Path)
     parser.add_argument("--minor-dir", required=True, type=Path)
     parser.add_argument("--chromosomes", default=",".join(map(str, range(1, 23))))
-    parser.add_argument("--min-edge-bp", type=int, default=2_000_000)
+    parser.add_argument("--min-edge-bp", type=int, default=5_000_000)
     parser.add_argument("--min-max-segment-bp", type=int, default=500_000)
     parser.add_argument("--chr22-expected-variants", type=int, default=447_907)
     parser.add_argument("--chr22-expected-pairs", type=int, default=197)
