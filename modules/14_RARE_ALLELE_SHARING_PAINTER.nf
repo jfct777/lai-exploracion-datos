@@ -269,7 +269,7 @@ process AGGREGATE_RARE_ALLELE_SHARING {
     export MPLCONFIGDIR="\$PWD/.matplotlib"
     mkdir -p "\$MPLCONFIGDIR"
 
-    python3 ${rare_allele_sharing_painter_py} \\
+    PYTHONPATH=. python3 ${rare_allele_sharing_painter_py} \\
       --mode aggregate \\
       ${segment_args} \\
       ${summary_args} \\
@@ -320,8 +320,8 @@ process COMPARE_M14_ORIENTATION {
     path "comparison.manifest.json", emit: manifest
 
     script:
-    def historicalInputs = historical_files.collect { f -> "--input historical/${f.getName()}" }.join(' ')
-    def currentInputs = current_files.collect { f -> "--input minor/${f.getName()}" }.join(' ')
+    def historicalInputs = historical_files.collect { f -> "--input ${f}" }.join(' ')
+    def currentInputs = current_files.collect { f -> "--input ${f}" }.join(' ')
     """
     set -euo pipefail
 

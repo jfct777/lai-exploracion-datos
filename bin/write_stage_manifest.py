@@ -14,6 +14,7 @@ fuera de las entradas de cada etapa permite reutilizar correctamente los proceso
 """
 import argparse
 import base64
+from collections import Counter
 import hashlib
 import json
 import platform
@@ -34,6 +35,15 @@ def _lib_version(dist):
         return metadata.version(dist)
     except metadata.PackageNotFoundError:
         return None
+
+
+def _checksums_by_unambiguous_name(paths):
+    """Calcula hashes sin perder archivos que comparten el mismo basename."""
+    basename_counts = Counter(path.name for path in paths)
+    return {
+        (str(path) if basename_counts[path.name] > 1 else path.name): _sha256(path)
+        for path in paths
+    }
 
 
 def main():
@@ -83,8 +93,8 @@ def main():
             "scikit_learn": _lib_version("scikit-learn"),
         },
         "params": params,
-        "inputs": {p.name: _sha256(p) for p in args.input},
-        "sha256": {p.name: _sha256(p) for p in args.output},
+        "inputs": _checksums_by_unambiguous_name(args.input),
+        "sha256": _checksums_by_unambiguous_name(args.output),
         # El comando de Nextflow cambia al usar -resume y se guarda fuera de la caché de cada etapa.
         # La mayoría de los módulos lo deja un nivel arriba; M23 lo guarda dentro de su subdirectorio
         # porque cada etapa corresponde a una corrida diferente.
