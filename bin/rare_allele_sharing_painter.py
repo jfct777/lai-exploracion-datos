@@ -22,6 +22,8 @@ import pandas as pd
 import scipy.sparse as sp
 from joblib import Parallel, delayed
 
+from rare_allele_orientation import SiteOrientation
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -113,7 +115,25 @@ def parse_args():
     parser.add_argument("--input-format", default="vcf_rare")
     parser.add_argument("--chr")
     parser.add_argument("--sample-ids-file")
+    parser.add_argument(
+        "--canonical-summary",
+        help=(
+            "Canonical M14 per-chromosome summary. Required for minor_allele; "
+            "its selected_samples and load-bearing parameters are validated."
+        ),
+    )
+    parser.add_argument(
+        "--carrier-allele-mode",
+        choices=["historical_alt", "minor_allele"],
+        default="historical_alt",
+        help=(
+            "Allele whose carriers define M14. historical_alt preserves the "
+            "published behavior; minor_allele flips ALT-major sites to REF and "
+            "excludes frequency ties."
+        ),
+    )
     parser.add_argument("--max-samples", type=int, default=None)
+    parser.add_argument("--expected-samples", type=int, default=None)
     parser.add_argument("--region",
                         help="Genomic region to analyse, e.g. '16000000-26000000' "
                              "or '16e6-26e6'.  Only variants inside this interval "
@@ -362,6 +382,48 @@ def load_selected_samples(header_samples, sample_ids_file, max_samples):
     return selected
 
 
+def load_and_validate_canonical_summary(path, chrom, args):
+    """Load the immutable M14 cohort and verify load-bearing scan parameters."""
+
+    with open(path, "r", encoding="utf-8") as handle:
+        summary = json.load(handle)
+    observed_chrom = str(summary.get("chrom", "")).removeprefix("chr")
+    expected_chrom = str(chrom).removeprefix("chr")
+    if observed_chrom != expected_chrom:
+        _fail(
+            f"Canonical summary chromosome mismatch: {observed_chrom!r} != {expected_chrom!r}"
+        )
+    samples = summary.get("selected_samples")
+    if not isinstance(samples, list) or not samples:
+        _fail("Canonical summary lacks a non-empty selected_samples list")
+    if len(samples) != len(set(map(str, samples))):
+        _fail("Canonical summary selected_samples contains duplicates")
+    samples = list(map(str, samples))
+    if args.expected_samples is not None and len(samples) != args.expected_samples:
+        _fail(
+            f"Canonical cohort size {len(samples)} != expected {args.expected_samples}"
+        )
+
+    canonical_params = summary.get("parameters_used", {})
+    checks = {
+        "window_size_bp": int(args.window_size_bp),
+        "step_size_bp": int(args.step_size_bp),
+        "min_shared_variants": int(args.min_shared_variants),
+        "min_jaccard": float(args.min_jaccard),
+        "max_gap_bp": int(args.max_gap_bp),
+        "min_segment_bp": int(args.min_segment_bp),
+    }
+    for key, current in checks.items():
+        if key not in canonical_params:
+            _fail(f"Canonical summary lacks load-bearing parameter {key!r}")
+        canonical = type(current)(canonical_params[key])
+        if canonical != current:
+            _fail(
+                f"Parameter drift for {key}: requested {current!r}, canonical {canonical!r}"
+            )
+    return samples
+
+
 # ---------------------------------------------------------------------------
 # Genotype parsing: build carrier sets per variant
 # ---------------------------------------------------------------------------
@@ -374,9 +436,15 @@ def _is_carrier_gt(gt_value):
     return "1" in alleles
 
 
-def parse_genotypes_carrier_sets(input_path, chrom, selected_samples):
+def parse_genotypes_carrier_sets(
+    input_path,
+    chrom,
+    selected_samples,
+    carrier_allele_mode="historical_alt",
+    return_orientation_qc=False,
+):
     """Return list of (pos, carrier_set) for each variant where carrier_set
-    is a frozenset of sample indices that carry at least one ALT allele.
+    is a frozenset of sample indices that carry the requested allele.
     Also returns chromosome positional extent (min_pos, max_pos) from ALL
     variants for proper plot scaling."""
     query_cmd = [
@@ -393,9 +461,10 @@ def parse_genotypes_carrier_sets(input_path, chrom, selected_samples):
 
     query_cmd.append(str(input_path))
 
-    proc = subprocess.Popen(
-        query_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-    )
+    if carrier_allele_mode not in {"historical_alt", "minor_allele"}:
+        _fail(f"Unsupported carrier allele mode: {carrier_allele_mode}")
+
+    proc = subprocess.Popen(query_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if proc.stdout is None or proc.stderr is None:
         _fail("Could not open bcftools query subprocess for rare allele sharing analysis.")
 
@@ -406,24 +475,27 @@ def parse_genotypes_carrier_sets(input_path, chrom, selected_samples):
     observed_chrom = None
     chrom_min_pos = None
     chrom_max_pos = None
+    orientation_qc = defaultdict(int)
 
     try:
         for raw_line in proc.stdout:
-            line = raw_line.rstrip("\n")
+            line = raw_line.rstrip(b"\n")
             if not line:
                 continue
 
-            parts = line.split("\t")
-            expected_cols = 3 + len(selected_samples)
-            if len(parts) != expected_cols:
+            parts = line.split(b"\t", 3)
+            if len(parts) != 4:
                 _fail(
                     "Unexpected bcftools query output for rare allele sharing: "
-                    f"{line[:200]}"
+                    f"{line[:200]!r}"
                 )
 
-            row_chrom, pos_s, alt_s = parts[:3]
-            gts = parts[3:]
+            row_chrom = parts[0].decode("ascii")
+            pos_s = parts[1].decode("ascii")
+            alt_s = parts[2].decode("ascii")
+            genotype_bytes = parts[3]
             total_variants += 1
+            orientation_qc["total_sites"] += 1
             observed_chrom = observed_chrom or row_chrom
 
             if row_chrom != chrom and row_chrom != f"chr{chrom}":
@@ -456,8 +528,47 @@ def parse_genotypes_carrier_sets(input_path, chrom, selected_samples):
             if chrom_max_pos is None or pos > chrom_max_pos:
                 chrom_max_pos = pos
 
+            # Diploid autosomal GTs are exactly three bytes (0/0, 0|1, ./.)
+            # separated by tabs. The fixed-width view avoids creating billions
+            # of Python strings at DNABR scale.
+            fixed_width = b"\t" + genotype_bytes
+            expected_width = 4 * len(selected_samples)
+            if len(fixed_width) != expected_width:
+                _fail(
+                    f"Non-diploid or malformed GT width at {row_chrom}:{pos_s}: "
+                    f"{len(fixed_width)} bytes != {expected_width}"
+                )
+            gt_bytes = np.frombuffer(fixed_width, dtype=np.uint8).reshape(
+                len(selected_samples), 4
+            )
+            alleles = gt_bytes[:, (1, 3)]
+            called = alleles != ord(".")
+            orientation = SiteOrientation(
+                alt_count=int(np.count_nonzero(alleles == ord("1"))),
+                allele_number=int(called.sum()),
+            )
+            if orientation.allele_number == 0:
+                orientation_qc["all_missing_sites"] += 1
+                continue
+            if orientation.is_tie:
+                orientation_qc["tie_sites"] += 1
+                if carrier_allele_mode == "minor_allele":
+                    continue
+            elif orientation.alt_is_major:
+                orientation_qc["alt_major_sites"] += 1
+            else:
+                orientation_qc["alt_minor_sites"] += 1
+
+            orientation_qc["partially_missing_genotypes"] += int(
+                np.count_nonzero(called.sum(axis=1) == 1)
+            )
+            carrier_code = (
+                ord("0")
+                if carrier_allele_mode == "minor_allele" and orientation.alt_is_major
+                else ord("1")
+            )
             carriers = frozenset(
-                idx for idx, gt_val in enumerate(gts) if _is_carrier_gt(gt_val)
+                map(int, np.flatnonzero(np.any(alleles == carrier_code, axis=1)))
             )
             if len(carriers) >= 1:
                 total_with_any_carrier += 1
@@ -468,7 +579,7 @@ def parse_genotypes_carrier_sets(input_path, chrom, selected_samples):
             Path(temp_samples.name).unlink(missing_ok=True)
 
     proc.stdout.close()
-    stderr = proc.stderr.read()
+    stderr = proc.stderr.read().decode("utf-8", errors="replace")
     proc.stderr.close()
     return_code = proc.wait()
     if return_code != 0:
@@ -479,7 +590,10 @@ def parse_genotypes_carrier_sets(input_path, chrom, selected_samples):
     _log(f"chr{chrom}: {len(variants)} variants with >=2 carriers (usable for sharing detection)")
     _log(f"chr{chrom}: positional extent {chrom_min_pos}-{chrom_max_pos}")
 
-    return observed_chrom or chrom, variants, total_variants, chrom_min_pos, chrom_max_pos
+    result = (observed_chrom or chrom, variants, total_variants, chrom_min_pos, chrom_max_pos)
+    if return_orientation_qc:
+        return (*result, dict(sorted(orientation_qc.items())))
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1964,13 +2078,44 @@ def scan_mode(args):
 
     validate_input_schema(args.input, args.input_format)
     header_samples = _read_header_samples(args.input)
-    selected_samples = load_selected_samples(
-        header_samples, args.sample_ids_file, args.max_samples
-    )
+    if args.carrier_allele_mode == "minor_allele":
+        if not args.canonical_summary:
+            _fail("minor_allele mode requires --canonical-summary")
+        if args.sample_ids_file or args.max_samples is not None:
+            _fail(
+                "minor_allele mode is fail-closed: do not combine --canonical-summary "
+                "with --sample-ids-file or --max-samples"
+            )
+        selected_samples = load_and_validate_canonical_summary(
+            args.canonical_summary, args.chr, args
+        )
+        header_set = set(header_samples)
+        missing = [sample for sample in selected_samples if sample not in header_set]
+        if missing:
+            _fail(
+                f"Canonical summary contains {len(missing)} samples absent from VCF; "
+                f"first: {missing[:10]}"
+            )
+    else:
+        selected_samples = load_selected_samples(
+            header_samples, args.sample_ids_file, args.max_samples
+        )
     _log(f"Selected {len(selected_samples)} samples for analysis")
 
-    observed_chrom, variants, total_variants, chrom_min_pos, chrom_max_pos = \
-        parse_genotypes_carrier_sets(args.input, args.chr, selected_samples)
+    (
+        observed_chrom,
+        variants,
+        total_variants,
+        chrom_min_pos,
+        chrom_max_pos,
+        orientation_qc,
+    ) = parse_genotypes_carrier_sets(
+        args.input,
+        args.chr,
+        selected_samples,
+        carrier_allele_mode=args.carrier_allele_mode,
+        return_orientation_qc=True,
+    )
     chrom_key = _chrom_key(observed_chrom or args.chr)
     chrom_label = _chrom_label(observed_chrom or args.chr)
     chrom_extent = (chrom_min_pos, chrom_max_pos)
@@ -2077,6 +2222,9 @@ def scan_mode(args):
         "total_variants_in_input": int(total_variants),
         "n_shared_carrier_variants": len(variants),
         "n_samples": len(selected_samples),
+        "carrier_allele_mode": args.carrier_allele_mode,
+        "orientation_universe": "selected_samples",
+        "orientation_qc": orientation_qc,
         "selected_samples": selected_samples,
         "ordered_samples": all_samples_ordered,
         "chrom_extent": [chrom_min_pos, chrom_max_pos],
@@ -2262,6 +2410,15 @@ def aggregate_mode(args):
         with open(p, "r", encoding="utf-8") as handle:
             chr_summaries.append(json.load(handle))
     chr_summaries.sort(key=lambda s: _natural_chr_key(s["chrom"]))
+    carrier_modes = {
+        summary.get("carrier_allele_mode", "historical_alt")
+        for summary in chr_summaries
+    }
+    if len(carrier_modes) != 1:
+        _fail(f"Per-chromosome summaries mix carrier allele modes: {sorted(carrier_modes)}")
+    sample_counts = {int(summary["n_samples"]) for summary in chr_summaries}
+    if len(sample_counts) != 1:
+        _fail(f"Per-chromosome summaries mix cohort sizes: {sorted(sample_counts)}")
 
     # ---- Streaming pass over every per-chr pairwise-segments TSV --------
     pair_acc: dict = {}
@@ -2393,6 +2550,7 @@ def aggregate_mode(args):
 
     # ---- Global JSON summary --------------------------------------------
     global_summary = {
+        "carrier_allele_mode": next(iter(carrier_modes)),
         "n_chromosomes_analyzed": len(chr_summaries),
         "chromosomes": [s["chrom"] for s in chr_summaries],
         "n_samples": len(all_samples_universe),

@@ -715,19 +715,11 @@ workflow {
     // 14  Rare allele sharing painting from upstream rare-only VCFs
     // -----------------------------------------------------------------------
     if( do_painting ) {
-        // ``ch_painting_segments_by_chr`` / ``ch_painting_summaries_by_chr``
-        // carry the per-chromosome scan artefacts into the AGGREGATE step.
-        // They are populated either by running ANALYZE live (default) or by
-        // discovering the outputs of a previous scan on disk when
-        // ``painting_aggregate_only`` is set.
         def ch_painting_segments_by_chr
         def ch_painting_summaries_by_chr
+        def ch_painting_manifests_by_chr
 
-        // Resolve the effective chromosome whitelist once for both paths.
-        // Filter is applied symmetrically before ANALYZE (live) and before the
-        // AGGREGATE collect (aggregate-only) so the genome-wide aggregate that
-        // M16.5 consumes never includes excluded chromosomes.  See the comment
-        // block on ``params.painting_chromosomes`` for the biological rationale.
+        // Apply the same chromosome whitelist to live and aggregate-only paths.
         def painting_chrs = parsePaintingChromosomes(params.painting_chromosomes)
         if( painting_chrs.isEmpty() ) {
             throw new IllegalStateException("params.painting_chromosomes resolved to empty list")
@@ -747,6 +739,7 @@ workflow {
                 .filter { chr, _seg, _sum -> painting_chrs.contains(chr) }
             ch_painting_segments_by_chr  = ch_per_chr.map { chr, seg, _sum -> tuple(chr, seg) }
             ch_painting_summaries_by_chr = ch_per_chr.map { chr, _seg, sum -> tuple(chr, sum) }
+            ch_painting_manifests_by_chr = ch_per_chr.map { chr, _seg, _sum -> tuple(chr, empty_placeholder) }
         } else {
             def ch_painting_sample_ids_opt
             if( params.painting_sample_ids_file ) {
@@ -763,11 +756,18 @@ workflow {
             def painting_scan_out = ANALYZE_RARE_ALLELE_SHARING(
                 ch_lai_rare_vcfs
                     .filter { chr, _vcf, _tbi -> painting_chrs.contains(chr) }
-                    .map { chr, vcf_gz, tbi -> tuple(chr, vcf_gz, tbi, rare_allele_sharing_painter_py) },
-                ch_painting_sample_ids_opt
+                    .map { chr, vcf_gz, tbi ->
+                        tuple(chr, vcf_gz, tbi, empty_placeholder,
+                              rare_allele_sharing_painter_py, rare_allele_orientation_py,
+                              write_stage_manifest_py)
+                    },
+                ch_painting_sample_ids_opt,
+                channel.value('')
             )
             ch_painting_segments_by_chr  = painting_scan_out.pairwise_segments
             ch_painting_summaries_by_chr = painting_scan_out.scan_summaries
+            ch_painting_manifests_by_chr = painting_scan_out.manifests
+
         }
 
         ch_painting_segments_by_chr
@@ -782,14 +782,22 @@ workflow {
             .map { files -> tuple('agg', files) }
             .set { ch_painting_summaries_keyed }
 
+        ch_painting_manifests_by_chr
+            .map { _chr, manifest -> manifest }
+            .collect()
+            .map { files -> tuple('agg', files) }
+            .set { ch_painting_manifests_keyed }
+
         ch_painting_segments_keyed
             .join(ch_painting_summaries_keyed)
-            .map { _key, segment_files, summary_files ->
-                tuple(segment_files, summary_files, rare_allele_sharing_painter_py)
+            .join(ch_painting_manifests_keyed)
+            .map { _key, segment_files, summary_files, manifest_files ->
+                tuple(segment_files, summary_files, manifest_files,
+                      rare_allele_sharing_painter_py, write_stage_manifest_py)
             }
             .set { ch_painting_agg_in }
 
-        AGGREGATE_RARE_ALLELE_SHARING(ch_painting_agg_in)
+        AGGREGATE_RARE_ALLELE_SHARING(ch_painting_agg_in, channel.value(''))
     }
 
     // -----------------------------------------------------------------------

@@ -96,6 +96,17 @@ class AuditIntegrationTest(unittest.TestCase):
             sample_file.write_text("\n".join(samples) + "\n", encoding="utf-8")
             _, historical, total, lo, hi = parse_genotypes_carrier_sets(vcf, "22", samples)
             self.assertEqual(total, 4)
+            _, minor, minor_total, _, _, minor_qc = parse_genotypes_carrier_sets(
+                vcf,
+                "22",
+                samples,
+                carrier_allele_mode="minor_allele",
+                return_orientation_qc=True,
+            )
+            self.assertEqual(minor_total, 4)
+            self.assertEqual([position for position, _carriers in minor], [100, 400])
+            self.assertEqual(minor_qc["alt_major_sites"], 1)
+            self.assertEqual(minor_qc["tie_sites"], 1)
 
             params = {
                 "window_size_bp": 1000,

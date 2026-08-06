@@ -64,30 +64,57 @@ def renderFlagMap(Map flagMap) {
 }
 
 
+process WRITE_M14_RUN_PROVENANCE {
+    tag "run_provenance"
+    publishDir "${params.painting_results_dir}", mode: 'copy', overwrite: false
+    cpus 1
+    memory '1 GB'
+    time '10m'
+
+    input:
+    val provenance_b64
+
+    output:
+    path "run_provenance.json"
+
+    script:
+    """
+    set -euo pipefail
+    printf '%s' '${provenance_b64}' | base64 -d > run_provenance.json
+    """
+}
+
+
 process ANALYZE_RARE_ALLELE_SHARING {
     tag "chr${chr}"
 
-    publishDir "${params.painting_results_dir}/per_chr", mode: 'copy'
+    publishDir "${params.painting_results_dir}/per_chr", mode: 'copy', overwrite: false
 
     cpus params.cpus
     memory params.memory
     time params.time
 
     input:
-    tuple val(chr), path(vcf_gz), path(vcf_tbi), path(rare_allele_sharing_painter_py)
+    tuple val(chr), path(vcf_gz), path(vcf_tbi),
+          path(canonical_summary), path(rare_allele_sharing_painter_py), path(rare_allele_orientation_py),
+          path(write_stage_manifest_py)
     val(sample_ids_payload_b64)
+    val(provenance_b64)
 
     output:
     tuple val(chr), path("dnabr.hg38.2723.chr${chr}.sharing_windows.tsv.gz"), emit: sharing_windows
     tuple val(chr), path("dnabr.hg38.2723.chr${chr}.pairwise_segments.tsv.gz"), emit: pairwise_segments
     tuple val(chr), path("dnabr.hg38.2723.chr${chr}.sharing_scan.summary.json"), emit: scan_summaries
-    path "plots/*.png", emit: plots
+    tuple val(chr), path("dnabr.hg38.2723.chr${chr}.sharing_scan.manifest.json"), emit: manifests
+    path "plots/*.png", emit: plots, optional: true
 
     script:
     // Declarative param → CLI flag mapping for the per-chromosome scan.
     // Order is preserved in the rendered command (helps log readability).
     def CLI_FLAG_MAP_SCAN = [
         input_format:               ['--input-format',            false],
+        carrier_allele_mode:        ['--carrier-allele-mode',     false],
+        expected_samples:           ['--expected-samples',        false],
         window_size_bp:             ['--window-size-bp',          false],
         step_size_bp:               ['--step-size-bp',            false],
         min_shared_variants:        ['--min-shared-variants',     false],
@@ -120,6 +147,8 @@ process ANALYZE_RARE_ALLELE_SHARING {
     printf '%s' '${sample_ids_payload_b64}' | base64 -d > module14_selected_samples.txt
     """ : ""
     def sample_arg = sample_ids_payload_b64 ? "--sample-ids-file module14_selected_samples.txt" : ""
+    def canonical_arg = params.painting_carrier_allele_mode == 'minor_allele' \
+                        ? "--canonical-summary ${canonical_summary}" : ""
 
     // max-samples: null sentinel means "use all loaded samples" (no flag).
     def max_samples_arg = params.painting_max_samples != null \
@@ -148,7 +177,7 @@ process ANALYZE_RARE_ALLELE_SHARING {
     mkdir -p "\$MPLCONFIGDIR"
     ${sample_setup}
 
-    python3 ${rare_allele_sharing_painter_py} \\
+    PYTHONPATH=. python3 ${rare_allele_sharing_painter_py} \\
       --mode scan \\
       --input ${vcf_gz} \\
       --chr ${chr} \\
@@ -157,23 +186,38 @@ process ANALYZE_RARE_ALLELE_SHARING {
       --out-sharing-windows ${out_prefix}.sharing_windows.tsv.gz \\
       --out-pairwise-segments ${out_prefix}.pairwise_segments.tsv.gz \\
       --out-summary-json ${out_prefix}.sharing_scan.summary.json \\
-      ${sample_arg} ${max_samples_arg} ${region_arg} ${region_size_arg} \\
+      ${sample_arg} ${canonical_arg} ${max_samples_arg} ${region_arg} ${region_size_arg} \\
       --output-dir ./ \\
       ${extra_args}
+
+    python3 ${write_stage_manifest_py} \\
+      --stage ANALYZE_RARE_ALLELE_SHARING \\
+      --input ${vcf_gz} --input ${vcf_tbi} \\
+      --input ${rare_allele_sharing_painter_py} --input ${rare_allele_orientation_py} \\
+      --input ${canonical_summary} \\
+      --output ${out_prefix}.sharing_windows.tsv.gz \\
+      --output ${out_prefix}.pairwise_segments.tsv.gz \\
+      --output ${out_prefix}.sharing_scan.summary.json \\
+      --provenance-b64 '${provenance_b64}' \\
+      --params-json '{"chrom":"${chr}","carrier_allele_mode":"${params.painting_carrier_allele_mode}","n_jobs":${n_jobs_value}}' \\
+      --stamp "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \\
+      --out ${out_prefix}.sharing_scan.manifest.json
     """
 }
 
 process AGGREGATE_RARE_ALLELE_SHARING {
     tag "aggregate"
 
-    publishDir "${params.painting_results_dir}", mode: 'copy'
+    publishDir "${params.painting_results_dir}", mode: 'copy', overwrite: false
 
     cpus params.cpus
     memory params.memory
     time params.time
 
     input:
-    tuple path(pairwise_segment_files), path(scan_summary_files), path(rare_allele_sharing_painter_py)
+    tuple path(pairwise_segment_files), path(scan_summary_files), path(scan_manifest_files),
+          path(rare_allele_sharing_painter_py), path(write_stage_manifest_py)
+    val provenance_b64
 
     output:
     path "all_pairwise_segments.tsv.gz", emit: all_segments
@@ -181,6 +225,7 @@ process AGGREGATE_RARE_ALLELE_SHARING {
     path "pair_sharing_summary.tsv", emit: pair_summary, optional: true
     path "individual_sharing_summary.tsv", emit: individual_summary, optional: true
     path "global_sharing_summary.json", emit: global_summary
+    path "aggregate.manifest.json", emit: manifest
     path "report.html", emit: report
     path "plots/*.png", emit: plots, optional: true
 
@@ -207,6 +252,9 @@ process AGGREGATE_RARE_ALLELE_SHARING {
 
     def segment_args = pairwise_segment_files.collect { f -> "--pairwise-segments ${f}" }.join(' ')
     def summary_args = scan_summary_files.collect { f -> "--per-chr-summary ${f}" }.join(' ')
+    def manifest_inputs = scan_manifest_files.collect { f -> "--input ${f}" }.join(' ')
+    def segment_inputs = pairwise_segment_files.collect { f -> "--input ${f}" }.join(' ')
+    def summary_inputs = scan_summary_files.collect { f -> "--input ${f}" }.join(' ')
 
     def extra_args = (params.containsKey('painting_extra_args')
                       && params.painting_extra_args) \
@@ -227,5 +275,72 @@ process AGGREGATE_RARE_ALLELE_SHARING {
       ${fixedFlagsStr} \\
       --output-dir ./ \\
       ${extra_args}
+
+    python3 ${write_stage_manifest_py} \\
+      --stage AGGREGATE_RARE_ALLELE_SHARING \\
+      ${segment_inputs} ${summary_inputs} ${manifest_inputs} \\
+      --input ${rare_allele_sharing_painter_py} \\
+      --output all_pairwise_segments.tsv.gz \\
+      --output chromosome_sharing_summary.tsv \\
+      --output global_sharing_summary.json \\
+      --provenance-b64 '${provenance_b64}' \\
+      --params-json '{"carrier_allele_mode":"${params.painting_carrier_allele_mode}"}' \\
+      --stamp "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \\
+      --out aggregate.manifest.json
+    """
+}
+
+
+process COMPARE_M14_ORIENTATION {
+    tag "alt_vs_${params.painting_carrier_allele_mode}"
+
+    publishDir "${params.painting_results_dir}/comparison", mode: 'copy', overwrite: false
+
+    cpus 2
+    memory '16 GB'
+    time '2h'
+
+    input:
+    path historical_files, stageAs: 'historical/*'
+    path current_files, stageAs: 'minor/*'
+    path compare_py
+    path audit_py
+    path orientation_py
+    path painter_py
+    path manifest_py
+    val chromosomes_csv
+    val provenance_b64
+
+    output:
+    path "m14_orientation_by_chromosome.tsv", emit: by_chromosome
+    path "m14_orientation_individual_deltas.tsv.gz", emit: individual_deltas
+    path "m14_orientation_comparison.json", emit: report
+    path "comparison.manifest.json", emit: manifest
+
+    script:
+    def historicalInputs = historical_files.collect { f -> "--input historical/${f.getName()}" }.join(' ')
+    def currentInputs = current_files.collect { f -> "--input minor/${f.getName()}" }.join(' ')
+    """
+    set -euo pipefail
+
+    PYTHONPATH=. python3 ${compare_py} \
+      --historical-dir historical \
+      --minor-dir minor \
+      --chromosomes '${chromosomes_csv}' \
+      --min-edge-bp ${params.painting_compare_min_edge_bp} \
+      --min-max-segment-bp ${params.painting_compare_min_max_segment_bp} \
+      --outdir .
+
+    python3 ${manifest_py} \
+      --stage COMPARE_M14_ORIENTATION \
+      ${historicalInputs} ${currentInputs} \
+      --input ${compare_py} --input ${audit_py} --input ${orientation_py} --input ${painter_py} \
+      --output m14_orientation_by_chromosome.tsv \
+      --output m14_orientation_individual_deltas.tsv.gz \
+      --output m14_orientation_comparison.json \
+      --provenance-b64 '${provenance_b64}' \
+      --params-json '{"chromosomes":"${chromosomes_csv}","min_edge_bp":${params.painting_compare_min_edge_bp},"min_max_segment_bp":${params.painting_compare_min_max_segment_bp}}' \
+      --stamp "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+      --out comparison.manifest.json
     """
 }
