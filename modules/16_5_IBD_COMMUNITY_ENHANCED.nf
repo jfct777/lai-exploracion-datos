@@ -210,7 +210,7 @@ process IBD_COMMUNITY_ENHANCED {
     ln -sf "\$(readlink -f ${pair_summary})"       m14_inputs/${pair_stage_name}
     ln -sf "\$(readlink -f ${individual_summary})" m14_inputs/${individual_stage_name}
 
-    /usr/bin/time -v python3 ${ibd_script} \\
+    python3 ${ibd_script} \\
         --mode all \\
         --input-dir m14_inputs \\
         --output-dir ./ \\
