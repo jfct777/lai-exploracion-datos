@@ -6,7 +6,10 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path.cwd()))
 
 from build_rare_window_features import sha256_file, write_json
 

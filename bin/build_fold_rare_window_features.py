@@ -16,11 +16,14 @@ import csv
 import json
 import math
 import subprocess
+import sys
 import tempfile
 from contextlib import ExitStack
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path.cwd()))
 
 from build_rare_window_features import (
     deterministic_gzip_writer,

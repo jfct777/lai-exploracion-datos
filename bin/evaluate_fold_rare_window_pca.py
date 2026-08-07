@@ -15,6 +15,7 @@ import csv
 import json
 import math
 import re
+import sys
 from itertools import combinations
 from pathlib import Path
 
@@ -29,6 +30,8 @@ from sklearn.decomposition import PCA
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 from sklearn.preprocessing import OneHotEncoder
+
+sys.path.insert(0, str(Path.cwd()))
 
 from build_rare_window_features import deterministic_gzip_writer, sha256_file, write_json
 
