@@ -59,13 +59,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def parse_int_grid(raw: str, name: str) -> tuple[int, ...]:
+def parse_int_grid(raw: str, name: str, minimum: int = 1) -> tuple[int, ...]:
     try:
         values = tuple(int(value) for value in raw.split(",") if value)
     except ValueError as exc:
         raise SystemExit(f"{name} must be comma-separated integers") from exc
-    if not values or any(value < 1 for value in values) or tuple(sorted(set(values))) != values:
-        raise SystemExit(f"{name} must be unique, positive and increasing")
+    if not values or any(value < minimum for value in values) or tuple(sorted(set(values))) != values:
+        raise SystemExit(f"{name} must be unique, >= {minimum} and increasing")
     return values
 
 
@@ -344,7 +344,7 @@ def diagnostic_r2(
 
 def main() -> None:
     args = parse_args()
-    folds = parse_int_grid(args.outer_folds, "outer folds")
+    folds = parse_int_grid(args.outer_folds, "outer folds", minimum=0)
     ranks = parse_int_grid(args.ranks, "ranks")
     if args.primary_rank not in ranks:
         raise SystemExit("primary rank must be in ranks")

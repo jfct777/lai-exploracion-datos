@@ -25,6 +25,11 @@ PCA = load_module("evaluate_fold_rare_window_pca", ROOT / "bin/evaluate_fold_rar
 
 
 class FoldRareWindowPcaTest(unittest.TestCase):
+    def test_outer_fold_grid_accepts_canonical_zero(self):
+        self.assertEqual(PCA.parse_int_grid("0,1,2,4", "folds", minimum=0), (0, 1, 2, 4))
+        with self.assertRaises(SystemExit):
+            PCA.parse_int_grid("0,1,2,4", "ranks")
+
     def test_weighted_baselines_use_fit_values_only(self):
         x_fit = np.array([[0.0, 1.0], [1.0, 3.0], [2.0, 5.0]])
         x_validation = np.array([[99.0, 99.0]])
