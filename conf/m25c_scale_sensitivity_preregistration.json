@@ -1,0 +1,70 @@
+{
+  "stage": "M25C_RARE_WINDOW_SCALE_SENSITIVITY",
+  "status": "PREREGISTERED_BEFORE_EXECUTION",
+  "date_utc": "2026-08-07",
+  "scope": {
+    "chromosome": "22",
+    "population": "2091 canonical TRAIN samples evaluated out of fold by kinship group",
+    "test_policy": "The 522 TEST samples remain blind and are neither emitted nor scored",
+    "input": "Fold-specific M25B 250 kb counts; no VCF reread and no new MAC/MAF/orientation fit",
+    "claim_limit": "Post-hoc sensitivity of the M25B representation; not biological validation, LAI improvement or an automatic NMF/AE trigger"
+  },
+  "fixed_schemes": [
+    {"id": "physical_250_o0", "width_bp": 250000, "offset_bp": 0, "role": "reference"},
+    {"id": "physical_500_o0", "width_bp": 500000, "offset_bp": 0, "role": "core"},
+    {"id": "physical_500_o250", "width_bp": 500000, "offset_bp": 250000, "role": "boundary_phase"},
+    {"id": "physical_1000_o0", "width_bp": 1000000, "offset_bp": 0, "role": "core"},
+    {"id": "physical_1000_o500", "width_bp": 1000000, "offset_bp": 500000, "role": "boundary_phase"}
+  ],
+  "adaptive_scheme": {
+    "id": "equal_site_approx",
+    "role": "core",
+    "target": "mean n_fold_train_rare_sites across informative 250 kb atoms, computed independently in each FIT",
+    "algorithm": "deterministic greedy grouping of contiguous 250 kb atoms; never cross structural zero-panel gaps; a dense atom is never split",
+    "interpretation": "Approximate balance of selected-site counts, not equal statistical information"
+  },
+  "overlap_policy": {
+    "500_250": "Evaluate offsets 0 and 250 kb as separate non-overlapping tilings",
+    "1000_500": "Evaluate offsets 0 and 500 kb as separate non-overlapping tilings",
+    "prohibition": "Never concatenate both phases or count them as independent evidence"
+  },
+  "aggregation": {
+    "rule": "Sum carrier, dosage, callable and missing counts, then recompute rates from summed numerators and denominators",
+    "prohibition": "Never average precomputed rates",
+    "global_burden": "Compute once from the original non-overlapping 250 kb atoms and reuse unchanged in every scheme",
+    "gaps": "Retain in the window catalogue, exclude zero-panel windows from PCA",
+    "terminal_windows": "Flag incomplete physical windows and report rank-1 sensitivity after excluding them"
+  },
+  "model": {
+    "outer_folds": [0, 1, 2, 4],
+    "ranks": [1, 2, 4],
+    "primary_rank": 1,
+    "rank_policy": "Rank 1 is the only capacity-matched primary comparison; ranks 2 and 4 are descriptive and cannot rescue rank 1",
+    "preprocessing": "FIT-only centering without variance scaling; VALIDATION projection only",
+    "baselines": ["FIT mean per derived window", "FIT OLS per derived window against the unchanged global carrier burden"]
+  },
+  "metrics": {
+    "primary": "OOF skill = 1 - pooled SSE_PCA / pooled SSE_burden",
+    "weighted_sensitivity": "Same ratio with n_callable_rare_sites weights; because call rate is near one, this mostly tests selected-site-count weighting",
+    "uncertainty": "1000 paired bootstrap replicates over split_group_key, stratified by outer fold; never bootstrap windows",
+    "diagnostics": [
+      "fold signs",
+      "pooled ratio-of-sums",
+      "PC score R2 with burden, Q, cohort and callability",
+      "rank-1 contribution by derived window versus selected-site count",
+      "terminal-window exclusion",
+      "score-subspace concordance across scales on the same held-out samples"
+    ]
+  },
+  "decision_rule": {
+    "stop": "Keep STOP NMF/AE if any new core scheme has non-positive rank-1 skill in a fold, a bootstrap lower bound not above zero, persistently negative weighted skill, or if apparent support exists only at ranks 2/4 or in a shifted boundary phase",
+    "eligible_for_independent_confirmation": "All new core schemes must be positive in 4/4 folds under unweighted and weighted metrics with bootstrap lower bounds above zero; boundary phases may only corroborate, never activate the rule",
+    "automatic_next_step": "None. Even a pass requires Consejo POST and an independent confirmation design before NMF"
+  },
+  "council_pre": {
+    "mathematical": "GO as a small falsification sensitivity; rank 1 primary; paired group bootstrap; overlap split into phases",
+    "rare_variants": "GO to test the denominator/scale explanation; preserve gaps and ascertainment limits; no biological claim",
+    "v02": "GO before any NMF; aggregate existing counts; AE remains stopped",
+    "synthesis": "GO M25C only; no TEST, NMF, AE, LAI or autosomal scaling"
+  }
+}
