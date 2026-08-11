@@ -1,0 +1,36 @@
+{
+  "stage": "M26_M16_TARGET_VIABILITY_AUDIT",
+  "version": 1,
+  "scope": "single_pass_internal_target_closure_train_validation_only",
+  "population": {
+    "expected_train_validation_samples": 2091,
+    "allowed_outer_folds": [0, 1, 2, 4],
+    "forbidden_outer_fold": 3,
+    "exclude_qc_red": true
+  },
+  "target": {
+    "resolution": "community_res_1",
+    "positive_definition": "M16.5-minor assignment >= 0",
+    "historical_comparator": "M16.5-ALT assignment >= 0",
+    "interpretation": "internal and transductive; not biological validation"
+  },
+  "decision_thresholds": {
+    "min_positive_individuals_per_assessment_fold": 10,
+    "min_effective_kinship_groups_per_assessment_fold": 5.0,
+    "max_single_kinship_group_share": 0.5,
+    "min_community_individuals_per_assessment_fold": 10,
+    "min_community_effective_groups_per_assessment_fold": 5.0,
+    "near_deterministic_univariate_auc": 0.9,
+    "categorical_alias_positive_share": 0.9,
+    "categorical_alias_max_background_share": 0.8,
+    "categorical_alias_min_folds": 3,
+    "small_cell_suppression_n": 5
+  },
+  "rules": [
+    "No model training, reclustering, parameter tuning, TEST evaluation or VCF rescan.",
+    "The 10-individual and 5-effective-group floors are conservative decision rules, not biological thresholds or power theorems.",
+    "Historical rare_density and carrier_density count ALT and must not be described as minor-allele burden.",
+    "USABLE_EXPLORATORY never authorizes downstream training automatically and never implies independent validation.",
+    "After this audit the internal target is either retained only for description or closed; no further internal audit cycle is opened."
+  ]
+}
