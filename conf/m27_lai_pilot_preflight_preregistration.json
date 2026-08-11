@@ -1,0 +1,68 @@
+{
+  "stage": "M27_LAI_PILOT_PREFLIGHT",
+  "version": 1,
+  "scope": "chr22_identifiability_preflight_no_simulation_no_training",
+  "question": "Can rare-variant information be evaluated incrementally over the frozen chr22 Gnomix baseline without donor leakage or representation drift?",
+  "frozen_contract": {
+    "chromosome": "22",
+    "build": "hg38",
+    "ancestries": ["African", "European", "Native-American"],
+    "model_calibrated": false,
+    "canonical_variant_key": "CHROM:POS:REF:ALT",
+    "minimum_pretrained_model_marker_fraction": 0.8,
+    "minimum_marker_fraction_source": "https://github.com/AI-sandbox/gnomix/blob/main/demo-pretrained.md",
+    "rare_maf_operator": "<",
+    "rare_maf_threshold": 0.01,
+    "rare_min_mac": 2,
+    "rare_min_independent_carrier_units": 2
+  },
+  "identity_candidates": {
+    "HGDP00982": "HG00982"
+  },
+  "gates": [
+    {
+      "id": "G0",
+      "name": "artifact_and_coordinate_contract",
+      "pass_rule": "Inputs are hashable, chr22/hg38-compatible, biallelic and ordered; model C equals the frozen reference marker count; genetic positions are monotonic."
+    },
+    {
+      "id": "G1",
+      "name": "donor_identity_independence_and_parentals",
+      "pass_rule": "Baseline donors and relatives can be excluded, ambiguous identities are fingerprinted, and each ancestry has locus-defensible donor units."
+    },
+    {
+      "id": "G2",
+      "name": "frozen_baseline_marker_compatibility",
+      "pass_rule": "The external donor panel contains at least 80 percent of exact model markers without ad hoc imputation, padding, liftover or retraining."
+    },
+    {
+      "id": "G3",
+      "name": "fit_only_wgs_rare_support_and_phase",
+      "pass_rule": "After family-disjoint splitting, FIT-only minor alleles have MAC at least 2, MAF below 1 percent, at least two independent carrier units and auditable haplotype phase."
+    },
+    {
+      "id": "G4",
+      "name": "identifiability_and_power_envelope",
+      "pass_rule": "Independent donor capacity, cM coverage and an externally chosen SESOI permit a preregistered TRAIN/VALIDATION pilot without opening TEST."
+    }
+  ],
+  "future_estimand": {
+    "comparison": "same L2 multinomial corrector with baseline-only features versus baseline plus rare features",
+    "primary": "paired absolute reduction in position-wise ancestry-dose error, macro-averaged across ancestries",
+    "secondary": "phase-switch-invariant breakpoint error in cM",
+    "independent_unit": "donor/family component package",
+    "uncertainty": "paired bootstrap over complete donor packages"
+  },
+  "stop_rules": [
+    "Stop before simulation if any of G0, G1 or G2 fails.",
+    "Do not use DNABR rare VCFs, Gnomix predictions or NAMBR labels as independent locus truth.",
+    "Do not fill absent baseline markers as 0/0 or by an unregistered imputation or substitution step.",
+    "Do not select rare variants, windows, generations, sample size or SESOI using TEST performance.",
+    "A negative result from a marker-ascertained panel does not refute the WGS rare-variant hypothesis."
+  ],
+  "privacy": {
+    "emit_sample_ids": false,
+    "small_cell_suppression_n": 5,
+    "individual_level_outputs_restricted": true
+  }
+}
