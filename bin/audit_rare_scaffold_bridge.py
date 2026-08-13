@@ -12,6 +12,7 @@ import argparse
 import csv
 import gzip
 import json
+import re
 import statistics
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--raw-wgs-vcf", required=True, type=Path)
     parser.add_argument("--phased-scaffold-vcf", required=True, type=Path)
     parser.add_argument("--gnomix-reference-vcf", required=True, type=Path)
+    parser.add_argument("--metadata", required=True, type=Path)
     parser.add_argument("--preregistration", required=True, type=Path)
     parser.add_argument("--outdir", required=True, type=Path)
     return parser.parse_args()
@@ -67,6 +69,82 @@ def canonical_ids(samples: list[str], role: str) -> list[str]:
     if role == "baseline":
         return [canonical_sample_id(baseline_sample_id(sample)) for sample in samples]
     return [canonical_sample_id(sample) for sample in samples]
+
+
+ALIAS_COLUMNS = ("IID", "Sample_ID(Aliases)", "Illumina_ID", "original_IID")
+MISSING_ALIAS_VALUES = {"", ".", "-", "NA", "N/A", "NONE", "NULL"}
+
+
+def alias_variants(value: str) -> set[str]:
+    stripped = str(value).strip().strip('"\'')
+    if stripped.upper() in MISSING_ALIAS_VALUES:
+        return set()
+    pieces = {stripped}
+    pieces.update(
+        token.strip("()[]{}\"'")
+        for token in re.split(r"[;,|/\s]+", stripped)
+        if token.strip("()[]{}\"'")
+    )
+    result: set[str] = set()
+    for piece in pieces:
+        if piece.upper() in MISSING_ALIAS_VALUES:
+            continue
+        result.add(piece)
+        result.add(canonical_sample_id(piece))
+        result.add(canonical_sample_id(panel_sample_id(piece)))
+    return {item for item in result if item}
+
+
+@dataclass
+class AliasResolver:
+    alias_to_iids: dict[str, set[str]]
+    n_metadata_rows: int
+    n_alias_keys: int
+    n_ambiguous_alias_keys: int
+
+    def resolve(self, samples: list[str], role: str) -> tuple[list[str], dict]:
+        direct_ids = canonical_ids(samples, role)
+        resolved: list[str] = []
+        n_mapped = n_unmapped = n_ambiguous = 0
+        for index, (sample, direct_id) in enumerate(zip(samples, direct_ids)):
+            candidates: set[str] = set()
+            for alias in alias_variants(sample) | alias_variants(direct_id):
+                candidates.update(self.alias_to_iids.get(alias, set()))
+            if len(candidates) == 1:
+                resolved.append(next(iter(candidates)))
+                n_mapped += 1
+            elif len(candidates) > 1:
+                resolved.append(f"AMBIGUOUS:{role}:{index}")
+                n_ambiguous += 1
+            else:
+                resolved.append(f"DIRECT:{direct_id}")
+                n_unmapped += 1
+        return resolved, {
+            "n_samples": len(samples),
+            "n_mapped_by_metadata": n_mapped,
+            "n_unmapped_in_metadata": n_unmapped,
+            "n_ambiguous_in_metadata": n_ambiguous,
+        }
+
+
+def build_alias_resolver(path: Path) -> AliasResolver:
+    with path.open("r", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    alias_to_iids: dict[str, set[str]] = {}
+    for row_index, row in enumerate(rows):
+        iid_values = alias_variants(row.get("IID", ""))
+        row_key = sorted(iid_values)[0] if iid_values else f"METADATA_ROW:{row_index}"
+        aliases: set[str] = set()
+        for column in ALIAS_COLUMNS:
+            aliases.update(alias_variants(row.get(column, "")))
+        for alias in aliases:
+            alias_to_iids.setdefault(alias, set()).add(row_key)
+    return AliasResolver(
+        alias_to_iids=alias_to_iids,
+        n_metadata_rows=len(rows),
+        n_alias_keys=len(alias_to_iids),
+        n_ambiguous_alias_keys=sum(len(iids) > 1 for iids in alias_to_iids.values()),
+    )
 
 
 def read_vcf_samples(path: Path) -> list[str]:
@@ -192,18 +270,20 @@ def audit_marker_panel(path: Path, expected_contig: str) -> MarkerAudit:
 def audit_scaffold(
     path: Path,
     expected_contig: str,
-    raw_canonical_ids: list[str],
+    raw_resolved_ids: list[str],
+    scaffold_resolved_ids: list[str],
 ) -> tuple[MarkerAudit, dict[VariantKey, ScaffoldGenotypes], dict]:
     samples = read_vcf_samples(path)
-    scaffold_ids = canonical_ids(samples, "scaffold")
     indices_by_id: dict[str, list[int]] = {}
-    for index, sample_id in enumerate(scaffold_ids):
+    for index, sample_id in enumerate(scaffold_resolved_ids):
         indices_by_id.setdefault(sample_id, []).append(index)
     collisions = sum(len(indices) - 1 for indices in indices_by_id.values())
-    ambiguous_raw_ids = sum(len(indices_by_id.get(sample_id, [])) > 1 for sample_id in raw_canonical_ids)
+    ambiguous_raw_ids = sum(
+        len(indices_by_id.get(sample_id, [])) > 1 for sample_id in raw_resolved_ids
+    )
     selected_indices = [
         indices_by_id[sample_id][0] if len(indices_by_id.get(sample_id, [])) == 1 else None
-        for sample_id in raw_canonical_ids
+        for sample_id in raw_resolved_ids
     ]
 
     markers: set[VariantKey] = set()
@@ -255,7 +335,7 @@ def audit_scaffold(
     )
     sample_bridge = {
         "n_scaffold_samples": len(samples),
-        "n_scaffold_canonical_id_collisions": collisions,
+        "n_scaffold_resolved_id_collisions": collisions,
         "n_raw_ids_ambiguous_in_scaffold": ambiguous_raw_ids,
         "n_raw_ids_present_in_scaffold": sum(index is not None for index in selected_indices),
         "n_raw_ids_absent_from_scaffold": sum(index is None for index in selected_indices),
@@ -263,8 +343,13 @@ def audit_scaffold(
     return audit, genotypes, sample_bridge
 
 
-def aggregate_concordance(jointly_called: list[int], matches: list[int], floor: int, threshold: float) -> dict:
-    concordances = [match / called if called else None for called, match in zip(jointly_called, matches)]
+def aggregate_concordance(
+    jointly_called: list[int], matches: list[int], floor: int, threshold: float
+) -> dict:
+    concordances = [
+        match / called if called else None
+        for called, match in zip(jointly_called, matches)
+    ]
     observed = [value for value in concordances if value is not None]
     below = sum(
         called < floor or value is None or value < threshold
@@ -313,6 +398,8 @@ def audit_raw_wgs(
         "n_exact_baseline_markers": 0,
         "n_rare_sites": 0,
         "n_rare_alt_major_sites": 0,
+        "n_rare_sites_with_one_carrier_individual": 0,
+        "n_rare_sites_with_at_least_two_carrier_individuals": 0,
         "n_rare_exact_scaffold_sites": 0,
         "n_rare_exact_baseline_sites": 0,
         "n_direct_phase_bridge_sites": 0,
@@ -403,8 +490,14 @@ def audit_raw_wgs(
                 else dosage if minor_is_alt else 2 - dosage
                 for dosage in alt_dosages
             ]
-            carriers = [index for index, dosage in enumerate(minor_dosages) if dosage not in (0, MISSING_DOSAGE)]
+            carriers = [
+                index
+                for index, dosage in enumerate(minor_dosages)
+                if dosage not in (0, MISSING_DOSAGE)
+            ]
             carrier_counts.append(len(carriers))
+            counts["n_rare_sites_with_one_carrier_individual"] += len(carriers) == 1
+            counts["n_rare_sites_with_at_least_two_carrier_individuals"] += len(carriers) >= 2
             for dosage, phased, called in parsed:
                 if called and dosage == 1:
                     counts[
@@ -419,6 +512,7 @@ def audit_raw_wgs(
                 continue
             counts["n_rare_exact_scaffold_sites"] += 1
             direct_bridge = bool(carriers)
+            has_informative_heterozygous_carrier = False
             for index in carriers:
                 raw_alt_dosage = alt_dosages[index]
                 scaffold_alt_dosage = scaffold_entry.dosages[index]
@@ -428,7 +522,11 @@ def audit_raw_wgs(
                 if raw_alt_dosage == 1 and scaffold_entry.phased[index] != 1:
                     direct_bridge = False
                     break
-            counts["n_direct_phase_bridge_sites"] += direct_bridge
+                if raw_alt_dosage == 1:
+                    has_informative_heterozygous_carrier = True
+            counts["n_direct_phase_bridge_sites"] += (
+                direct_bridge and has_informative_heterozygous_carrier
+            )
 
     sample_concordance = aggregate_concordance(
         jointly_called,
@@ -448,7 +546,9 @@ def audit_raw_wgs(
                 baseline_shared_positions - baseline_exact_positions
             ),
             "rare_carrier_count_min": min(carrier_counts) if carrier_counts else None,
-            "rare_carrier_count_median": statistics.median(carrier_counts) if carrier_counts else None,
+            "rare_carrier_count_median": (
+                statistics.median(carrier_counts) if carrier_counts else None
+            ),
             "rare_carrier_count_max": max(carrier_counts) if carrier_counts else None,
         }
     )
@@ -461,7 +561,11 @@ def write_json(path: Path, value: dict) -> None:
 
 def write_gate_table(path: Path, gates: list[dict]) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=("gate", "name", "status", "reason"), delimiter="\t")
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=("gate", "name", "status", "reason"),
+            delimiter="\t",
+        )
         writer.writeheader()
         writer.writerows(gates)
 
@@ -473,17 +577,21 @@ def run(args: argparse.Namespace) -> dict:
     contract = prereg["frozen_contract"]
     expected_contig = str(contract["chromosome"])
 
+    resolver = build_alias_resolver(args.metadata)
     raw_samples = read_vcf_samples(args.raw_wgs_vcf)
-    raw_ids = canonical_ids(raw_samples, "raw")
+    raw_ids, raw_resolution = resolver.resolve(raw_samples, "raw")
     raw_id_collisions = len(raw_ids) - len(set(raw_ids))
+    scaffold_samples = read_vcf_samples(args.phased_scaffold_vcf)
+    scaffold_ids, scaffold_resolution = resolver.resolve(scaffold_samples, "scaffold")
     scaffold_audit, scaffold_genotypes, sample_bridge = audit_scaffold(
         args.phased_scaffold_vcf,
         expected_contig,
         raw_ids,
+        scaffold_ids,
     )
     baseline_audit = audit_marker_panel(args.gnomix_reference_vcf, expected_contig)
-    baseline_ids = set(canonical_ids(baseline_audit.samples, "baseline"))
-    raw_baseline_overlap = len(set(raw_ids) & baseline_ids)
+    baseline_ids, baseline_resolution = resolver.resolve(baseline_audit.samples, "baseline")
+    raw_baseline_overlap = len(set(raw_ids) & set(baseline_ids))
 
     raw = audit_raw_wgs(
         args.raw_wgs_vcf,
@@ -522,13 +630,20 @@ def run(args: argparse.Namespace) -> dict:
         (
             len(raw_samples) == int(contract["expected_raw_samples"]),
             raw_id_collisions == 0,
+            raw_resolution["n_unmapped_in_metadata"] == 0,
+            raw_resolution["n_ambiguous_in_metadata"] == 0,
             sample_bridge["n_raw_ids_ambiguous_in_scaffold"] == 0,
             sample_bridge["n_raw_ids_absent_from_scaffold"] == 0,
             identity["n_samples_below_joint_marker_or_concordance_floor"] == 0,
         )
     )
     b2_pass = counts["n_rare_sites"] > 0
-    b3_pass = counts["n_direct_phase_bridge_sites"] > 0
+    b3_pass = b1_pass and counts["n_direct_phase_bridge_sites"] > 0
+    b3_status = (
+        "NOT_EVALUABLE_UPSTREAM_IDENTITY"
+        if not b1_pass
+        else "PASS" if b3_pass else "FAIL"
+    )
     baseline_fraction = (
         counts["n_exact_baseline_markers"] / len(baseline_audit.markers)
         if baseline_audit.markers
@@ -547,19 +662,32 @@ def run(args: argparse.Namespace) -> dict:
             "gate": "B1",
             "name": "sample_identity_bridge",
             "status": "PASS" if b1_pass else "FAIL",
-            "reason": "Canonical sample overlap and aggregate per-sample dosage fingerprints.",
+            "reason": (
+                "Metadata-resolved aliases, unique scaffold mapping and aggregate "
+                "per-sample dosage fingerprints."
+            ),
         },
         {
             "gate": "B2",
             "name": "raw_minor_allele_support",
             "status": "PASS" if b2_pass else "FAIL",
-            "reason": "GT-recomputed minor MAC and MAF in the complete 128-sample raw panel; descriptive only.",
+            "reason": (
+                "GT-recomputed minor MAC and MAF in the complete 128-sample raw "
+                "panel; descriptive only."
+            ),
         },
         {
             "gate": "B3",
             "name": "direct_rare_phase_bridge",
-            "status": "PASS" if b3_pass else "FAIL",
-            "reason": "Exact rare markers with concordant carriers and phased informative heterozygotes in the scaffold.",
+            "status": b3_status,
+            "reason": (
+                "Not evaluated because sample identity did not pass."
+                if not b1_pass
+                else (
+                    "Exact rare markers with concordant carriers and phased "
+                    "informative heterozygotes in the scaffold."
+                )
+            ),
         },
         {
             "gate": "B4",
@@ -589,7 +717,7 @@ def run(args: argparse.Namespace) -> dict:
         "build_declared": contract["build"],
         "raw_wgs": {
             "n_samples": len(raw_samples),
-            "n_canonical_id_collisions": raw_id_collisions,
+            "n_resolved_id_collisions": raw_id_collisions,
             **{key: counts[key] for key in (
                 "n_records",
                 "n_biallelic_snv",
@@ -613,11 +741,19 @@ def run(args: argparse.Namespace) -> dict:
             "n_records_outside_expected_contig": baseline_audit.n_records_outside_expected_contig,
             "ordered": baseline_audit.ordered,
         },
+        "sample_alias_metadata": {
+            "n_rows": resolver.n_metadata_rows,
+            "n_alias_keys": resolver.n_alias_keys,
+            "n_ambiguous_alias_keys": resolver.n_ambiguous_alias_keys,
+            "raw_resolution": raw_resolution,
+            "scaffold_resolution": scaffold_resolution,
+            "baseline_resolution": baseline_resolution,
+        },
         "imputation_padding_liftover_or_allele_substitution_performed": False,
     }
     sample_identity = {
         **sample_bridge,
-        "n_raw_canonical_id_collisions": raw_id_collisions,
+        "n_raw_resolved_id_collisions": raw_id_collisions,
         "n_exact_raw_ids_in_frozen_baseline": raw_baseline_overlap,
         "identity_min_jointly_called_markers": int(contract["identity_min_jointly_called_markers"]),
         "identity_min_dosage_concordance": float(contract["identity_min_dosage_concordance"]),
@@ -635,12 +771,15 @@ def run(args: argparse.Namespace) -> dict:
         **{key: counts[key] for key in (
             "n_rare_sites",
             "n_rare_alt_major_sites",
+            "n_rare_sites_with_one_carrier_individual",
+            "n_rare_sites_with_at_least_two_carrier_individuals",
             "rare_carrier_count_min",
             "rare_carrier_count_median",
             "rare_carrier_count_max",
             "n_info_ac_an_checked",
             "n_info_ac_an_mismatch",
         )},
+        "carrier_individuals_are_not_independent_units": True,
         "independent_carrier_units_estimated": False,
         "pcrelate_executed": False,
     }
@@ -655,7 +794,10 @@ def run(args: argparse.Namespace) -> dict:
             "n_rare_heterozygous_gt_unphased_raw",
         )},
         "phase_inferred_for_scaffold_absent_rare_sites": False,
-        "interpretation": "Only exact rare sites with concordant carriers can establish a direct phase bridge.",
+        "interpretation": (
+            "Only exact rare sites with concordant carriers can establish a direct "
+            "phase bridge."
+        ),
     }
     baseline_overlap = {
         "n_frozen_baseline_markers": len(baseline_audit.markers),

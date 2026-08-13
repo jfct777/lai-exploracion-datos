@@ -10,6 +10,7 @@ workflow {
     def rawWgsVcf = file(params.rare_scaffold_bridge_raw_wgs_vcf, checkIfExists: true)
     def phasedScaffoldVcf = file(params.rare_scaffold_bridge_phased_scaffold_vcf, checkIfExists: true)
     def gnomixReferenceVcf = file(params.rare_scaffold_bridge_gnomix_reference_vcf, checkIfExists: true)
+    def metadata = file(params.rare_scaffold_bridge_metadata, checkIfExists: true)
     def preregistration = file(
         "${repoDir}/conf/m27b_rare_scaffold_bridge_preregistration.json",
         checkIfExists: true,
@@ -34,6 +35,7 @@ workflow {
         raw_wgs_vcf      : params.rare_scaffold_bridge_raw_wgs_vcf,
         phased_scaffold  : params.rare_scaffold_bridge_phased_scaffold_vcf,
         gnomix_reference : params.rare_scaffold_bridge_gnomix_reference_vcf,
+        sample_metadata  : params.rare_scaffold_bridge_metadata,
     ]
     def runProvenanceB64 = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(runProvenance))
         .bytes.encodeBase64().toString()
@@ -43,6 +45,7 @@ workflow {
         channel.value(rawWgsVcf),
         channel.value(phasedScaffoldVcf),
         channel.value(gnomixReferenceVcf),
+        channel.value(metadata),
         channel.value(preregistration),
         channel.value(auditPy),
         channel.value(manifestPy),

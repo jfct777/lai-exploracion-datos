@@ -31,6 +31,7 @@ process AUDIT_RARE_SCAFFOLD_BRIDGE {
     path raw_wgs_vcf
     path phased_scaffold_vcf
     path gnomix_reference_vcf
+    path metadata
     path preregistration
     path audit_py
     path manifest_py
@@ -53,6 +54,7 @@ process AUDIT_RARE_SCAFFOLD_BRIDGE {
       --raw-wgs-vcf ${raw_wgs_vcf} \\
       --phased-scaffold-vcf ${phased_scaffold_vcf} \\
       --gnomix-reference-vcf ${gnomix_reference_vcf} \\
+      --metadata ${metadata} \\
       --preregistration ${preregistration} \\
       --outdir .
 
@@ -61,6 +63,7 @@ process AUDIT_RARE_SCAFFOLD_BRIDGE {
       --input ${raw_wgs_vcf} \\
       --input ${phased_scaffold_vcf} \\
       --input ${gnomix_reference_vcf} \\
+      --input ${metadata} \\
       --input ${preregistration} \\
       --input ${audit_py} \\
       --output m27b_input_contract.json \\
