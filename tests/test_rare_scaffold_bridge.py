@@ -185,6 +185,7 @@ class RareScaffoldBridgeTest(unittest.TestCase):
         workflow = (ROOT / "workflows/m27b_rare_scaffold_bridge.nf").read_text(encoding="utf-8")
         module = (ROOT / "modules/27B_RARE_SCAFFOLD_BRIDGE.nf").read_text(encoding="utf-8")
         cloud = (ROOT / "conf/google_batch.config").read_text(encoding="utf-8")
+        launcher = (ROOT / "bin/nextflow-google-batch").read_text(encoding="utf-8")
         self.assertIn("AUDIT_RARE_SCAFFOLD_BRIDGE", workflow)
         self.assertIn("rare_scaffold_bridge_metadata", workflow)
         self.assertIn("--metadata ${metadata}", module)
@@ -196,6 +197,8 @@ class RareScaffoldBridgeTest(unittest.TestCase):
         self.assertIn("resourceLabels = [team: 'frank']", cloud)
         self.assertIn("withName: 'AUDIT_RARE_SCAFFOLD_BRIDGE'", cloud)
         self.assertIn("disk = '20 GB'", cloud)
+        self.assertIn('-c "${repo_dir}/nextflow.config"', launcher)
+        self.assertIn('-c "${config_file}"', launcher)
 
 
 if __name__ == "__main__":

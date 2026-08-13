@@ -42,4 +42,10 @@ if [[ "${1:-}" == "run" && "${resume}" == false ]]; then
 fi
 
 export NXF_SYNTAX_PARSER=v1
-exec nextflow -c "${config_file}" "$@"
+# Nextflow discovers nextflow.config from the launch directory. Load the
+# repository configuration explicitly so resource parameters do not disappear
+# when traces are written from a separate run directory.
+exec nextflow \
+  -c "${repo_dir}/nextflow.config" \
+  -c "${config_file}" \
+  "$@"
