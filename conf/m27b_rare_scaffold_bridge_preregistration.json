@@ -1,0 +1,67 @@
+{
+  "stage": "M27B_RARE_SCAFFOLD_BRIDGE",
+  "version": 1,
+  "scope": "chr22_read_only_raw_wgs_to_phased_scaffold_bridge_audit",
+  "question": "Does the raw NatWGS chr22 callset contain a directly observable, genotype-concordant rare-variant bridge to the phased common scaffold?",
+  "frozen_contract": {
+    "chromosome": "22",
+    "build": "hg38",
+    "canonical_variant_key": "CHROM:POS:REF:ALT",
+    "expected_raw_samples": 128,
+    "rare_maf_operator": "<",
+    "rare_maf_threshold": 0.01,
+    "rare_min_mac": 2,
+    "identity_min_dosage_concordance": 0.99,
+    "identity_min_jointly_called_markers": 19535,
+    "identity_marker_floor_source": "M27 exact overlap between the frozen baseline and the common scaffold",
+    "minimum_pretrained_model_marker_fraction": 0.8,
+    "pretrained_model_marker_floor_source": "M27 frozen Gnomix contract"
+  },
+  "gates": [
+    {
+      "id": "B0",
+      "name": "input_and_coordinate_contract",
+      "pass_rule": "All records are chr22, ordered and hashable; exact biallelic-SNV keys are unique and all three files contain auditable samples or markers."
+    },
+    {
+      "id": "B1",
+      "name": "sample_identity_bridge",
+      "pass_rule": "All 128 canonical raw-WGS sample IDs occur uniquely in the scaffold and every sample has at least 19535 jointly called exact markers with dosage concordance at least 0.99."
+    },
+    {
+      "id": "B2",
+      "name": "raw_minor_allele_support",
+      "pass_rule": "The raw WGS contains at least one biallelic SNV whose minor allele, recomputed from GT, has MAC at least 2 and MAF below 1 percent. This is cohort-level support, not independent-family support."
+    },
+    {
+      "id": "B3",
+      "name": "direct_rare_phase_bridge",
+      "pass_rule": "At least one B2 site has the same CHROM:POS:REF:ALT in the scaffold, concordant carrier genotypes and phased heterozygous carriers where phase is informative."
+    },
+    {
+      "id": "B4",
+      "name": "frozen_baseline_marker_coverage_from_raw_wgs",
+      "pass_rule": "The raw WGS contains at least 80 percent of exact frozen-baseline markers without padding, imputation, liftover or allele substitution. This checks markers only, not parental completeness."
+    }
+  ],
+  "allowed_decisions": [
+    "STOP_INPUT_CONTRACT",
+    "STOP_SAMPLE_IDENTITY",
+    "STOP_NO_RAW_RARE_SUPPORT",
+    "STOP_NO_DIRECT_RARE_PHASE_BRIDGE",
+    "BRIDGE_PRESENT_BASELINE_REDESIGN_REQUIRED",
+    "GO_PC_RELATE_DONOR_AUDIT_ONLY"
+  ],
+  "stop_rules": [
+    "Do not infer phase for a rare site absent from the scaffold.",
+    "Do not use INFO/ALT as the rare-allele definition; recompute AC and AN from GT and orient to the minor allele.",
+    "Do not treat raw carriers as independent units before PC-Relate.",
+    "Do not simulate, run LAI, train, inspect TEST or emit sample identifiers in M27B.",
+    "A B4 pass does not establish complete AFR, EUR and NAM parental panels."
+  ],
+  "privacy": {
+    "emit_sample_ids": false,
+    "small_cell_suppression_n": 5,
+    "individual_level_outputs_restricted": true
+  }
+}
