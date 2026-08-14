@@ -1,0 +1,256 @@
+{
+  "stage": "M27C_TARGETED_GVCF_READINESS",
+  "version": 1,
+  "scope": "chr22_read_only_targeted_gvcf_callability_compatibility_phase_and_information_audit",
+  "question": "Can the frozen chr22 Gnomix marker set be reconstructed from NAMBR gVCFs with sufficient genotype quality, allele compatibility and phase readiness, and what ancestral information remains after that reconstruction?",
+  "frozen_contract": {
+    "chromosome": "22",
+    "gvcf_contig": "chr22",
+    "build": "hg38_GRCh38",
+    "expected_gvcf_samples": 128,
+    "expected_gvcf_indexes": 128,
+    "expected_model_markers": 110074,
+    "expected_baseline_donors": 78,
+    "expected_donors_per_ancestry": 26,
+    "identity_min_jointly_called_markers": 19535,
+    "identity_min_dosage_concordance": 0.99,
+    "ancestries": [
+      "African",
+      "European",
+      "Native-American"
+    ],
+    "canonical_variant_key": "CHROM:POS:REF:ALT",
+    "minimum_gnomix_ready_marker_fraction": 0.8,
+    "minimum_marker_fraction_source": "https://raw.githubusercontent.com/AI-sandbox/gnomix/main/demo-pretrained.md",
+    "forbid_liftover": true,
+    "forbid_allele_substitution": true,
+    "forbid_imputation_or_padding": true
+  },
+  "reference_contract": {
+    "fasta": "Homo_sapiens_assembly38.fasta",
+    "required_index": "Homo_sapiens_assembly38.fasta.fai",
+    "validation": "Verify the REF base of every frozen target against chr22 from the pinned GRCh38 FASTA. Indexed access must read chr22 only; do not copy or scan the complete FASTA."
+  },
+  "call_state_contract": {
+    "reference_block": "Target position is covered by a gVCF record with ALT=<NON_REF> and POS<=target<=END; GT must be hom-ref. Use MIN_DP as conservative effective depth and GQ as genotype quality.",
+    "explicit_variant_exact": "REF agrees with the frozen model, the model ALT is present, and GT can be remapped to the model biallelic allele.",
+    "explicit_variant_other_alt": "A non-reference allele different from the model ALT is carried; classify as allele-incompatible rather than hom-ref.",
+    "not_covered": "No indexed gVCF record spans the target position.",
+    "low_quality": "A structurally covered call fails the active DP or GQ policy.",
+    "phase_trivial": "A retained genotype is homozygous, so haplotype ordering is irrelevant.",
+    "phase_supported": "A retained heterozygote has an exact, genotype-concordant phased call in the existing scaffold.",
+    "phase_missing": "A retained heterozygote lacks an exact, concordant phased scaffold call."
+  },
+  "quality_policies": {
+    "structural_ceiling": {
+      "minimum_effective_depth": 0,
+      "minimum_gq": 0,
+      "minimum_marker_call_rate": 0.0,
+      "use_for_decision": false
+    },
+    "primary": {
+      "minimum_effective_depth": 10,
+      "minimum_gq": 20,
+      "minimum_marker_call_rate": 0.95,
+      "block_depth_field": "MIN_DP",
+      "explicit_variant_depth_field": "DP",
+      "rationale": "GQ20 represents approximately 1 percent genotype error probability; DP10 and site call-rate 95 percent are established WGS QC anchors. They are not NAMBR-calibrated and therefore require preregistered sensitivity analysis."
+    },
+    "one_factor_sensitivities": [
+      {
+        "id": "depth_8",
+        "minimum_effective_depth": 8,
+        "minimum_gq": 20,
+        "minimum_marker_call_rate": 0.95
+      },
+      {
+        "id": "depth_15",
+        "minimum_effective_depth": 15,
+        "minimum_gq": 20,
+        "minimum_marker_call_rate": 0.95
+      },
+      {
+        "id": "gq_10",
+        "minimum_effective_depth": 10,
+        "minimum_gq": 10,
+        "minimum_marker_call_rate": 0.95
+      },
+      {
+        "id": "gq_30",
+        "minimum_effective_depth": 10,
+        "minimum_gq": 30,
+        "minimum_marker_call_rate": 0.95
+      },
+      {
+        "id": "call_rate_90",
+        "minimum_effective_depth": 10,
+        "minimum_gq": 20,
+        "minimum_marker_call_rate": 0.90
+      },
+      {
+        "id": "call_rate_99",
+        "minimum_effective_depth": 10,
+        "minimum_gq": 20,
+        "minimum_marker_call_rate": 0.99
+      },
+      {
+        "id": "call_rate_100",
+        "minimum_effective_depth": 10,
+        "minimum_gq": 20,
+        "minimum_marker_call_rate": 1.0
+      }
+    ],
+    "selection_rule": "Do not select a policy by maximizing retained markers. The preregistered primary policy determines PASS or FAIL; all one-factor sensitivities are reported as robustness diagnostics. Classify a primary PASS as PASS_ROBUST only if every sensitivity remains on the same side of 0.8, or PASS_THRESHOLD_SENSITIVE if at least one sensitivity crosses 0.8. A sensitivity result does not replace the primary result and PASS_THRESHOLD_SENSITIVE requires review before another cloud run."
+  },
+  "candidate_panel_readiness_definition": {
+    "scope_note": "The official Gnomix 0.8 recommendation concerns model SNP positions represented in an inference input. M27C applies it conservatively to the complete 128-candidate NAMBR panel after study-defined genotype QC and phase checks. This is a readiness screen, not a claim that a final donor panel already exists.",
+    "requirements": [
+      "The target position and model REF are compatible with GRCh38.",
+      "At least the policy-specific fraction of 128 samples has a high-quality, model-compatible genotype.",
+      "Every high-quality retained heterozygous genotype among the candidate samples counted at that marker is phase-supported by an exact, concordant scaffold call.",
+      "No liftover, strand flip, allele substitution, genotype imputation or absent-as-hom-ref padding is performed."
+    ],
+    "denominator": 110074,
+    "primary_pass_rule": "The number of candidate-panel-ready model positions divided by 110074 is at least 0.8 under the primary policy.",
+    "downstream_dependency": "The definitive position fraction must be recomputed after the donor subset is selected and related samples are removed with a PC-Relate-only procedure. M27C cannot certify the final panel."
+  },
+  "ancestral_information_contract": {
+    "source_panel": "frozen_78_donor_Gnomix_reference",
+    "per_marker_outputs": [
+      "alternate allele count and frequency within each of the three ancestry groups",
+      "pooled MAC and MAF",
+      "maximum minus minimum ancestry allele frequency",
+      "between-ancestry allele-frequency variance",
+      "Jeffreys posterior interval for each ancestry frequency"
+    ],
+    "categories": {
+      "monomorphic_in_78": "Pooled MAC equals zero or 156.",
+      "polymorphic_no_observed_group_difference": "Pooled site is polymorphic but observed ancestry frequencies are equal.",
+      "observed_ancestry_difference": "Maximum ancestry frequency minus minimum ancestry frequency is greater than zero."
+    },
+    "spatial_diagnostics": [
+      "Gnomix-ready fraction by frozen model window",
+      "informative-and-ready fraction by frozen model window",
+      "maximum physical and genetic gap between ready markers",
+      "fraction of windows below 0.5, 0.8 and 0.95 readiness, reported descriptively"
+    ],
+    "decision_rule": "Information metrics cannot replace or reweight the official 0.8 marker fraction. A technical PASS is reported separately from information and does not authorize a biological claim."
+  },
+  "dependency_contract": {
+    "known_dependency": "The phased scaffold contains NAMBR and baseline reference individuals. Phase support derived from it is technically usable but not independent validation.",
+    "required_report": "Count which ready markers depend on scaffold phase and which are phase-trivial homozygotes. Preserve this dependency for the later simulation design.",
+    "prohibited_claim": "Do not describe scaffold-supported phase as independent locus truth or as evidence that rare variants improve LAI."
+  },
+  "gates": [
+    {
+      "id": "C0",
+      "name": "input_identity_and_coordinate_contract",
+      "pass_rule": "Exactly 128 unique single-sample gVCFs and 128 matching indexes are present; headers agree on GRCh38, chr22 length, HaplotypeCaller semantics and required fields; all frozen target REF bases match the pinned FASTA; all inputs and object generations are recorded."
+    },
+    {
+      "id": "C1",
+      "name": "targeted_callability_and_allele_compatibility",
+      "pass_rule": "All 110074 targets receive an auditable state for every sample; parser validation passes; primary and sensitivity callability summaries are complete."
+    },
+    {
+      "id": "C2",
+      "name": "candidate_panel_phase_ready_marker_fraction",
+      "pass_rule": "At least 80 percent of the 110074 frozen model positions are candidate-panel-ready under the primary policy. Sensitivities classify the result as PASS_ROBUST or PASS_THRESHOLD_SENSITIVE but do not redefine the primary PASS."
+    },
+    {
+      "id": "C3",
+      "name": "ancestral_information_and_spatial_distribution",
+      "pass_rule": "Information and spatial diagnostics are complete and reported separately from C2. C3 has no invented numerical utility threshold and cannot convert a C2 FAIL into PASS."
+    }
+  ],
+  "validation": {
+    "synthetic_cases": [
+      "reference block boundaries",
+      "uncovered gap",
+      "exact biallelic variant",
+      "different carried ALT",
+      "multiallelic model ALT remapping",
+      "missing GT, DP, GQ or MIN_DP",
+      "homozygous phase-trivial genotype",
+      "heterozygous scaffold phase match and mismatch"
+    ],
+    "real_data_controls": [
+      "Reproduce 128 of 128 sample identity mappings from M27B.",
+      "Across the 42666 exact raw-WGS/scaffold markers used by M27B, reproduce for every sample at least 19535 jointly called genotypes and minimum dosage concordance of 0.99, as fixed in frozen_contract. This is an identity/parser control, not the M27C model-marker result.",
+      "Distinguish a model position inside a high-quality reference block from a true uncovered gap.",
+      "Reconcile explicit model-marker records against the closed M27B variant-only overlap without requiring the two different estimands to be numerically equal."
+    ]
+  },
+  "allowed_decisions": [
+    "STOP_INPUT_CONTRACT",
+    "STOP_PARSER_OR_VALIDATION",
+    "STOP_BELOW_GNOMIX_FLOOR",
+    "STOP_PHASE_READINESS",
+    "REVIEW_THRESHOLD_SENSITIVITY",
+    "READY_FOR_RARE_DONOR_AUDIT_ONLY"
+  ],
+  "stop_rules": [
+    "Do not reinterpret an absent variant-only record as hom-ref unless an indexed gVCF block covers that sample and position.",
+    "Do not count callability alone toward the 80 percent Gnomix gate.",
+    "Do not select DP, GQ or call-rate thresholds after observing which one passes.",
+    "Do not use information-weighted coverage as a replacement for the official positional fraction.",
+    "Do not execute PC-Relate, Gnomix, simulation, training or TEST in M27C.",
+    "A C2 PASS only authorizes the separate rare-donor and relatedness audit."
+  ],
+  "execution_contract": {
+    "compute_region": "southamerica-east1",
+    "reason": "The 128 gVCFs are stored in a regional bucket in southamerica-east1; running there avoids 0.14 USD per GiB transfer to Northern America.",
+    "task_shape": "one_Batch_task_with_bounded_internal_parallelism",
+    "cpus": 8,
+    "memory_gb": 32,
+    "parallel_gvcf_readers": 8,
+    "gpu": false,
+    "gvcf_access": "Cloud Storage FUSE read-only mount created by Google Batch; no whole-object staging or local copy",
+    "labels": {
+      "team": "frank"
+    },
+    "smoke_before_full": "Run synthetic tests and an indexed smoke on a fixed small subset before the full Batch task; do not tune scientific thresholds in the smoke.",
+    "resource_screen": "Benchmark 1, 4 and 8 concurrent readers on the same fixed smoke inputs inside one task. Choose the smallest setting within 20 percent of the best elapsed time, provided peak memory remains below 70 percent of the request. This tunes execution only and cannot change scientific thresholds.",
+    "full_run_cost_cap_usd": 2.0,
+    "full_run_time_cap_hours": 3,
+    "cost_basis": "The gVCFs are Coldline objects, so in-region reads still incur 0.02 USD/GiB retrieval plus operation charges. A TBI-derived eight-sample chr22 compressed-span screen summed to 0.523 GiB; the budget keeps a conservative non-compute allowance of 0.80 USD before compute.",
+    "cost_stop_rule": "Do not launch the full task if smoke measurements project more than 2 USD or more than 3 hours. Stop the task if the implementation would stage whole gVCF objects or transfer them to Northern America."
+  },
+  "privacy": {
+    "emit_sample_ids_in_public_outputs": false,
+    "individual_level_outputs_restricted": true,
+    "small_cell_suppression_n": 5
+  },
+  "external_basis": [
+    {
+      "source": "GATK gVCF official documentation",
+      "url": "https://gatk.broadinstitute.org/hc/en-us/articles/360035531812-GVCF-Genomic-Variant-Call-Format",
+      "accessed": "2026-08-14",
+      "use": "END, reference blocks, GQ, DP and MIN_DP semantics"
+    },
+    {
+      "source": "Gnomix pretrained-model documentation",
+      "url": "https://raw.githubusercontent.com/AI-sandbox/gnomix/main/demo-pretrained.md",
+      "accessed": "2026-08-14",
+      "use": "minimum 80 percent of model SNP positions"
+    },
+    {
+      "source": "Carson et al. 2014, BMC Bioinformatics 15:125",
+      "url": "https://doi.org/10.1186/1471-2105-15-125",
+      "accessed": "2026-08-14",
+      "use": "GQ20 and DP8 genotype-level sensitivity anchor"
+    },
+    {
+      "source": "Adelson et al. 2019, Scientific Reports 9:16156",
+      "url": "https://doi.org/10.1038/s41598-019-52614-7",
+      "accessed": "2026-08-14",
+      "use": "WGS DP10, GQ20 and 5 percent site missingness anchor"
+    },
+    {
+      "source": "Google Cloud Storage pricing",
+      "url": "https://cloud.google.com/storage/pricing",
+      "accessed": "2026-08-14",
+      "use": "Coldline retrieval at 0.02 USD/GiB and regional Coldline operation charges"
+    }
+  ]
+}
