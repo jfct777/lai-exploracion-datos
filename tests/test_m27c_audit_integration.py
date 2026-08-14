@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -17,6 +18,28 @@ from m27c_gvcf_core import STATE_EXPLICIT_EXACT, STATE_REFERENCE_BLOCK  # noqa: 
 
 
 class TestM27CAuditIntegration(unittest.TestCase):
+    def test_entrypoint_imports_sibling_modules_from_nextflow_symlink_stage(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            for name in (
+                "audit_targeted_gvcf_readiness.py",
+                "audit_rare_scaffold_bridge.py",
+                "m27c_gvcf_core.py",
+            ):
+                (work / name).symlink_to(repo_root / "bin" / name)
+
+            completed = subprocess.run(
+                [sys.executable, "audit_targeted_gvcf_readiness.py", "--help"],
+                cwd=work,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            self.assertIn("--gvcfs", completed.stdout)
+
     def test_tiny_panel_reaches_ready_only_with_phase_support(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -26,6 +26,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, TextIO
 
+# Nextflow stages local scripts as symlinks whose targets may live in separate
+# cache directories.  Keep the task working directory on the import path so
+# staged sibling modules remain importable when this script is invoked through
+# one of those symlinks.
+sys.path.insert(0, str(Path.cwd()))
+
 import numpy as np
 from scipy.stats import beta
 
