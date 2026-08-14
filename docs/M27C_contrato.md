@@ -49,7 +49,7 @@ También se comprobará explícitamente un caso dentro de un bloque `0/0` y un h
 
 ## Ejecución y costo
 
-Los gVCF están en `southamerica-east1`, mientras que el datalake del proyecto está en `us-central1`. Leerlos desde la región actual cuesta US$0,14 por GiB transferido. La corrida se enviará por eso a São Paulo y montará el bucket en solo lectura mediante Cloud Storage FUSE.
+Los gVCF están en `southamerica-east1`, mientras que el datalake del proyecto está en `us-central1`. Leerlos desde la región actual cuesta US$0,14 por GiB transferido. La corrida se enviará por eso a São Paulo y accederá a los gVCF mediante Cloud Storage FUSE. Aunque la integración del sistema expone el montaje como escribible, el proceso abre estos archivos únicamente para lectura y no modifica los originales.
 
 Los objetos están en clase Coldline. Aunque la lectura se haga en la misma región, Google cobra US$0,02 por GiB recuperado, además de las operaciones de lectura. Como control previo, los índices TBI de ocho muestras delimitan 0,523 GiB comprimidos para chr22 en conjunto. No es todavía el consumo facturado, pero permite reservar US$0,80 para recuperación, operaciones, imagen y los insumos pequeños que vienen de `us-central1`, además del cómputo.
 
@@ -60,3 +60,46 @@ La estimación preliminar para smoke y corrida completa es de US$0,30 a US$1,50.
 ## Regla de parada
 
 Si los inputs o el parser no pasan, se detiene. Si la fracción lista bajo la política principal queda por debajo del 80%, se cierra el uso del modelo congelado con estos activos. Si pasa pero depende del corte, primero se revisa esa sensibilidad. Si pasa de forma estable, el único paso autorizado es diseñar la auditoría de donantes, parentesco con PC-Relate sin KING y canal raro; todavía no se autoriza simulación, Gnomix ni entrenamiento.
+
+## Resultado de la corrida
+
+La corrida final `m27c-targeted-gvcf-chr22-20260814b` consultó las 110.074 posiciones de chr22 en los 128 gVCF, sin descargar archivos completos. Antes hice un control de recursos con ocho gVCF: uno, cuatro y ocho lectores tardaron 572,4, 166,4 y 158,9 segundos, respectivamente. Elegí cuatro lectores porque quedó a menos de 5% del mejor tiempo usando la mitad de los vCPU. La corrida completa tardó 79,8 minutos. Fue más lenta que la proyección inicial de 44 minutos porque las primeras ocho muestras ordenadas por nombre no representaban bien la distribución de tamaños y tiempos de todos los gVCF. En una corrida parecida, el control deberá tomar archivos pequeños, medianos y grandes, no simplemente los primeros de la lista.
+
+El control de identidad pasó en las 128 muestras. Cada gVCF compartió entre 43.004 y 43.025 genotipos con el scaffold y la concordancia de dosis estuvo entre 0,9911 y 0,99995, por encima del mínimo preregistrado de 0,99. Esto confirma que se consultaron las muestras esperadas y que la codificación de genotipos coincide; no demuestra todavía que sean donantes parentales adecuados.
+
+La cobertura estructural fue completa en las posiciones consultadas: no hubo sitios fuera de bloques o registros ni genotipos ausentes. De las 14.089.472 combinaciones muestra×marcador, 12.187.287 provinieron de bloques homocigotos de referencia, 1.901.531 de registros exactos de variante, 456 tuvieron alelos incompatibles y 198 correspondieron a otra ALT pero eran homocigotas para REF. Esta separación es importante porque permite distinguir una posición realmente evaluada de una ausencia en un VCF que solo guarda variantes.
+
+Con la política principal —profundidad efectiva ≥10, GQ≥20 y al menos 122 de 128 muestras evaluables—, 108.274 marcadores (98,36%) pasaron calidad. Después de exigir además fase respaldada para todos los heterocigotos de alta calidad, quedaron 92.790 marcadores listos, equivalentes a 84,30% del modelo. Aquí “listo” significa utilizable para construir la entrada candidata; no significa que el marcador sea informativo para ancestría ni que el panel parental esté validado. Los homocigotos aportaron 13.081.813 llamadas con fase trivial, 668.867 heterocigotos tuvieron fase respaldada y 251.904 heterocigotos no pudieron respaldarse con el scaffold. Por eso la pérdida principal aparece al exigir fase, no por falta de cobertura.
+
+### Sensibilidad a los filtros
+
+| Política | Marcadores listos | Fracción | ¿Supera 80%? |
+|---|---:|---:|:---:|
+| Principal: DP≥10, GQ≥20, call rate≥95% | 92.790 | 84,30% | Sí |
+| DP≥8 | 93.391 | 84,84% | Sí |
+| DP≥15 | 87.855 | 79,81% | No |
+| GQ≥10 | 92.954 | 84,45% | Sí |
+| GQ≥30 | 92.142 | 83,71% | Sí |
+| Call rate≥90% | 93.754 | 85,17% | Sí |
+| Call rate≥99% | 81.595 | 74,13% | No |
+| Call rate=100% | 60.810 | 55,24% | No |
+
+El resultado principal pasa, pero no es robusto a todos los valores razonables: DP≥15 queda apenas 205 marcadores por debajo del mínimo de 88.060, mientras que exigir 127 o 128 muestras por posición reduce bastante la fracción. No voy a escoger el filtro que más convenga después de ver estas cifras. Mantengo la política preregistrada como principal y clasifico el resultado como `PASS_THRESHOLD_SENSITIVE`, es decir, factible pero sensible al corte.
+
+El 84,30% global tampoco está repartido de manera uniforme. El modelo tiene 370 ventanas reales; 24,86% de ellas queda por debajo de 80% de marcadores listos y el mayor hueco sin un marcador listo alcanza 772.792 bp, equivalentes a 2,1845 cM. Esto no invalida la auditoría, pero obliga a conservar el diagnóstico por ventana: para detectar bordes de ancestría local importa dónde están los huecos, no solo cuántos marcadores sobreviven en todo el cromosoma.
+
+Entre los 78 donantes congelados del baseline, 79.770 marcadores mostraron alguna diferencia de frecuencia observada entre AFR, EUR y NAM; 64.378 coincidieron además con el conjunto listo. Esta etiqueta solo significa que la mayor y la menor frecuencia observadas no fueron idénticas. No es una prueba estadística, no impone un tamaño mínimo de diferencia y no constituye validación biológica independiente.
+
+## Corrección del control de encabezados
+
+La salida completa marcó inicialmente C0 como `FAIL`, aunque C1–C3 pasaron. La causa fue un error del auditor: buscaba líneas que empezaran por `chr22`, por lo que un contig alternativo como `chr22_KI…` podía sobrescribir el contig canónico durante la lectura del encabezado. Corregí la comparación para aceptar únicamente el ID exacto `chr22`, añadí pruebas de regresión y ejecuté una auditoría de encabezados sobre el mismo manifiesto de 128 gVCF. Los 128 contienen `chr22` con longitud 50.818.468, una sola muestra y todos los campos requeridos.
+
+La reconciliación conserva intactos C1–C3 de la corrida completa y sustituye solo C0 con esa comprobación dirigida. Los hashes del resumen, el contrato de entrada y el manifiesto de gVCF quedaron incluidos en el recibo, de modo que no se están mezclando corridas ni muestras. El resultado reconciliado deja C0–C3 en `PASS`, pero mantiene explícitamente `final_donor_panel_certified=false`.
+
+## Interpretación y siguiente paso permitido
+
+M27C resuelve la duda técnica que dejó M27B: los 128 gVCF sí permiten recuperar más del 80% de las posiciones necesarias bajo la política principal. No prueba que NAMBR sea una población indígena parental pura, que los individuos sean independientes, que cada marcador distinga ancestrías ni que las variantes raras mejoren LAI.
+
+El siguiente paso es pequeño y separado: auditar el conjunto real de candidatos, construir PCs de ancestría que no estén dominados por familias, ejecutar PC-Relate sin KING y comprobar disjunción con el baseline. Después se recalcularán la fracción global, la fase y los huecos usando solo los donantes finales. Si ese panel cae por debajo de 80%, no queda bien separado o no permite estimar parentesco sin circularidad, el piloto se detiene. Hasta pasar esos controles siguen bloqueados Gnomix, la simulación de mosaicos, el entrenamiento y TEST.
+
+La secuencia completa —control de recursos, intento fallido corto, corrida final y auditoría de encabezados— se mantiene por debajo del techo autorizado de US$2. El costo exacto depende de la recuperación Coldline y aparecerá después en facturación; con los tiempos y volúmenes observados, la estimación razonable es aproximadamente US$0,7–1,2.
