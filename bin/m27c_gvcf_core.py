@@ -217,7 +217,7 @@ def parse_header_contract(header: str) -> dict[str, object]:
             source = line.split("=", 1)[1]
         elif line.startswith("##reference="):
             reference = line.split("=", 1)[1]
-        elif line.startswith("##contig=<ID=chr22"):
+        elif re.match(r"^##contig=<ID=chr22(?:,|>)", line):
             match = re.search(r"(?:length|Length)=([0-9]+)", line)
             contig_length = int(match.group(1)) if match else None
         elif line.startswith("##FORMAT=<ID="):

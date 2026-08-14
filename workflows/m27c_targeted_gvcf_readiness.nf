@@ -3,6 +3,7 @@ nextflow.enable.dsl=2
 include {
     WRITE_TARGETED_GVCF_RUN_PROVENANCE;
     BENCHMARK_TARGETED_GVCF_ACCESS;
+    AUDIT_TARGETED_GVCF_HEADERS;
     AUDIT_TARGETED_GVCF_READINESS
 } from '../modules/27C_TARGETED_GVCF_READINESS'
 
@@ -27,6 +28,7 @@ workflow {
     def corePy = file("${repoDir}/bin/m27c_gvcf_core.py", checkIfExists: true)
     def bridgePy = file("${repoDir}/bin/audit_rare_scaffold_bridge.py", checkIfExists: true)
     def benchmarkPy = file("${repoDir}/bin/benchmark_targeted_gvcf_access.py", checkIfExists: true)
+    def headerAuditPy = file("${repoDir}/bin/audit_gvcf_header_contract.py", checkIfExists: true)
     def manifestPy = file("${repoDir}/bin/write_stage_manifest.py", checkIfExists: true)
 
     def gitCommit = System.getenv('DNABR_GIT_COMMIT') ?: 'unknown'
@@ -52,6 +54,7 @@ workflow {
         reference_fasta  : params.targeted_gvcf_reference_fasta,
         readers          : params.targeted_gvcf_readers,
         resource_screen  : params.targeted_gvcf_smoke_only,
+        header_only      : params.targeted_gvcf_header_only,
     ]
     def runProvenanceB64 = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(runProvenance))
         .bytes.encodeBase64().toString()
@@ -66,6 +69,14 @@ workflow {
             smokeIndexes,
             channel.value(gnomixReference),
             channel.value(benchmarkPy),
+        )
+    } else if( params.targeted_gvcf_header_only ) {
+        def inputManifest = file(params.targeted_gvcf_input_manifest, checkIfExists: true)
+        AUDIT_TARGETED_GVCF_HEADERS(
+            gvcfs,
+            channel.value(inputManifest),
+            channel.value(headerAuditPy),
+            channel.value(corePy),
         )
     } else {
         def inputManifest = file(params.targeted_gvcf_input_manifest, checkIfExists: true)

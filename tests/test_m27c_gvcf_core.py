@@ -93,6 +93,7 @@ class TestM27CGvcfCore(unittest.TestCase):
                 "##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"DP\">",
                 "##FORMAT=<ID=GQ,Number=1,Type=Integer,Description=\"GQ\">",
                 "##FORMAT=<ID=MIN_DP,Number=1,Type=Integer,Description=\"MIN_DP\">",
+                "##contig=<ID=chr22_KI270731v1_random,length=150754>",
                 "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1",
             ]
         )

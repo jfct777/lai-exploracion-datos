@@ -50,6 +50,34 @@ process BENCHMARK_TARGETED_GVCF_ACCESS {
     """
 }
 
+process AUDIT_TARGETED_GVCF_HEADERS {
+    tag "chr22_targeted_gvcf_header_contract"
+    publishDir "${params.targeted_gvcf_results_dir}/header_audit", mode: 'copy', overwrite: false
+    cpus 2
+    memory '8 GB'
+    time '20m'
+
+    input:
+    path gvcfs
+    path gcs_input_manifest
+    path header_audit_py
+    path core_py
+
+    output:
+    path "m27c_header_contract.json", emit: summary
+
+    script:
+    """
+    set -euo pipefail
+    python3 ${header_audit_py} \
+      --gvcfs ${gvcfs.join(' ')} \
+      --input-manifest ${gcs_input_manifest} \
+      --expected-samples ${params.targeted_gvcf_expected_samples} \
+      --readers ${params.targeted_gvcf_readers} \
+      --out m27c_header_contract.json
+    """
+}
+
 process AUDIT_TARGETED_GVCF_READINESS {
     tag "chr22_targeted_gvcf_readiness"
     publishDir "${params.targeted_gvcf_results_dir}/audit", mode: 'copy', overwrite: false
