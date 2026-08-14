@@ -74,6 +74,7 @@ class TestM27DNoKing(unittest.TestCase):
             root / "bin" / "m27d_prepare_genotype_resources.R",
             root / "bin" / "m27d_resource_smoke.R",
             root / "bin" / "m27d_prepare_sample_strata.py",
+            root / "bin" / "verify_m27d_prepared_inputs.py",
         ]
         forbidden = ("snpgdsIBDKING", "pcair(", "kingToMatrix")
         for path in paths:
@@ -87,6 +88,9 @@ class TestM27DNoKing(unittest.TestCase):
         workflow = (root / "workflows" / "m27d_donor_kinship_audit.nf").read_text(
             encoding="utf-8"
         )
+        module = (root / "modules" / "27D_DONOR_KINSHIP_AUDIT.nf").read_text(
+            encoding="utf-8"
+        )
         digest = "3a4661e41f7e397e986472bb8039671f85b1e8f7b86fc26af83a9837ef83d954"
         self.assertIn("resourceLabels = [team: 'frank']", cloud)
         self.assertIn(f"dnabr-qc@sha256:{digest}", cloud)
@@ -94,6 +98,8 @@ class TestM27DNoKing(unittest.TestCase):
         self.assertIn("PREPARE_DONOR_KINSHIP_RESOURCES", workflow)
         self.assertIn("phase in ['prepare', 'benchmark']", workflow)
         self.assertIn("M27D benchmark is missing prepared inputs", workflow)
+        self.assertIn("donor_kinship_preparation_manifest_sha256", workflow)
+        self.assertIn("m27d_prepared_input_verification.json", module)
         self.assertIn("time = '75m'", cloud)
 
     def test_batch_style_script_staging_resolves_helper_from_workdir(self):

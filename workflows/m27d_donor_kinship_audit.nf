@@ -24,6 +24,7 @@ workflow {
         checkIfExists: true,
     )
     def pcrelateSmokeR = file("${repoDir}/bin/m27d_resource_smoke.R", checkIfExists: true)
+    def verifyPreparedPy = file("${repoDir}/bin/verify_m27d_prepared_inputs.py", checkIfExists: true)
     def manifestPy = file("${repoDir}/bin/write_stage_manifest.py", checkIfExists: true)
 
     def gitCommit = System.getenv('DNABR_GIT_COMMIT') ?: 'unknown'
@@ -90,6 +91,7 @@ workflow {
             donor_kinship_prepared_strict_rds: params.donor_kinship_prepared_strict_rds,
             donor_kinship_prepared_strata: params.donor_kinship_prepared_strata,
             donor_kinship_preparation_manifest: params.donor_kinship_preparation_manifest,
+            donor_kinship_preparation_manifest_sha256: params.donor_kinship_preparation_manifest_sha256,
         ]
         def missingPrepared = requiredPreparedParams.findAll { key, value -> !value }.keySet()
         if( missingPrepared ) {
@@ -101,8 +103,10 @@ workflow {
             channel.value(file(params.donor_kinship_prepared_strict_rds, checkIfExists: true)),
             channel.value(file(params.donor_kinship_prepared_strata, checkIfExists: true)),
             channel.value(file(params.donor_kinship_preparation_manifest, checkIfExists: true)),
+            channel.value(params.donor_kinship_preparation_manifest_sha256),
             channel.value(preregistration),
             channel.value(pcrelateSmokeR),
+            channel.value(verifyPreparedPy),
             channel.value(manifestPy),
             channel.value(provenanceB64),
         )

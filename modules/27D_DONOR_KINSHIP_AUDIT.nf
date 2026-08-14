@@ -110,19 +110,31 @@ process BENCHMARK_DONOR_KINSHIP_RESOURCES {
     path strict_rds
     path metadata_strata
     path preparation_manifest
+    val preparation_manifest_sha256
     path preregistration
     path pcrelate_smoke_r
+    path verify_prepared_py
     path manifest_py
     val provenance_b64
 
     output:
     path "m27d_resource_smoke.json", emit: summary
     path "m27d_resource_smoke.tsv", emit: benchmark
+    path "m27d_prepared_input_verification.json", emit: input_verification
     path "m27d_resource_smoke.manifest.json", emit: manifest
 
     script:
     """
     set -euo pipefail
+
+    python3 ${verify_prepared_py} \
+      --manifest ${preparation_manifest} \
+      --expected-manifest-sha256 '${preparation_manifest_sha256}' \
+      --gds ${prepared_gds} \
+      --anchor-rds ${anchor_rds} \
+      --strict-rds ${strict_rds} \
+      --metadata-strata ${metadata_strata} \
+      --out m27d_prepared_input_verification.json
 
     Rscript ${pcrelate_smoke_r} \
       --gds ${prepared_gds} \
@@ -142,6 +154,8 @@ process BENCHMARK_DONOR_KINSHIP_RESOURCES {
       --input ${preparation_manifest} \
       --input ${preregistration} \
       --input ${pcrelate_smoke_r} \
+      --input ${verify_prepared_py} \
+      --output m27d_prepared_input_verification.json \
       --output m27d_resource_smoke.json \
       --output m27d_resource_smoke.tsv \
       --provenance-b64 ${provenance_b64} \
