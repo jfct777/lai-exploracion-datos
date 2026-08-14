@@ -197,6 +197,23 @@ Superar la primera pregunta solo dirá que el baseline puede ejecutarse. No demo
 que las variantes raras mejoren LAI. Antes de entrenar siguen pendientes los parentales, la disjunción,
 una ruta de PC-Relate que no ejecute KING y la simulación con verdad por segmento.
 
+## Estado después de M27C y del benchmark M27D
+
+M27C comprobó que los gVCF permiten recuperar 92.790/110.074 marcadores listos bajo la política
+principal, es decir, 84,30%. Como el resultado cae a 79,81% con DP≥15 y a 74,13% con call rate≥99%,
+esto es factibilidad técnica sensible al filtro, no certificación de un panel parental.
+
+M27D ya cerró la preparación de SNP comunes para auditar parentesco: 3.298.309 marcadores quedaron
+después de calidad y exclusión de LD extensa, y las dos podas retuvieron 220.742 y 141.249. El benchmark
+de PC-Relate confirmó los pares esperados, no ejecutó KING y eligió 4 hilos con 32 GiB por tarea. Esta
+elección solo fija infraestructura; todavía no existen resultados de parentesco ni una lista final de
+donantes.
+
+Antes de ejecutar la auditoría completa faltan resolver 35 correspondencias ambiguas y 17 sin match en
+la metadata, implementar las dos pasadas de PC-Relate y probar la selección determinista. La primera
+pasada usará únicamente 8 PCs y `r²=0,20`; el conjunto independiente derivado de ella se mantendrá fijo
+en las cuatro configuraciones finales. Solo después se podrá recalcular M27C en los donantes retenidos.
+
 ## Regla para parámetros e hiperparámetros
 
 No se fijará un valor sensible por costumbre o intuición. Si existe un requisito externo que mide

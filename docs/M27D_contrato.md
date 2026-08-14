@@ -1,8 +1,8 @@
 # M27D: parentesco y disjunción de donantes sin KING
 
-**Estado:** contrato científico fijado antes del piloto técnico del 14 de agosto de 2026 y enmienda
-operativa registrada después del primer timeout. Los valores que pueden cambiar la conclusión
-científica no se elegirán después de mirar qué configuración conserva más donantes.
+**Estado:** preparación y benchmark técnico cerrados el 14 de agosto de 2026. La auditoría de
+parentesco completa todavía no está implementada ni autorizada. Los valores que pueden cambiar la
+conclusión científica no se elegirán después de mirar qué configuración conserva más donantes.
 
 ## Para qué sirve
 
@@ -81,6 +81,11 @@ GENESIS.
    los mismos loadings. Así los familiares no cambian los ejes usados para retirar ancestría.
 5. Se ejecuta la pasada final de PC-Relate con ese `training.set`, `scale="overall"`, corrección de
    muestra pequeña y el límite interno de MAF 0,01 de GENESIS.
+
+Para evitar una ambigüedad operativa, la primera pasada corresponde únicamente a la configuración
+principal de 8 PCs y `r²=0,20`. De ella se obtiene un solo `training.set`, que se mantiene fijo en las
+cuatro configuraciones finales. Así, las sensibilidades cambian solo el número de PCs o la poda LD; no
+cambian también el conjunto usado para ajustar PC-Relate.
 
 La primera y la segunda pasada deben conservarse completas. Si cambian los pares relevantes o la
 composición de candidatos, no se esconderá la discrepancia: se marcará como inestabilidad del diseño.
@@ -226,3 +231,42 @@ Esta enmienda no modifica MAF, call rate, ventana física, `r²`, número de PCs
 panel de muestras ni regla conservadora. Tampoco habilita la corrida completa. Primero debe terminar la
 preparación con hashes; después se revisan memoria, costo y limpieza de la nube antes de lanzar el
 benchmark.
+
+## Resultado cerrado de la preparación y del benchmark
+
+La preparación final `m27d-marker-preparation-20260814c` terminó correctamente y ya no necesita
+repetirse. El GDS contiene 3.685 muestras y 3.558.958 SNP bialélicos autosómicos. Después de exigir
+MAF≥5% y call rate≥98% quedaron 3.331.146; después de excluir además las regiones de LD extensa
+quedaron 3.298.309. La poda `r²=0,20` retuvo 220.742 marcadores y la poda `r²=0,10`, 141.249. Los
+archivos persistentes y el manifiesto fueron verificados por SHA-256.
+
+El benchmark `m27d-pcrelate-smoke-20260814d` reutilizó esos archivos y pasó primero un control de
+integridad que recalculó sus hashes. Con 3.685 muestras y 10.000 SNP, los tiempos combinados de PCA y
+PC-Relate fueron:
+
+| Hilos | Tiempo | Diferencia frente al más rápido |
+|---:|---:|---:|
+| 4 | 189,397 s | 3,95% |
+| 8 | 186,599 s | 2,41% |
+| 16 | 182,203 s | referencia |
+
+Las tres corridas produjeron exactamente 6.787.770 pares. El control adicional de 1.000 muestras y
+50.000 SNP, ejecutado con 4 hilos, produjo 499.500 pares en 34,894 s. El proceso completo tuvo un pico
+de 11,2 GB de RAM y terminó sin reintentos. No guardó pares individuales, no ejecutó KING y no produjo
+una conclusión de parentesco.
+
+De acuerdo con la regla fijada antes de la corrida, se eligen **4 hilos**: quedan muy por debajo del
+margen de 20% y evitan pagar por 8 o 16 hilos que casi no reducen el tiempo. Se reservan **32 GiB por
+tarea PC-Relate**. Una máquina de 16 GiB quedaría alrededor del límite de 70% con el pico ya observado
+y daría poco margen para la carga completa; 64 GiB no se justifican con estos datos.
+
+La extrapolación desde el brazo con todas las muestras sugiere unos 66 minutos por pasada con 220.742
+SNP y unos 42 minutos con 141.249 SNP si el tiempo crece aproximadamente de forma lineal con los
+marcadores. Es una estimación de capacidad, no un resultado garantizado. El primer `pass0` completo
+será el punto de control real: se detendrá si supera 90 minutos, usa 22,4 GiB o más, no produce
+6.787.770 pares o eleva la proyección total por encima de 6 horas o US$10.
+
+Antes de ese `pass0` faltan tres tareas: resolver las 35 correspondencias ambiguas y 17 ausentes de la
+metadata; implementar la ruta productiva de Nextflow con pruebas sintéticas; y revisar un DAG que
+contenga solo M27D. La auditoría completa necesitará una autorización explícita después de mostrar su
+comando, costo actualizado y controles.
