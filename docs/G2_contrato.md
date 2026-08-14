@@ -166,9 +166,9 @@ También se verificó que los 128 NatWGS aparecen en un scaffold común de chr22
 es un activo separado. La presencia de una muestra en ambos archivos no demuestra que sus variantes raras
 estén conservadas ni faseadas en el scaffold.
 
-## Siguiente paso permitido: M27B
+## Resultado de M27B y siguiente paso permitido
 
-M27B es una auditoría read-only del puente entre:
+M27B fue una auditoría read-only del puente entre:
 
 - WGS NatWGS chr22 crudo:
   `gs://projects-usp/nambr/chr/joint_germline_recalibrated.normalized.chr22.vcf.gz`;
@@ -177,13 +177,44 @@ M27B es una auditoría read-only del puente entre:
 - referencia del baseline:
   `gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/vcf_fixed/dnabr.refpop.fixed.chr22.vcf.gz`.
 
-Debe medir identidad de muestras, compatibilidad de build y alelos, solape exacto, soporte de alelos
-menores raros y qué parte de ese soporte tiene un puente de fase verificable. Solo emitirá resúmenes
-agregados y hashes; no simulará, no ejecutará LAI, no entrenará y no abrirá TEST.
+La corrida final resolvió 128/128 identidades, encontró 14.058 sitios raros de alelo menor en chr22,
+968 sitios exactos en el scaffold y 954 con puente directo de fase. B4 quedó `FAIL` bajo su definición
+histórica: el VCF conjunto, que contiene únicamente posiciones variantes, expuso 34.856 de los 110.074
+registros del modelo congelado. Ese resultado y sus artefactos no se modifican.
 
-Si M27B no encuentra un canal raro compatible, se cierra esta ruta con los activos actuales. Si lo
-encuentra, el paso siguiente no es entrenar: primero se aplica PC-Relate al conjunto candidato, se define
-el panel parental final y se vuelve a revisar el diseño de simulación.
+La ausencia de una posición en ese VCF no permite distinguir un genotipo 0/0 de una posición no
+llamable. Por eso M27C será una auditoría nueva, no una reinterpretación de M27B. Consultará mediante
+índice las 110.074 posiciones en los gVCF individuales y separará dos preguntas:
+
+1. **Genotipabilidad:** cuántas posiciones tienen un genotipo respaldado por los bloques de referencia
+   y los criterios de calidad declarados. El 80 % de Gnomix sigue siendo un requisito de posiciones,
+   no un umbral ponderado por frecuencia.
+2. **Información ancestral:** usando los donantes AFR/EUR/NAM del baseline, qué diferenciación conserva
+   la intersección genotipable y cómo se distribuye a lo largo del mapa genético. Esta parte es
+   descriptiva; no sustituye la prueba final con verdad de ancestría por posición.
+
+Superar la primera pregunta solo dirá que el baseline puede ejecutarse. No demostrará que sea útil ni
+que las variantes raras mejoren LAI. Antes de entrenar siguen pendientes los parentales, la disjunción,
+una ruta de PC-Relate que no ejecute KING y la simulación con verdad por segmento.
+
+## Regla para parámetros e hiperparámetros
+
+No se fijará un valor sensible por costumbre o intuición. Si existe un requisito externo que mide
+exactamente la misma cantidad —por ejemplo, el 80 % de posiciones del modelo indicado por Gnomix— se
+conserva como ancla y no se reajusta después de observar el resultado. Cuando no exista un valor
+directamente transferible, se hará lo siguiente antes de abrir TEST:
+
+- definir un rango razonable a partir de literatura, propiedades de DNABR y resultados previos;
+- declarar qué valor es el ancla y cuáles son sensibilidades;
+- evaluar el rango únicamente en TRAIN/VALIDATION, respetando paquetes de donantes o familias;
+- reportar estabilidad, incertidumbre y todas las configuraciones, no solo la mejor;
+- fijar de antemano la regla de selección y el resultado que detiene la línea.
+
+El barrido debe ser proporcional al riesgo. Una constante técnica no necesita una búsqueda artificial;
+una escala de agregación, penalización o hiperparámetro capaz de cambiar la conclusión sí necesita una
+sensibilidad o búsqueda controlada. Las ventanas de 250 kb, 500 kb y 1 Mb de M25 no se heredan como
+valores de LAI: si M27C permite continuar, la escala local se evaluará con un rango definido sobre
+TRAIN/VALIDATION y una resolución coherente con el mapa genético.
 
 ## Alcance respecto de M23 y M25
 
