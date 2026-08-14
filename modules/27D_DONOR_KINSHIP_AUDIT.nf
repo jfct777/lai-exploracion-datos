@@ -55,7 +55,7 @@ process BENCHMARK_DONOR_KINSHIP_RESOURCES {
     set -euo pipefail
     mkdir -p private
 
-    python3 ${sample_strata_py} \
+    PYTHONPATH=. python3 ${sample_strata_py} \
       --panel-vcf ${panel_vcfs[0]} \
       --metadata ${metadata} \
       --private-out m27d_sample_strata.private.tsv \

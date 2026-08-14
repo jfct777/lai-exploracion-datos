@@ -1,5 +1,7 @@
 import csv
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -88,6 +90,56 @@ class TestM27DNoKing(unittest.TestCase):
         self.assertIn("resourceLabels = [team: 'frank']", cloud)
         self.assertIn(f"dnabr-qc@sha256:{digest}", cloud)
         self.assertIn("full donor audit is not implemented or authorized", workflow)
+
+    def test_batch_style_script_staging_resolves_helper_from_workdir(self):
+        root = Path(__file__).resolve().parents[1]
+        module = (root / "modules" / "27D_DONOR_KINSHIP_AUDIT.nf").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("PYTHONPATH=. python3 ${sample_strata_py}", module)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            script_dir = temp_root / "batch-script"
+            work_dir = temp_root / "work"
+            script_dir.mkdir()
+            work_dir.mkdir()
+            script = script_dir / "m27d_prepare_sample_strata.py"
+            script.write_bytes((root / "bin" / script.name).read_bytes())
+            helper = work_dir / "audit_rare_scaffold_bridge.py"
+            helper.write_bytes((root / "bin" / helper.name).read_bytes())
+            (work_dir / "panel.vcf").write_text(
+                "##fileformat=VCFv4.2\n"
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n",
+                encoding="utf-8",
+            )
+            (work_dir / "metadata.tsv").write_text(
+                "IID\tSample_ID(Aliases)\tIllumina_ID\toriginal_IID\tSource\tAncestry\tPopulation\tCountry\n"
+                "S1\tS1\tS1\tS1\tNatWGS\tNAM\tP1\tBrazil\n",
+                encoding="utf-8",
+            )
+            environment = os.environ.copy()
+            environment["PYTHONPATH"] = "."
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--panel-vcf",
+                    "panel.vcf",
+                    "--metadata",
+                    "metadata.tsv",
+                    "--private-out",
+                    "private.tsv",
+                    "--summary-out",
+                    "summary.json",
+                ],
+                cwd=work_dir,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
 
 
 if __name__ == "__main__":
