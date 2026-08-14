@@ -22,90 +22,41 @@ split_csv <- function(value) {
   parts[nzchar(parts)]
 }
 
-panel_vcfs <- split_csv(value_after("panel-vcfs"))
+gds_path <- value_after("gds")
+anchor_rds <- value_after("anchor-rds")
+strict_rds <- value_after("strict-rds")
 metadata_strata <- value_after("metadata-strata")
-exclude_bed <- value_after("exclude-bed")
 preregistration <- value_after("preregistration")
 outdir <- value_after("outdir", ".")
 thread_grid <- as.integer(split_csv(value_after("thread-grid", "4,8,16")))
 
-if (length(panel_vcfs) != 22L) stop("Expected 22 autosomal panel VCFs; found ", length(panel_vcfs))
-if (any(!file.exists(panel_vcfs))) stop("At least one panel VCF is missing")
+required_files <- c(gds_path, anchor_rds, strict_rds, metadata_strata, preregistration)
+if (any(is.na(required_files)) || any(!file.exists(required_files))) stop("At least one prepared input is missing")
 if (any(is.na(thread_grid)) || any(thread_grid < 1L)) stop("Invalid thread grid")
+if (anyDuplicated(thread_grid)) stop("Thread grid contains duplicates")
 dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
 
 contract <- fromJSON(preregistration, simplifyVector = FALSE)
 if (!identical(contract$stage, "M27D_DONOR_KINSHIP_AUDIT")) stop("Unexpected preregistration stage")
 if (isTRUE(contract$pcrelate$king_allowed)) stop("M27D forbids KING")
-
-gds_path <- file.path(outdir, "m27d_official_panel_autosomes.gds")
-started <- Sys.time()
-snpgdsVCF2GDS(
-  panel_vcfs,
-  gds_path,
-  method = "biallelic.only",
-  snpfirstdim = FALSE,
-  ignore.chr.prefix = "chr",
-  verbose = TRUE
-)
-conversion_seconds <- as.numeric(difftime(Sys.time(), started, units = "secs"))
+expected_grid <- sort(as.integer(unlist(contract$resource_smoke$thread_screen)))
+if (!identical(sort(thread_grid), expected_grid)) stop("Thread grid differs from preregistration")
 
 gds <- snpgdsOpen(gds_path)
 sample_ids <- read.gdsn(index.gdsn(gds, "sample.id"))
 snp_ids_all <- read.gdsn(index.gdsn(gds, "snp.id"))
 snp_chr_all <- read.gdsn(index.gdsn(gds, "snp.chromosome"))
-snp_pos_all <- read.gdsn(index.gdsn(gds, "snp.position"))
-
 expected_samples <- as.integer(contract$scope$official_panel_samples_expected)
 if (length(sample_ids) != expected_samples) {
   stop("Panel sample count mismatch: expected ", expected_samples, ", observed ", length(sample_ids))
 }
 
-qc_ids <- snpgdsSelectSNP(
-  gds,
-  autosome.only = TRUE,
-  remove.monosnp = TRUE,
-  maf = as.numeric(contract$marker_contract$global_maf_min),
-  missing.rate = 1 - as.numeric(contract$marker_contract$variant_call_rate_min),
-  verbose = TRUE
-)
-
-bed <- read.delim(exclude_bed, header = FALSE, comment.char = "#", stringsAsFactors = FALSE)
-if (ncol(bed) < 3L) stop("Long-range LD BED must have at least three columns")
-bed_chr <- suppressWarnings(as.integer(sub("^chr", "", bed[[1]], ignore.case = TRUE)))
-in_long_ld <- rep(FALSE, length(snp_ids_all))
-for (row in seq_len(nrow(bed))) {
-  if (is.na(bed_chr[row])) next
-  in_long_ld <- in_long_ld |
-    (snp_chr_all == bed_chr[row] & snp_pos_all > bed[[2]][row] & snp_pos_all <= bed[[3]][row])
+anchor_ids <- readRDS(anchor_rds)
+strict_ids <- readRDS(strict_rds)
+if (length(anchor_ids) == 0L || length(strict_ids) == 0L) stop("Prepared LD sets are empty")
+if (!all(anchor_ids %in% snp_ids_all) || !all(strict_ids %in% snp_ids_all)) {
+  stop("Prepared LD set contains SNP IDs absent from GDS")
 }
-qc_ids <- qc_ids[!qc_ids %in% snp_ids_all[in_long_ld]]
-if (length(qc_ids) == 0L) stop("No SNPs remain after common-marker QC")
-
-prune_ids <- function(r2_max) {
-  pruned <- snpgdsLDpruning(
-    gds,
-    sample.id = sample_ids,
-    snp.id = qc_ids,
-    autosome.only = TRUE,
-    remove.monosnp = TRUE,
-    maf = NaN,
-    missing.rate = NaN,
-    method = "corr",
-    slide.max.bp = as.integer(contract$marker_contract$ld_window_bp),
-    ld.threshold = sqrt(r2_max),
-    start.pos = "first",
-    num.thread = max(thread_grid),
-    verbose = TRUE
-  )
-  unname(unlist(pruned, use.names = FALSE))
-}
-
-anchor_ids <- prune_ids(0.20)
-strict_ids <- prune_ids(0.10)
-saveRDS(anchor_ids, file.path(outdir, "m27d_ld_pruned_anchor_snp_ids.rds"))
-saveRDS(strict_ids, file.path(outdir, "m27d_ld_pruned_strict_snp_ids.rds"))
-
 snp_index <- match(anchor_ids, snp_ids_all)
 anchor_chr <- snp_chr_all[snp_index]
 
@@ -143,6 +94,8 @@ arm_marker_snps <- even_snps(
 )
 
 strata <- read.delim(metadata_strata, stringsAsFactors = FALSE, check.names = FALSE)
+required_strata_columns <- c("sample_id", "match_status", "Source", "Ancestry")
+if (!all(required_strata_columns %in% colnames(strata))) stop("Prepared strata table is incomplete")
 strata <- strata[strata$sample_id %in% sample_ids, , drop = FALSE]
 strata$stratum <- paste(strata$Source, strata$Ancestry, sep = "|")
 
@@ -173,6 +126,11 @@ arm_marker_samples <- stratified_samples(
 )
 snpgdsClose(gds)
 
+anchor_config <- Filter(function(config) identical(config$id, "anchor_pc8_r2_020"), contract$configurations)
+if (length(anchor_config) != 1L) stop("Missing unique anchor configuration")
+anchor_pcs <- as.integer(anchor_config[[1]]$n_pcs)
+max_pcs <- max(vapply(contract$configurations, function(config) as.integer(config$n_pcs), integer(1)))
+
 benchmark_run <- function(label, samples, snps, threads) {
   pca_gds <- snpgdsOpen(gds_path)
   pca_time <- system.time({
@@ -185,7 +143,7 @@ benchmark_run <- function(label, samples, snps, threads) {
       maf = NaN,
       missing.rate = NaN,
       num.thread = threads,
-      eigen.cnt = 12L,
+      eigen.cnt = max_pcs,
       algorithm = "randomized",
       verbose = FALSE
     )
@@ -200,19 +158,21 @@ benchmark_run <- function(label, samples, snps, threads) {
   pcrelate_time <- system.time({
     related <- pcrelate(
       geno_iter,
-      pcs = pcs[, seq_len(8L), drop = FALSE],
-      scale = "overall",
+      pcs = pcs[, seq_len(anchor_pcs), drop = FALSE],
+      scale = contract$pcrelate$scale,
       ibd.probs = TRUE,
       sample.include = samples,
       training.set = samples,
-      maf.thresh = 0.01,
-      maf.bound.method = "filter",
-      small.samp.correct = TRUE,
+      maf.thresh = as.numeric(contract$pcrelate$maf_thresh),
+      maf.bound.method = contract$pcrelate$maf_bound_method,
+      small.samp.correct = isTRUE(contract$pcrelate$small_sample_correction),
       BPPARAM = MulticoreParam(workers = threads, progressbar = FALSE),
       verbose = FALSE
     )
   })
   n_pairs <- nrow(related$kinBtwn)
+  expected_pairs <- length(samples) * (length(samples) - 1) / 2
+  if (n_pairs != expected_pairs) stop("Unexpected PC-Relate pair count")
   rm(related)
   close(geno_data)
   gc(verbose = FALSE)
@@ -229,16 +189,17 @@ benchmark_run <- function(label, samples, snps, threads) {
   )
 }
 
+started <- Sys.time()
 benchmarks <- do.call(
   rbind,
   lapply(thread_grid, function(threads) benchmark_run("full_n", sample_ids, arm_full_snps, threads))
 )
 fastest <- min(benchmarks$total_elapsed_seconds)
 eligible <- benchmarks[benchmarks$total_elapsed_seconds <= 1.20 * fastest, , drop = FALSE]
-selected_threads <- min(eligible$threads)
+candidate_threads <- min(eligible$threads)
 benchmarks <- rbind(
   benchmarks,
-  benchmark_run("marker_scaling", arm_marker_samples, arm_marker_snps, selected_threads)
+  benchmark_run("marker_scaling", arm_marker_samples, arm_marker_snps, candidate_threads)
 )
 
 write.table(
@@ -254,14 +215,12 @@ summary <- list(
   scientific_result = FALSE,
   king_executed = FALSE,
   official_panel_samples = length(sample_ids),
-  imported_biallelic_snps = length(snp_ids_all),
-  common_callable_snps_outside_long_ld = length(qc_ids),
   anchor_ld_pruned_snps = length(anchor_ids),
   strict_ld_pruned_snps = length(strict_ids),
-  conversion_seconds = conversion_seconds,
-  selected_threads = selected_threads,
+  candidate_threads_by_time = candidate_threads,
+  final_thread_selection_requires_peak_ram = TRUE,
   thread_selection_rule = contract$resource_smoke$selection_rule,
-  peak_ram_gate_requires_nextflow_trace = TRUE,
+  elapsed_seconds = as.numeric(difftime(Sys.time(), started, units = "secs")),
   benchmark_rows = lapply(seq_len(nrow(benchmarks)), function(i) as.list(benchmarks[i, ])),
   software = list(
     R = as.character(getRversion()),
@@ -273,15 +232,3 @@ summary <- list(
   sample_ids_emitted = FALSE
 )
 write_json(summary, file.path(outdir, "m27d_resource_smoke.json"), pretty = TRUE, auto_unbox = TRUE)
-
-marker_qc <- data.frame(
-  step = c("imported_biallelic", "common_callable_outside_long_ld", "anchor_r2_0.20", "strict_r2_0.10"),
-  n_snps = c(length(snp_ids_all), length(qc_ids), length(anchor_ids), length(strict_ids))
-)
-write.table(
-  marker_qc,
-  file.path(outdir, "m27d_marker_qc.tsv"),
-  sep = "\t",
-  quote = FALSE,
-  row.names = FALSE
-)

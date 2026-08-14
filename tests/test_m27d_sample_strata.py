@@ -71,6 +71,7 @@ class TestM27DNoKing(unittest.TestCase):
     def test_new_scientific_scripts_do_not_call_king_or_pcair(self):
         root = Path(__file__).resolve().parents[1]
         paths = [
+            root / "bin" / "m27d_prepare_genotype_resources.R",
             root / "bin" / "m27d_resource_smoke.R",
             root / "bin" / "m27d_prepare_sample_strata.py",
         ]
@@ -90,6 +91,10 @@ class TestM27DNoKing(unittest.TestCase):
         self.assertIn("resourceLabels = [team: 'frank']", cloud)
         self.assertIn(f"dnabr-qc@sha256:{digest}", cloud)
         self.assertIn("full donor audit is not implemented or authorized", workflow)
+        self.assertIn("PREPARE_DONOR_KINSHIP_RESOURCES", workflow)
+        self.assertIn("phase in ['prepare', 'benchmark']", workflow)
+        self.assertIn("M27D benchmark is missing prepared inputs", workflow)
+        self.assertIn("time = '75m'", cloud)
 
     def test_batch_style_script_staging_resolves_helper_from_workdir(self):
         root = Path(__file__).resolve().parents[1]

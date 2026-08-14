@@ -1,6 +1,6 @@
 {
   "stage": "M27D_DONOR_KINSHIP_AUDIT",
-  "status": "LOCKED_BEFORE_RESOURCE_SMOKE",
+  "status": "OPERATIONALLY_AMENDED_AFTER_TIMEOUT_BEFORE_RETRY",
   "scope": {
     "genome": "GRCh38 autosomes 1-22",
     "official_panel_samples_expected": 3685,
@@ -121,6 +121,7 @@
     "G6_m27c_recomputed_readiness": "primary ready-marker fraction >=0.80"
   },
   "resource_smoke": {
+    "architecture": "persistent marker preparation followed by reusable PC-Relate benchmark",
     "thread_screen": [4, 8, 16],
     "arm_full_n": {
       "max_samples": 3686,
@@ -134,13 +135,24 @@
       "threads": "selected from arm_full_n"
     },
     "selection_rule": "smallest thread count within 20 percent of fastest and peak RAM below 70 percent of request",
-    "max_cost_usd": 2.0,
-    "max_wall_hours": 1.0,
+    "preparation_max_wall_hours": 1.25,
+    "benchmark_max_wall_hours": 1.0,
+    "max_additional_cost_usd_after_timeout": 2.0,
+    "max_cumulative_m27d_attempt_cost_usd": 3.0,
     "full_run_reauthorization_cost_usd": 10.0,
     "full_run_reauthorization_wall_hours": 6.0,
     "batch_label": "team=frank",
     "cleanup": "no persistent Batch VM or disk after completion"
   },
+  "operational_amendments": [
+    {
+      "date": "2026-08-14",
+      "trigger": "m27d-resource-smoke-20260814b reached its one-hour limit after conversion and both LD-pruning passes but before PC-Relate",
+      "change": "split reusable marker preparation from the PC-Relate resource benchmark",
+      "scientific_parameters_changed": false,
+      "failed_run_marker_counts_are_preliminary": true
+    }
+  ],
   "required_outputs": [
     "input_contract.json",
     "marker_qc_by_chromosome.tsv",

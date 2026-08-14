@@ -87,6 +87,7 @@ def build(outdir: Path, base_preregistration: Path) -> None:
         "sampling": "synthetic integration fixture",
         "threads": "selected from arm_full_n",
     }
+    prereg["resource_smoke"]["thread_screen"] = [1, 2]
     (outdir / "prereg.json").write_text(
         json.dumps(prereg, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

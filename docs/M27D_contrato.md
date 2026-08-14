@@ -1,8 +1,8 @@
 # M27D: parentesco y disjunción de donantes sin KING
 
-**Estado:** contrato fijado antes del piloto técnico del 14 de agosto de 2026. Los valores que pueden
-cambiar la conclusión científica no se elegirán después de mirar qué configuración conserva más
-donantes.
+**Estado:** contrato científico fijado antes del piloto técnico del 14 de agosto de 2026 y enmienda
+operativa registrada después del primer timeout. Los valores que pueden cambiar la conclusión
+científica no se elegirán después de mirar qué configuración conserva más donantes.
 
 ## Para qué sirve
 
@@ -192,8 +192,37 @@ hilos elegidos en el primer brazo. Ninguno de estos subconjuntos producirá una 
 Se elegirá el menor recurso que quede a menos de 20% del mejor tiempo y use menos de 70% de la RAM
 solicitada. Este ajuste decide infraestructura, no el resultado científico.
 
-Como los 4,53 GiB de entrada están en la misma región, no se espera costo de egreso. El smoke tendrá un
-techo de US$2 y una hora. La corrida completa no se lanzará si el smoke proyecta más de US$10 o seis
-horas sin nueva revisión. La cifra inicial razonable es US$1–5, pero seguirá siendo una estimación hasta
-medir PC-Relate con este panel. Si la paralelización reduce tiempo a costa de lecturas o máquinas
-duplicadas, se comparará costo total y no solo reloj.
+Como los 4,53 GiB de entrada están en la misma región, no se espera costo de egreso. El diseño inicial
+fijó un techo de US$2 y una hora para el smoke monolítico; la enmienda posterior se explica abajo. La
+corrida completa no se lanzará si el smoke proyecta más de US$10 o seis horas sin nueva revisión. La
+cifra inicial razonable es US$1–5, pero seguirá siendo una estimación hasta medir PC-Relate con este
+panel. Si la paralelización reduce tiempo a costa de lecturas o máquinas duplicadas, se comparará costo
+total y no solo reloj.
+
+## Enmienda operativa después del primer smoke
+
+La corrida `m27d-resource-smoke-20260814b` respetó el límite de una hora, pero terminó por timeout antes
+de empezar PC-Relate. El log muestra que sí completó la importación de 3.558.958 SNP bialélicos, el
+filtro común y las dos podas LD. En ese intento se observaron 220.742 SNP con `r²=0,20` y 141.249 con
+`r²=0,10`. Estos dos conteos son preliminares: como el proceso no terminó, los archivos y sus hashes no
+se publicaron y todavía no los considero resultados cerrados.
+
+El problema fue operativo. Conversión, poda y benchmark estaban dentro de una sola tarea, por lo que la
+preparación consumió el tiempo disponible antes de responder la pregunta de recursos de PC-Relate. No
+hubo falta de memoria registrada, no se ejecutó parentesco y no cambió ninguna decisión biológica.
+
+Para no repetir ese costo en cada configuración, la preparación pasa a ser un proceso persistente y
+auditable. Este proceso publicará el GDS, las dos listas de SNP podados, los conteos por filtro y un
+manifiesto SHA-256. Un segundo proceso reutilizará esos archivos para comparar 4, 8 y 16 hilos. La
+preparación tendrá hasta 75 minutos, que añade alrededor de 50% de margen al tiempo observado, y el
+benchmark conservará su límite de una hora. El presupuesto adicional conjunto será como máximo US$2 y
+el acumulado conservador de los intentos M27D no deberá superar US$3.
+
+Las dos fases se lanzan por separado. `prepare` no puede iniciar el benchmark; `benchmark` exige las
+rutas explícitas y ya revisadas del GDS, las dos listas podadas, la tabla privada de estratos y el
+manifiesto de preparación. Esta pausa evita que una salida incompleta avance automáticamente.
+
+Esta enmienda no modifica MAF, call rate, ventana física, `r²`, número de PCs, umbrales de parentesco,
+panel de muestras ni regla conservadora. Tampoco habilita la corrida completa. Primero debe terminar la
+preparación con hashes; después se revisan memoria, costo y limpieza de la nube antes de lanzar el
+benchmark.
