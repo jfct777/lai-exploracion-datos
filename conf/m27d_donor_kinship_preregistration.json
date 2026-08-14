@@ -1,0 +1,172 @@
+{
+  "stage": "M27D_DONOR_KINSHIP_AUDIT",
+  "status": "LOCKED_BEFORE_RESOURCE_SMOKE",
+  "scope": {
+    "genome": "GRCh38 autosomes 1-22",
+    "official_panel_samples_expected": 3685,
+    "baseline_samples_expected": 78,
+    "baseline_ancestry_counts_expected": {
+      "AFR": 26,
+      "EUR": 26,
+      "NAM": 26
+    },
+    "administrative_nam_candidates_expected_before_kinship": 173,
+    "allowed_actions": [
+      "input_qc",
+      "common_snp_selection",
+      "ld_pruning",
+      "pca",
+      "pcrelate_without_king",
+      "donor_disjointness_audit",
+      "resource_smoke"
+    ],
+    "forbidden_actions": [
+      "KING",
+      "Gnomix inference",
+      "mosaic simulation",
+      "model training",
+      "TEST access"
+    ]
+  },
+  "inputs": {
+    "official_panel_vcf_pattern": "gs://projects-usp/nam-diversity/shapeit/phased/natwgs.1000G.sgdp.hgdp.andamanese.hg38.<chr>.norm.PHASED.vcf.gz",
+    "metadata": "gs://projects-usp/nam-diversity/natwgs.1000G.sgdp.hgdp.hg38/metadata_complete_revised.txt",
+    "baseline_vcf_pattern": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/vcf_fixed/dnabr.refpop.fixed.chr<chr>.vcf.gz",
+    "long_range_ld_bed": "gs://projects-usp/dnaBr-lai/datalake/trusted/DNABR_QC/reference/exclude_regions_hg38/exclude_regions_hg38.bed",
+    "region": "us-central1",
+    "expected_total_input_bytes": 4856283849
+  },
+  "marker_contract": {
+    "variant_type": "biallelic_snp",
+    "autosomes_only": true,
+    "global_maf_min": 0.05,
+    "variant_call_rate_min": 0.98,
+    "exclude_long_range_ld": true,
+    "genotype_encoding": "unphased_dosage_0_1_2",
+    "require_exact_ref_alt_for_merge": true,
+    "ld_window_bp": 1000000,
+    "ld_metric": "r_squared",
+    "deterministic_pruning_start": true
+  },
+  "identity_contract": {
+    "expected_shared_baseline_identities": 77,
+    "joint_autosomal_genotypes_min_per_shared_identity": 10000,
+    "dosage_concordance_min_per_shared_identity": 0.99,
+    "appended_baseline_donor_call_rate_min": 0.98
+  },
+  "configurations": [
+    {
+      "id": "anchor_pc8_r2_020",
+      "n_pcs": 8,
+      "ld_r2_max": 0.2,
+      "role": "primary"
+    },
+    {
+      "id": "pc_low_4_r2_020",
+      "n_pcs": 4,
+      "ld_r2_max": 0.2,
+      "role": "sensitivity_one_factor"
+    },
+    {
+      "id": "pc_high_12_r2_020",
+      "n_pcs": 12,
+      "ld_r2_max": 0.2,
+      "role": "sensitivity_one_factor"
+    },
+    {
+      "id": "pc8_r2_010",
+      "n_pcs": 8,
+      "ld_r2_max": 0.1,
+      "role": "sensitivity_one_factor"
+    }
+  ],
+  "pcrelate": {
+    "king_allowed": false,
+    "scale": "overall",
+    "maf_thresh": 0.01,
+    "maf_bound_method": "filter",
+    "small_sample_correction": true,
+    "initial_training_set": "all_nonexcluded_samples",
+    "final_training_set": "deterministic_maximal_independent_set_from_pass0",
+    "primary_phi_threshold": 0.0442,
+    "descriptive_phi_thresholds": [0.0221, 0.0884, 0.177, 0.354],
+    "final_related_edge_rule": "union_across_preregistered_configurations_at_phi_ge_0.0442"
+  },
+  "selection": {
+    "baseline_identity_exclusion": true,
+    "baseline_relative_exclusion": "exclude candidate related at phi>=0.0442 in any configuration",
+    "candidate_internal_independence": "deterministic maximal independent set on union graph",
+    "tie_break_order": [
+      "higher_call_rate",
+      "stable_identifier_hash"
+    ],
+    "population_coverage_policy": "report loss of any observed stratum; do not alter selection order post hoc",
+    "alternative_order_control": "repeat deterministic maximal-independent-set construction with ascending and descending stable identifier hash after call-rate ordering; report both, never select the largest",
+    "q_used_for_selection": false,
+    "historical_unrelated_flags_used_for_selection": false,
+    "report_strata": [
+      "all_NAM_candidates",
+      "Brazil_metadata",
+      "M27C_128_gVCF",
+      "intersection_Brazil_M27C"
+    ]
+  },
+  "gates": {
+    "G0_input_identity_and_build": "PASS required",
+    "G1_marker_qc_and_ld_pruning": "manual scientific review required; no forced SNP count",
+    "G2_pca_ancestry_not_family_or_source": "PASS required",
+    "G3_pcrelate_iteration": "pass0 and pass1 retained; candidate instability handled conservatively",
+    "G4_baseline_disjointness": "no exact identity or phi>=0.0442 edge to any baseline donor",
+    "G5_candidate_independence": "no phi>=0.0442 edge inside final set in any configuration",
+    "G6_m27c_recomputed_readiness": "primary ready-marker fraction >=0.80"
+  },
+  "resource_smoke": {
+    "thread_screen": [4, 8, 16],
+    "arm_full_n": {
+      "max_samples": 3686,
+      "snps": 10000,
+      "sampling": "uniformly distributed across 22 autosomes"
+    },
+    "arm_marker_scaling": {
+      "samples": 1000,
+      "max_snps": 50000,
+      "sampling": "samples stratified by source and ancestry; SNPs distributed across 22 autosomes",
+      "threads": "selected from arm_full_n"
+    },
+    "selection_rule": "smallest thread count within 20 percent of fastest and peak RAM below 70 percent of request",
+    "max_cost_usd": 2.0,
+    "max_wall_hours": 1.0,
+    "full_run_reauthorization_cost_usd": 10.0,
+    "full_run_reauthorization_wall_hours": 6.0,
+    "batch_label": "team=frank",
+    "cleanup": "no persistent Batch VM or disk after completion"
+  },
+  "required_outputs": [
+    "input_contract.json",
+    "marker_qc_by_chromosome.tsv",
+    "ld_pruned_marker_sets.tsv.gz",
+    "pca_pass0_scores.private.tsv.gz",
+    "pca_pass1_projected_scores.private.tsv.gz",
+    "pcrelate_pairs_by_configuration.private.tsv.gz",
+    "candidate_selection.private.tsv.gz",
+    "aggregate_donor_counts.tsv",
+    "stability_summary.json",
+    "gates.tsv",
+    "operational_metrics.json",
+    "run_provenance.json",
+    "manifest.json"
+  ],
+  "privacy": {
+    "public_sample_ids": false,
+    "private_outputs_location": "access-controlled GCS run prefix",
+    "public_reporting": "aggregate counts only"
+  },
+  "stop_rules": [
+    "Stop on identity, build, chromosome or REF/ALT mismatch.",
+    "Stop if ancestry PCs are dominated by family components or technical source.",
+    "Stop if a conservative independent and baseline-disjoint NAM candidate set cannot be formed.",
+    "Stop before Gnomix or simulation if M27C readiness recomputed on final donors is below 0.80.",
+    "Do not choose a parameter configuration after observing which one retains more donors.",
+    "Do not launch the full run when the smoke exceeds its cost or time ceiling."
+  ]
+}

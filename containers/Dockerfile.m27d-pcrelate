@@ -1,0 +1,10 @@
+FROM bioconductor/bioconductor_docker@sha256:821dbf9ac119eac41f177531c7ca8fc7084c99c04eb218a1aa7f52cb63bad5d9
+
+LABEL org.opencontainers.image.title="dnabr-m27d-pcrelate" \
+      org.opencontainers.image.description="Pinned PC-Relate and SNPRelate environment for the M27D donor audit" \
+      org.opencontainers.image.source="https://github.com/jfct777/lai-exploracion-datos"
+
+# Install scientific dependencies at image-build time. Batch jobs never modify
+# their environment, and package versions are recorded in every smoke/result.
+RUN R -q -e "BiocManager::install(c('GENESIS','SNPRelate','GWASTools'), ask=FALSE, update=FALSE, Ncpus=parallel::detectCores())" \
+    && R -q -e "stopifnot(requireNamespace('GENESIS'), requireNamespace('SNPRelate'), requireNamespace('GWASTools'), requireNamespace('jsonlite')); stopifnot(packageVersion('GENESIS') == '2.42.0', packageVersion('SNPRelate') == '1.46.0', packageVersion('GWASTools') == '1.58.0'); cat(as.character(packageVersion('GENESIS')), as.character(packageVersion('SNPRelate')), as.character(packageVersion('GWASTools')), '\n')"
