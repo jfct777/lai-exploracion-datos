@@ -270,3 +270,142 @@ Antes de ese `pass0` faltan tres tareas: resolver las 35 correspondencias ambigu
 metadata; implementar la ruta productiva de Nextflow con pruebas sintéticas; y revisar un DAG que
 contenga solo M27D. La auditoría completa necesitará una autorización explícita después de mostrar su
 comando, costo actualizado y controles.
+
+## Resolución de identidades del panel
+
+La correspondencia entre las 3.685 muestras del panel y la tabla de metadata se resuelve con una
+política general, sin listas de identificadores en el código. El orden es fijo y no depende de la
+posición de las filas:
+
+1. Si una sola fila es alcanzable por cualquier alias, esa fila gana.
+2. Si hay varias, se descartan las marcadas `Exclude`, pero solo mientras quede al menos una: la
+   exclusión es una preferencia, no un filtro duro.
+3. Se descartan sin excepción las filas sin genotipos. Una fila que no puede aportar genotipos no
+   puede ser el miembro del panel, y un `N_genotypes` ausente cuenta como cero, no como permiso.
+4. Se prefieren las filas cuyo `IID` coincide directamente con el identificador del panel frente a
+   las alcanzables solo por una columna de alias.
+5. La muestra se resuelve únicamente si sobrevive exactamente una fila. Cualquier otro caso detiene
+   la etapa.
+
+Sobre el panel real esto deja **3.640 `DIRECT_UNIQUE`, 35 `RESOLVED_ACTIVE_GENOTYPED_IID`, 10
+`UNMATCHED` y 0 `AMBIGUOUS_FAIL_CLOSED`**. Las 35 colisiones que quedaban pendientes tienen todas la
+misma forma: dos filas candidatas, una excluida y sin genotipos alcanzable solo por alias, y otra
+activa, genotipada y con coincidencia directa de `IID`. La regla las resuelve sin recurrir al orden
+de aparición ni a la población esperada.
+
+### Las muestras sin metadata eran diez, no diecisiete
+
+El recuento anterior de 17 mezclaba dos cosas distintas. Siete de esas muestras sí están en la
+metadata: sus identificadores contienen un guion bajo interno, de modo que el identificador doble de
+PLINK toma la forma `A_B_A_B`, y la normalización previa solo colapsaba el caso `X_X`. Corregida la
+normalización, quedan **diez** muestras sin ninguna fila de metadata.
+
+El origen de esas diez está demostrado por diferencia de conjuntos contra el panel anterior
+(`gs://projects-usp/nam-diversity/nat.163wgs.1000G.sgdp.hgdp.hg38/nat.163wgs.1000G.sgdp.hgdp.hg38.fam`,
+95.213 bytes, 3.710 filas):
+
+```
+3.710 (panel anterior) − 35 (retiradas) + 10 (añadidas) = 3.685 (panel actual)
+```
+
+Las diez añadidas llevan prefijos `ONG` y `JAR` y no aparecen en ninguna tabla del bucket. Su
+procedencia operativa está probada; su población **no**. La única evidencia poblacional es el prefijo
+de su propio identificador, y un prefijo no es una anotación autoritativa, así que no se les asigna
+población. Se quedan en el PCA y en PC-Relate, porque quitar a alguien de una auditoría de parentesco
+por un hueco administrativo sería peor, y quedan marcadas como no interpretables: no entran en
+resúmenes estratificados ni pueden ser seleccionadas como donantes.
+
+Hay además un efecto colateral que conviene tener presente al leer los conteos de donantes: **las 35
+muestras retiradas del panel son todas `Source=PSI` y `Ancestry=Native_American`**. La reconstrucción
+del panel no fue una suma limpia, y el universo NAM disponible es menor que el del panel de 2022.
+
+La normalización se implementó en el resolutor de M27D y no en el ayudante compartido con M27B: los
+artefactos publicados de M27B hashean contra esos bytes exactos y reescribirlos rompería la
+reproducibilidad de una corrida terminada.
+
+## Ruta productiva implementada
+
+El flujo tiene cuatro fases que se lanzan por separado (`prepare`, `benchmark`, `strata`, `audit`).
+La fase `audit` exige además `--donor_kinship_smoke_only false` y una autorización humana explícita
+`--donor_kinship_full_run_authorized true`; sin ella el workflow se detiene antes de crear ninguna
+tarea.
+
+| Proceso | Qué hace |
+|---|---|
+| `RESOLVE_DONOR_KINSHIP_STRATA` | Resuelve identidades y publica la tabla privada y el resumen agregado |
+| `RUN_DONOR_KINSHIP_PASS0` | PCA provisional, PC-Relate sobre todas las muestras elegibles y construcción del `training.set` |
+| `AUDIT_BASELINE_DONOR_IDENTITY` | Reconcilia los donantes del baseline por concordancia de dosis, no por nombre |
+| `FIT_DONOR_KINSHIP_PCA` | Reajusta la PCA solo sobre el `training.set` y proyecta al resto |
+| `RUN_DONOR_KINSHIP_CONFIGURATION` | Ejecuta las cuatro configuraciones preregistradas |
+| `SELECT_DONOR_KINSHIP_CANDIDATES` | Grafo unión, disjunción, conjunto independiente y recibo de gates |
+
+Se ajusta **una PCA por conjunto de marcadores LD**, no una por configuración. El número de
+componentes es un corte de un único ajuste, así que una configuración que solo cambia los PCs cambia
+de verdad un solo factor; cambiar la poda LD sí exige su propio ajuste, y ese es precisamente el
+factor que varía la configuración estricta. Las cuatro configuraciones se leen del preregistro y no
+se repiten en el código de Nextflow, para que contrato e implementación no puedan divergir.
+
+## Determinismo
+
+`snpgdsPCA(algorithm = "randomized")` sortea una matriz de prueba aleatoria. Medido sobre el fixture
+sintético, dos corridas sobre entradas idénticas produjeron autovectores que diferían hasta en
+**0,97**; con `set.seed()` la diferencia fue exactamente **0**. Esos puntajes llegan a PC-Relate, al
+`training.set` y a la lista de candidatos, de modo que la semilla se fija en el preregistro
+(`determinism.random_seed = 20260814`) y se escribe en el resumen de cada etapa.
+
+Con la semilla fijada, dos corridas completas del flujo sobre el fixture produjeron **20 de 20
+salidas byte-idénticas**, incluidas las de PC-Relate. El contrato solo exigía invariantes y
+tolerancias numéricas; en la práctica se obtuvo reproducibilidad exacta, pero esa afirmación está
+verificada sobre el fixture y todavía no sobre el panel real con cuatro trabajadores.
+
+También se comprueba un supuesto que GENESIS degrada en silencio: la corrección de muestra pequeña
+solo se aplica cuando toda la cohorte cabe en un bloque de muestras, y si no cabe, la librería la
+desactiva con una simple advertencia. Con 3.685 muestras y un bloque de 5.000 se aplica, pero la
+condición se verifica en el código en vez de darse por supuesta.
+
+## Verificación sobre datos sintéticos
+
+El fixture construye 90 muestras en dos grupos ancestrales, seis tríos padre-madre-hijo, colisiones
+de alias con la misma forma que las reales, muestras sin metadata, muestras excluidas y un baseline
+que comparte siete donantes con el panel y deja uno fuera. Todo lo que la auditoría afirma tiene ahí
+una respuesta correcta conocida de antemano.
+
+El resultado más informativo no es que los tests pasen, sino esto:
+
+| Pasada | φ mediana en pares padre-hijo (verdad 0,25) | Falsos positivos a φ≥0,0442 |
+|---|---:|---:|
+| pass0, `training.set` = todos | 0,4173 | 5 |
+| `anchor_pc8_r2_020` | 0,2796 | 0 |
+| `pc8_r2_010` | 0,2716 | 1 |
+| `pc_high_12_r2_020` | 0,3021 | 0 |
+| `pc_low_4_r2_020` | 0,2676 | 0 |
+
+pass0 ajusta las frecuencias alélicas sobre un conjunto que todavía contiene parientes y por eso
+sobreestima. El reajuste sobre el conjunto independiente cierra buena parte de esa brecha y elimina
+los falsos positivos. Esa es la razón de que el diseño tenga dos pasadas; si el reajuste dejara de
+corregir, el test de integración falla.
+
+Los doce pares emparentados se recuperan en las cuatro configuraciones, ninguno sobrevive dentro del
+`training.set`, y la identidad del baseline se confirma con concordancia de dosis 1,000 frente a un
+mejor impostor de 0,585.
+
+## Memoria de PC-Relate
+
+La preocupación operativa principal era si 32 GiB alcanzan al pasar de 10.000 a 220.742 marcadores.
+No escalan: dentro de `.pcrelate`, GENESIS recorre los bloques de SNP con
+`bpiterate(..., REDUCE = .matListCombine, ...)`, que reduce de forma incremental en lugar de
+acumular los resultados de cada bloque. Las matrices acumuladoras son de tamaño n×n y dependen solo
+del número de muestras.
+
+Medido sobre el panel sintético multiplicando por diez el número de bloques:
+
+| SNP | Bloques | Pico de memoria | Tiempo |
+|---:|---:|---:|---:|
+| 400 | 2 | 470,9 MB | 0,92 s |
+| 1.000 | 5 | 461,6 MB | 1,06 s |
+| 2.000 | 10 | 476,5 MB | 1,45 s |
+| 3.958 | 20 | 482,1 MB | 2,10 s |
+
+La memoria es plana y solo el tiempo crece. El pico de 11,2 GB observado con 10.000 SNP y 3.685
+muestras debería sostenerse con 220.742, de modo que 32 GiB dejan alrededor del triple de margen.
+El pass0 real sigue siendo el punto de control: si el pico llega a 22,4 GiB, se detiene.
