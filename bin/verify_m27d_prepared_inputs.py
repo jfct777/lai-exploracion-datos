@@ -85,16 +85,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gds", required=True, type=Path)
     parser.add_argument("--anchor-rds", required=True, type=Path)
     parser.add_argument("--strict-rds", required=True, type=Path)
-    parser.add_argument("--metadata-strata", required=True, type=Path)
+    # Optional because the donor audit resolves its own strata table instead of reusing
+    # the one frozen with the preparation: the resolution policy was corrected after that
+    # run, so the audit must not verify itself against the superseded file.  The genotype
+    # resources it does consume are still checked.
+    parser.add_argument("--metadata-strata", type=Path, default=None)
     parser.add_argument("--out", required=True, type=Path)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    prepared = [args.gds, args.anchor_rds, args.strict_rds]
+    if args.metadata_strata is not None:
+        prepared.append(args.metadata_strata)
     result = verify_prepared_inputs(
         args.manifest,
-        [args.gds, args.anchor_rds, args.strict_rds, args.metadata_strata],
+        prepared,
         args.expected_manifest_sha256,
     )
     args.out.write_text(

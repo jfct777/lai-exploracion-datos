@@ -1,158 +1,120 @@
 {
-  "stage": "M27D_DONOR_KINSHIP_AUDIT",
-  "status": "OPERATIONALLY_AMENDED_AFTER_TIMEOUT_BEFORE_RETRY",
-  "scope": {
-    "genome": "GRCh38 autosomes 1-22",
-    "official_panel_samples_expected": 3685,
-    "baseline_samples_expected": 78,
-    "baseline_ancestry_counts_expected": {
-      "AFR": 26,
-      "EUR": 26,
-      "NAM": 26
-    },
-    "administrative_nam_candidates_expected_before_kinship": 173,
-    "allowed_actions": [
-      "input_qc",
-      "common_snp_selection",
-      "ld_pruning",
-      "pca",
-      "pcrelate_without_king",
-      "donor_disjointness_audit",
-      "resource_smoke"
-    ],
-    "forbidden_actions": [
-      "KING",
-      "Gnomix inference",
-      "mosaic simulation",
-      "model training",
-      "TEST access"
-    ]
-  },
-  "inputs": {
-    "official_panel_vcf_pattern": "gs://projects-usp/nam-diversity/shapeit/phased/natwgs.1000G.sgdp.hgdp.andamanese.hg38.<chr>.norm.PHASED.vcf.gz",
-    "metadata": "gs://projects-usp/nam-diversity/natwgs.1000G.sgdp.hgdp.hg38/metadata_complete_revised.txt",
-    "baseline_vcf_pattern": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/vcf_fixed/dnabr.refpop.fixed.chr<chr>.vcf.gz",
-    "long_range_ld_bed": "gs://projects-usp/dnaBr-lai/datalake/trusted/DNABR_QC/reference/exclude_regions_hg38/exclude_regions_hg38.bed",
-    "region": "us-central1",
-    "expected_total_input_bytes": 4856283849
-  },
-  "marker_contract": {
-    "variant_type": "biallelic_snp",
-    "autosomes_only": true,
-    "global_maf_min": 0.05,
-    "variant_call_rate_min": 0.98,
-    "exclude_long_range_ld": true,
-    "genotype_encoding": "unphased_dosage_0_1_2",
-    "require_exact_ref_alt_for_merge": true,
-    "ld_window_bp": 1000000,
-    "ld_metric": "r_squared",
-    "deterministic_pruning_start": true
-  },
-  "identity_contract": {
-    "expected_shared_baseline_identities": 77,
-    "joint_autosomal_genotypes_min_per_shared_identity": 10000,
-    "dosage_concordance_min_per_shared_identity": 0.99,
-    "appended_baseline_donor_call_rate_min": 0.98
-  },
   "configurations": [
     {
       "id": "anchor_pc8_r2_020",
-      "n_pcs": 8,
       "ld_r2_max": 0.2,
+      "n_pcs": 8,
       "role": "primary"
     },
     {
       "id": "pc_low_4_r2_020",
-      "n_pcs": 4,
       "ld_r2_max": 0.2,
+      "n_pcs": 4,
       "role": "sensitivity_one_factor"
     },
     {
       "id": "pc_high_12_r2_020",
-      "n_pcs": 12,
       "ld_r2_max": 0.2,
+      "n_pcs": 12,
       "role": "sensitivity_one_factor"
     },
     {
       "id": "pc8_r2_010",
-      "n_pcs": 8,
       "ld_r2_max": 0.1,
+      "n_pcs": 8,
       "role": "sensitivity_one_factor"
     }
   ],
-  "pcrelate": {
-    "king_allowed": false,
-    "scale": "overall",
-    "maf_thresh": 0.01,
-    "maf_bound_method": "filter",
-    "small_sample_correction": true,
-    "initial_training_set": "all_nonexcluded_samples",
-    "final_training_set": "deterministic_maximal_independent_set_from_pass0",
-    "primary_phi_threshold": 0.0442,
-    "descriptive_phi_thresholds": [0.0221, 0.0884, 0.177, 0.354],
-    "final_related_edge_rule": "union_across_preregistered_configurations_at_phi_ge_0.0442"
-  },
-  "selection": {
-    "baseline_identity_exclusion": true,
-    "baseline_relative_exclusion": "exclude candidate related at phi>=0.0442 in any configuration",
-    "candidate_internal_independence": "deterministic maximal independent set on union graph",
-    "tie_break_order": [
-      "higher_call_rate",
-      "stable_identifier_hash"
-    ],
-    "population_coverage_policy": "report loss of any observed stratum; do not alter selection order post hoc",
-    "alternative_order_control": "repeat deterministic maximal-independent-set construction with ascending and descending stable identifier hash after call-rate ordering; report both, never select the largest",
-    "q_used_for_selection": false,
-    "historical_unrelated_flags_used_for_selection": false,
-    "report_strata": [
-      "all_NAM_candidates",
-      "Brazil_metadata",
-      "M27C_128_gVCF",
-      "intersection_Brazil_M27C"
+  "determinism": {
+    "pcrelate_bitwise_determinism_assumed": false,
+    "pcrelate_verification": "compare sample order, pair count, training set and pairs above the primary threshold rather than requiring identical floating-point output",
+    "random_seed": 20260814,
+    "rationale": "snpgdsPCA(algorithm='randomized') draws a random test matrix. Measured on the synthetic fixture, two unseeded runs over identical input produced eigenvectors differing by up to 0.97, and a fixed seed reduced that difference to exactly zero. Those scores propagate to PC-Relate, to the training set and to the candidate list, so the seed is fixed before the run and recorded with the result.",
+    "seeded_operations": [
+      "snpgdsPCA randomized SVD in pass0, in the training-set refit and in the projection"
     ]
   },
   "gates": {
     "G0_input_identity_and_build": "PASS required",
     "G1_marker_qc_and_ld_pruning": "manual scientific review required; no forced SNP count",
-    "G2_pca_ancestry_not_family_or_source": "PASS required",
+    "G2_pca_ancestry_not_family_or_source": "PASS required; every component must exceed pca_axis_contract.min_effective_individual_fraction_per_axis of the eligible cohort. Provisional floor; see operating_threshold_requires_calibration.",
     "G3_pcrelate_iteration": "pass0 and pass1 retained; candidate instability handled conservatively",
     "G4_baseline_disjointness": "no exact identity or phi>=0.0442 edge to any baseline donor",
     "G5_candidate_independence": "no phi>=0.0442 edge inside final set in any configuration",
     "G6_m27c_recomputed_readiness": "primary ready-marker fraction >=0.80"
   },
-  "resource_smoke": {
-    "architecture": "persistent marker preparation followed by reusable PC-Relate benchmark",
-    "thread_screen": [4, 8, 16],
-    "arm_full_n": {
-      "max_samples": 3686,
-      "snps": 10000,
-      "sampling": "uniformly distributed across 22 autosomes"
-    },
-    "arm_marker_scaling": {
-      "samples": 1000,
-      "max_snps": 50000,
-      "sampling": "samples stratified by source and ancestry; SNPs distributed across 22 autosomes",
-      "threads": "selected from arm_full_n"
-    },
-    "selection_rule": "smallest thread count within 20 percent of fastest and peak RAM below 70 percent of request",
-    "preparation_max_wall_hours": 1.25,
-    "benchmark_max_wall_hours": 1.0,
-    "max_additional_cost_usd_after_timeout": 2.0,
-    "max_cumulative_m27d_attempt_cost_usd": 3.0,
-    "full_run_reauthorization_cost_usd": 10.0,
-    "full_run_reauthorization_wall_hours": 6.0,
-    "batch_label": "team=frank",
-    "cleanup": "no persistent Batch VM or disk after completion"
+  "identity_contract": {
+    "appended_baseline_donor_call_rate_min": 0.98,
+    "dosage_concordance_min_per_shared_identity": 0.99,
+    "expected_shared_baseline_identities": 77,
+    "joint_autosomal_genotypes_min_per_shared_identity": 10000
+  },
+  "inputs": {
+    "baseline_vcf_pattern": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/vcf_fixed/dnabr.refpop.fixed.chr<chr>.vcf.gz",
+    "expected_total_input_bytes": 4856283849,
+    "long_range_ld_bed": "gs://projects-usp/dnaBr-lai/datalake/trusted/DNABR_QC/reference/exclude_regions_hg38/exclude_regions_hg38.bed",
+    "metadata": "gs://projects-usp/nam-diversity/natwgs.1000G.sgdp.hgdp.hg38/metadata_complete_revised.txt",
+    "official_panel_vcf_pattern": "gs://projects-usp/nam-diversity/shapeit/phased/natwgs.1000G.sgdp.hgdp.andamanese.hg38.<chr>.norm.PHASED.vcf.gz",
+    "region": "us-central1"
+  },
+  "marker_contract": {
+    "autosomes_only": true,
+    "deterministic_pruning_start": true,
+    "exclude_long_range_ld": true,
+    "genotype_encoding": "unphased_dosage_0_1_2",
+    "global_maf_min": 0.05,
+    "ld_metric": "r_squared",
+    "ld_window_bp": 1000000,
+    "require_exact_ref_alt_for_merge": true,
+    "variant_call_rate_min": 0.98,
+    "variant_type": "biallelic_snp"
   },
   "operational_amendments": [
     {
-      "date": "2026-08-14",
-      "trigger": "m27d-resource-smoke-20260814b reached its one-hour limit after conversion and both LD-pruning passes but before PC-Relate",
       "change": "split reusable marker preparation from the PC-Relate resource benchmark",
+      "date": "2026-08-14",
+      "failed_run_marker_counts_are_preliminary": true,
       "scientific_parameters_changed": false,
-      "failed_run_marker_counts_are_preliminary": true
+      "trigger": "m27d-resource-smoke-20260814b reached its one-hour limit after conversion and both LD-pruning passes but before PC-Relate"
     }
   ],
+  "pca_axis_contract": {
+    "confounding_note": "Source and Ancestry are not independent in this panel; their association with an axis is descriptive only.",
+    "effective_individuals_metric": "participation ratio 1/sum(w_i^2), w_i = v_i^2 normalised over the axis",
+    "group_association_reported_not_gated": true,
+    "grouping_columns_reported": [
+      "Source",
+      "Ancestry",
+      "Country",
+      "Population"
+    ],
+    "min_effective_individual_fraction_per_axis": 0.02,
+    "operating_threshold_requires_calibration": "The 2 percent floor is provisional. Before any donor is certified, the observed distribution of participation ratios from the real pass0 must be inspected and the operating value justified against it. Until then this gate can only detect a degenerate axis, not adjudicate a borderline one.",
+    "rationale": "G2 asks whether an axis encodes ancestry rather than one family. Associating axes with Source cannot answer it: in this panel Source (1000_Genomes, HGDP, SGDP, NatWGS) is confounded with ancestry by construction, so a genuine ancestry axis separates sources strongly and a bound on that association would fail on correct behaviour. The participation ratio needs no group labels and counts how many individuals actually carry an axis. The bound is a FRACTION of the eligible cohort rather than an absolute count, because an absolute count calibrated for 3685 samples produces a false NO-GO on any smaller cohort. It is deliberately set as a floor, not as a discriminating threshold: a continental ancestry axis in a global reference panel is carried by hundreds of individuals, so 2 percent cannot fire on one, while an axis carried by a handful of relatives falls far below it.",
+    "status": "PROVISIONAL_DEGENERACY_FLOOR"
+  },
+  "pcrelate": {
+    "descriptive_phi_thresholds": [
+      0.0221,
+      0.0884,
+      0.177,
+      0.354
+    ],
+    "final_related_edge_rule": "union_across_preregistered_configurations_at_phi_ge_0.0442",
+    "final_training_set": "deterministic_maximal_independent_set_from_pass0",
+    "initial_training_set": "all_nonexcluded_samples",
+    "king_allowed": false,
+    "maf_bound_method": "filter",
+    "maf_thresh": 0.01,
+    "primary_phi_threshold": 0.0442,
+    "scale": "overall",
+    "small_sample_correction": true
+  },
+  "privacy": {
+    "private_outputs_location": "access-controlled GCS run prefix",
+    "public_reporting": "aggregate counts only",
+    "public_sample_ids": false
+  },
   "required_outputs": [
     "input_contract.json",
     "marker_qc_by_chromosome.tsv",
@@ -168,11 +130,82 @@
     "run_provenance.json",
     "manifest.json"
   ],
-  "privacy": {
-    "public_sample_ids": false,
-    "private_outputs_location": "access-controlled GCS run prefix",
-    "public_reporting": "aggregate counts only"
+  "resource_smoke": {
+    "architecture": "persistent marker preparation followed by reusable PC-Relate benchmark",
+    "arm_full_n": {
+      "max_samples": 3686,
+      "sampling": "uniformly distributed across 22 autosomes",
+      "snps": 10000
+    },
+    "arm_marker_scaling": {
+      "max_snps": 50000,
+      "samples": 1000,
+      "sampling": "samples stratified by source and ancestry; SNPs distributed across 22 autosomes",
+      "threads": "selected from arm_full_n"
+    },
+    "batch_label": "team=frank",
+    "benchmark_max_wall_hours": 1.0,
+    "cleanup": "no persistent Batch VM or disk after completion",
+    "full_run_reauthorization_cost_usd": 10.0,
+    "full_run_reauthorization_wall_hours": 6.0,
+    "max_additional_cost_usd_after_timeout": 2.0,
+    "max_cumulative_m27d_attempt_cost_usd": 3.0,
+    "preparation_max_wall_hours": 1.25,
+    "selection_rule": "smallest thread count within 20 percent of fastest and peak RAM below 70 percent of request",
+    "thread_screen": [
+      4,
+      8,
+      16
+    ]
   },
+  "scope": {
+    "administrative_nam_candidates_expected_before_kinship": 173,
+    "allowed_actions": [
+      "input_qc",
+      "common_snp_selection",
+      "ld_pruning",
+      "pca",
+      "pcrelate_without_king",
+      "donor_disjointness_audit",
+      "resource_smoke"
+    ],
+    "baseline_ancestry_counts_expected": {
+      "AFR": 26,
+      "EUR": 26,
+      "NAM": 26
+    },
+    "baseline_samples_expected": 78,
+    "forbidden_actions": [
+      "KING",
+      "Gnomix inference",
+      "mosaic simulation",
+      "model training",
+      "TEST access"
+    ],
+    "genome": "GRCh38 autosomes 1-22",
+    "official_panel_samples_expected": 3685
+  },
+  "selection": {
+    "alternative_order_control": "repeat deterministic maximal-independent-set construction with ascending and descending stable identifier hash after call-rate ordering; report both, never select the largest",
+    "baseline_identity_exclusion": true,
+    "baseline_relative_exclusion": "exclude candidate related at phi>=0.0442 in any configuration",
+    "candidate_internal_independence": "deterministic maximal independent set on union graph",
+    "historical_unrelated_flags_used_for_selection": false,
+    "population_coverage_policy": "report loss of any observed stratum; do not alter selection order post hoc",
+    "q_used_for_selection": false,
+    "report_strata": [
+      "all_NAM_candidates",
+      "Brazil_metadata",
+      "M27C_128_gVCF",
+      "intersection_Brazil_M27C"
+    ],
+    "tie_break_order": [
+      "higher_call_rate",
+      "stable_identifier_hash"
+    ]
+  },
+  "stage": "M27D_DONOR_KINSHIP_AUDIT",
+  "status": "OPERATIONALLY_AMENDED_AFTER_TIMEOUT_BEFORE_RETRY",
   "stop_rules": [
     "Stop on identity, build, chromosome or REF/ALT mismatch.",
     "Stop if ancestry PCs are dominated by family components or technical source.",

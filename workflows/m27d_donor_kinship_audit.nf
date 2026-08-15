@@ -2,20 +2,63 @@ nextflow.enable.dsl=2
 
 include {
     WRITE_DONOR_KINSHIP_RUN_PROVENANCE;
+    VERIFY_DONOR_KINSHIP_PREPARED_INPUTS;
     PREPARE_DONOR_KINSHIP_RESOURCES;
-    BENCHMARK_DONOR_KINSHIP_RESOURCES
+    BENCHMARK_DONOR_KINSHIP_RESOURCES;
+    RESOLVE_DONOR_KINSHIP_STRATA;
+    AUDIT_BASELINE_DONOR_IDENTITY;
+    RUN_DONOR_KINSHIP_PASS0;
+    FIT_DONOR_KINSHIP_PCA;
+    RUN_DONOR_KINSHIP_CONFIGURATION;
+    SELECT_DONOR_KINSHIP_CANDIDATES
 } from '../modules/27D_DONOR_KINSHIP_AUDIT'
 
+// The four M27D phases are launched one at a time on purpose.  An incomplete
+// preparation must never flow straight into a paid PC-Relate pass, and the audit must
+// never start without somebody reading the preparation hashes first.
+def PHASES = ['prepare', 'benchmark', 'strata', 'audit']
+
+def sortedAutosomes(pattern, description) {
+    channel
+        .fromPath(pattern, checkIfExists: true)
+        .collect()
+        .map { paths ->
+            def numbered = paths.collect { path ->
+                def matcher = (path.getName() =~ /(?:^|[._])(?:chr)?(\d{1,2})[._]/)
+                if( !matcher.find() ) {
+                    throw new IllegalStateException("M27D could not parse a chromosome from ${description}: ${path.getName()}")
+                }
+                [(matcher.group(1) as int), path]
+            }
+            def chromosomes = numbered.collect { it[0] }
+            if( chromosomes.toSorted() != (1..22).toList() ) {
+                throw new IllegalStateException("M27D expects exactly autosomes 1-22 for ${description}; found ${chromosomes.toSorted()}")
+            }
+            numbered.toSorted { left, right -> left[0] <=> right[0] }.collect { it[1] }
+        }
+}
+
 workflow {
-    if( !params.donor_kinship_smoke_only ) {
+    def phase = params.donor_kinship_phase?.toString()
+    if( !(phase in PHASES) ) {
+        throw new IllegalStateException("M27D phase must be one of ${PHASES.join(', ')}.")
+    }
+    if( phase != 'audit' && !params.donor_kinship_smoke_only ) {
         throw new IllegalStateException(
-            'M27D full donor audit is not implemented or authorized. Use --donor_kinship_smoke_only true.'
+            'M27D technical phases run with --donor_kinship_smoke_only true.'
         )
     }
-
-    def phase = params.donor_kinship_phase?.toString()
-    if( !(phase in ['prepare', 'benchmark']) ) {
-        throw new IllegalStateException('M27D phase must be prepare or benchmark.')
+    if( phase == 'audit' ) {
+        if( params.donor_kinship_smoke_only ) {
+            throw new IllegalStateException(
+                'M27D audit is the full donor run. Set --donor_kinship_smoke_only false.'
+            )
+        }
+        if( !params.donor_kinship_full_run_authorized ) {
+            throw new IllegalStateException(
+                'M27D audit needs an explicit human authorization: --donor_kinship_full_run_authorized true.'
+            )
+        }
     }
 
     def repoDir = projectDir.resolve('..')
@@ -23,9 +66,18 @@ workflow {
         "${repoDir}/conf/m27d_donor_kinship_preregistration.json",
         checkIfExists: true,
     )
+    def contract = new groovy.json.JsonSlurper().parse(preregistration)
+    if( contract.pcrelate.king_allowed ) {
+        throw new IllegalStateException('M27D preregistration must forbid KING.')
+    }
+
     def pcrelateSmokeR = file("${repoDir}/bin/m27d_resource_smoke.R", checkIfExists: true)
     def verifyPreparedPy = file("${repoDir}/bin/verify_m27d_prepared_inputs.py", checkIfExists: true)
     def manifestPy = file("${repoDir}/bin/write_stage_manifest.py", checkIfExists: true)
+    def sampleStrataPy = file("${repoDir}/bin/m27d_prepare_sample_strata.py", checkIfExists: true)
+    def bridgePy = file("${repoDir}/bin/audit_rare_scaffold_bridge.py", checkIfExists: true)
+    def commonR = file("${repoDir}/bin/m27d_common.R", checkIfExists: true)
+    def kinshipGraphPy = file("${repoDir}/bin/m27d_kinship_graph.py", checkIfExists: true)
 
     def gitCommit = System.getenv('DNABR_GIT_COMMIT') ?: 'unknown'
     def provenance = [
@@ -40,39 +92,28 @@ workflow {
         nextflow_command : workflow.commandLine,
         launch_dir       : workflow.launchDir.toString(),
         project_dir      : projectDir.toString(),
-        scientific_scope : "M27D ${phase} technical phase only; PC-Relate without KING; no donor certification, Gnomix, simulation, training or TEST",
+        scientific_scope : phase == 'audit'
+            ? 'M27D donor kinship and disjointness audit; PC-Relate without KING; no Gnomix, simulation, training or TEST'
+            : "M27D ${phase} technical phase only; PC-Relate without KING; no donor certification, Gnomix, simulation, training or TEST",
         compute_region   : params.cloud_region,
         panel_vcf_glob   : params.donor_kinship_panel_vcf_glob,
         sample_metadata  : params.donor_kinship_metadata,
-        exclude_regions : params.donor_kinship_exclude_regions_bed,
+        exclude_regions  : params.donor_kinship_exclude_regions_bed,
         thread_grid      : params.donor_kinship_thread_grid,
         phase            : phase,
-        architecture     : 'persistent marker preparation followed by reusable PC-Relate benchmark',
-        full_run_authorized: false,
+        architecture     : 'persistent marker preparation, reusable benchmark, then a single-training-set donor audit',
+        full_run_authorized: phase == 'audit' ? true : false,
     ]
     def runProvenanceB64 = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(runProvenance))
         .bytes.encodeBase64().toString()
 
     WRITE_DONOR_KINSHIP_RUN_PROVENANCE(channel.value(runProvenanceB64))
+
     if( phase == 'prepare' ) {
-        def panelVcfs = channel
-            .fromPath(params.donor_kinship_panel_vcf_glob, checkIfExists: true)
-            .collect()
-            .map { paths ->
-                paths.sort { left, right ->
-                    def leftMatch = (left.getName() =~ /hg38\.(\d+)\.norm/)
-                    def rightMatch = (right.getName() =~ /hg38\.(\d+)\.norm/)
-                    if( !leftMatch.find() || !rightMatch.find() ) {
-                        throw new IllegalStateException('M27D could not parse chromosome from panel VCF name.')
-                    }
-                    (leftMatch.group(1) as int) <=> (rightMatch.group(1) as int)
-                }
-            }
+        def panelVcfs = sortedAutosomes(params.donor_kinship_panel_vcf_glob, 'the official panel')
         def metadata = file(params.donor_kinship_metadata, checkIfExists: true)
         def excludeBed = file(params.donor_kinship_exclude_regions_bed, checkIfExists: true)
-        def sampleStrataPy = file("${repoDir}/bin/m27d_prepare_sample_strata.py", checkIfExists: true)
         def prepareResourcesR = file("${repoDir}/bin/m27d_prepare_genotype_resources.R", checkIfExists: true)
-        def bridgePy = file("${repoDir}/bin/audit_rare_scaffold_bridge.py", checkIfExists: true)
         PREPARE_DONOR_KINSHIP_RESOURCES(
             panelVcfs,
             channel.value(metadata),
@@ -84,25 +125,52 @@ workflow {
             channel.value(manifestPy),
             channel.value(provenanceB64),
         )
-    } else {
-        def requiredPreparedParams = [
-            donor_kinship_prepared_gds: params.donor_kinship_prepared_gds,
-            donor_kinship_prepared_anchor_rds: params.donor_kinship_prepared_anchor_rds,
-            donor_kinship_prepared_strict_rds: params.donor_kinship_prepared_strict_rds,
-            donor_kinship_prepared_strata: params.donor_kinship_prepared_strata,
-            donor_kinship_preparation_manifest: params.donor_kinship_preparation_manifest,
-            donor_kinship_preparation_manifest_sha256: params.donor_kinship_preparation_manifest_sha256,
-        ]
-        def missingPrepared = requiredPreparedParams.findAll { key, value -> !value }.keySet()
-        if( missingPrepared ) {
-            throw new IllegalStateException("M27D benchmark is missing prepared inputs: ${missingPrepared.join(', ')}")
-        }
+        return
+    }
+
+    if( phase == 'strata' ) {
+        def panelVcfs = sortedAutosomes(params.donor_kinship_panel_vcf_glob, 'the official panel')
+        RESOLVE_DONOR_KINSHIP_STRATA(
+            panelVcfs.map { paths -> paths[0] },
+            channel.value(file(params.donor_kinship_metadata, checkIfExists: true)),
+            channel.value(preregistration),
+            channel.value(sampleStrataPy),
+            channel.value(bridgePy),
+            channel.value(manifestPy),
+            channel.value(provenanceB64),
+        )
+        return
+    }
+
+    // Both remaining phases reuse the published preparation instead of rebuilding the
+    // GDS, so they must name it explicitly and prove it is the reviewed one.
+    def requiredPrepared = [
+        donor_kinship_prepared_gds: params.donor_kinship_prepared_gds,
+        donor_kinship_prepared_anchor_rds: params.donor_kinship_prepared_anchor_rds,
+        donor_kinship_prepared_strict_rds: params.donor_kinship_prepared_strict_rds,
+        donor_kinship_preparation_manifest: params.donor_kinship_preparation_manifest,
+        donor_kinship_preparation_manifest_sha256: params.donor_kinship_preparation_manifest_sha256,
+    ]
+    if( phase == 'benchmark' ) {
+        requiredPrepared.donor_kinship_prepared_strata = params.donor_kinship_prepared_strata
+    }
+    def missingPrepared = requiredPrepared.findAll { key, value -> !value }.keySet()
+    if( missingPrepared ) {
+        throw new IllegalStateException("M27D ${phase} is missing prepared inputs: ${missingPrepared.join(', ')}")
+    }
+
+    def preparedGds = file(params.donor_kinship_prepared_gds, checkIfExists: true)
+    def anchorRds = file(params.donor_kinship_prepared_anchor_rds, checkIfExists: true)
+    def strictRds = file(params.donor_kinship_prepared_strict_rds, checkIfExists: true)
+    def preparationManifest = file(params.donor_kinship_preparation_manifest, checkIfExists: true)
+
+    if( phase == 'benchmark' ) {
         BENCHMARK_DONOR_KINSHIP_RESOURCES(
-            channel.value(file(params.donor_kinship_prepared_gds, checkIfExists: true)),
-            channel.value(file(params.donor_kinship_prepared_anchor_rds, checkIfExists: true)),
-            channel.value(file(params.donor_kinship_prepared_strict_rds, checkIfExists: true)),
+            channel.value(preparedGds),
+            channel.value(anchorRds),
+            channel.value(strictRds),
             channel.value(file(params.donor_kinship_prepared_strata, checkIfExists: true)),
-            channel.value(file(params.donor_kinship_preparation_manifest, checkIfExists: true)),
+            channel.value(preparationManifest),
             channel.value(params.donor_kinship_preparation_manifest_sha256),
             channel.value(preregistration),
             channel.value(pcrelateSmokeR),
@@ -110,5 +178,138 @@ workflow {
             channel.value(manifestPy),
             channel.value(provenanceB64),
         )
+        return
     }
+
+    // ---- audit ----------------------------------------------------------------
+    // The audit consumes a GDS produced by a run that finished days earlier, so the
+    // manifest hash is re-checked here rather than trusted from the parameter alone.
+    // Requiring the hash and never verifying it would make the parameter decorative.
+    VERIFY_DONOR_KINSHIP_PREPARED_INPUTS(
+        channel.value(preparedGds),
+        channel.value(anchorRds),
+        channel.value(strictRds),
+        channel.value(preparationManifest),
+        channel.value(params.donor_kinship_preparation_manifest_sha256),
+        channel.value(verifyPreparedPy),
+    )
+
+    def panelVcfs = sortedAutosomes(params.donor_kinship_panel_vcf_glob, 'the official panel')
+    def baselineVcfs = sortedAutosomes(params.donor_kinship_baseline_vcf_glob, 'the frozen baseline')
+    def pass0R = file("${repoDir}/bin/m27d_pass0_pcrelate.R", checkIfExists: true)
+    def pcaR = file("${repoDir}/bin/m27d_pca_projection.R", checkIfExists: true)
+    def configurationR = file("${repoDir}/bin/m27d_pcrelate_configuration.R", checkIfExists: true)
+    def baselineIdentityR = file("${repoDir}/bin/m27d_baseline_identity.R", checkIfExists: true)
+    def selectionPy = file("${repoDir}/bin/m27d_candidate_selection.py", checkIfExists: true)
+
+    // Strata are recomputed inside the audit rather than passed in, so the corrected
+    // resolution and the kinship result always come from the same run and the same code.
+    RESOLVE_DONOR_KINSHIP_STRATA(
+        panelVcfs.map { paths -> paths[0] },
+        channel.value(file(params.donor_kinship_metadata, checkIfExists: true)),
+        channel.value(preregistration),
+        channel.value(sampleStrataPy),
+        channel.value(bridgePy),
+        channel.value(manifestPy),
+        channel.value(provenanceB64),
+    )
+    def strata = RESOLVE_DONOR_KINSHIP_STRATA.out.private_strata
+
+    RUN_DONOR_KINSHIP_PASS0(
+        VERIFY_DONOR_KINSHIP_PREPARED_INPUTS.out.verification.map { preparedGds },
+        channel.value(anchorRds),
+        strata,
+        channel.value(preregistration),
+        channel.value(pass0R),
+        channel.value(commonR),
+        channel.value(kinshipGraphPy),
+        channel.value(manifestPy),
+        channel.value(provenanceB64),
+    )
+    def trainingSet = RUN_DONOR_KINSHIP_PASS0.out.training_set
+
+    AUDIT_BASELINE_DONOR_IDENTITY(
+        channel.value(preparedGds),
+        channel.value(anchorRds),
+        strata,
+        baselineVcfs,
+        channel.value(preregistration),
+        channel.value(baselineIdentityR),
+        channel.value(commonR),
+        channel.value(manifestPy),
+        channel.value(provenanceB64),
+    )
+
+    // One PCA fit per LD-pruned marker set.  The number of components is a slice of a
+    // single fit, so a configuration that only changes it still changes one factor.
+    def markerSets = channel.of(
+        ['anchor', anchorRds],
+        ['strict', strictRds],
+    )
+    FIT_DONOR_KINSHIP_PCA(
+        markerSets,
+        channel.value(preparedGds),
+        strata.first(),
+        trainingSet.first(),
+        channel.value(preregistration),
+        channel.value(pcaR),
+        channel.value(commonR),
+        channel.value(manifestPy),
+        channel.value(provenanceB64),
+    )
+
+    // The configuration table is read from the preregistration, never restated here, so
+    // the code cannot drift from the contract it claims to implement.  The mapping from
+    // r2 to a prepared marker set is an explicit lookup rather than an if/else: with a
+    // fallback branch, a configuration asking for an r2 nobody prepared would quietly
+    // borrow the strict set and report a result for a pruning that never happened.
+    def PREPARED_MARKER_SETS = [(0.2d): 'anchor', (0.1d): 'strict']
+    def markerSetFor = { r2 ->
+        def match = PREPARED_MARKER_SETS.find { threshold, _id -> Math.abs((r2 as double) - threshold) < 1e-9 }
+        if( !match ) {
+            throw new IllegalStateException(
+                "M27D has no prepared marker set for r2=${r2}; prepared: ${PREPARED_MARKER_SETS.keySet()}"
+            )
+        }
+        match.value
+    }
+    def configurations = channel.fromList(
+        contract.configurations.collect { config -> [markerSetFor(config.ld_r2_max), config.id] }
+    )
+    def snpRdsByMarkerSet = channel.of(['anchor', anchorRds], ['strict', strictRds])
+    def configurationInputs = configurations
+        .combine(snpRdsByMarkerSet, by: 0)
+        .combine(FIT_DONOR_KINSHIP_PCA.out.scores, by: 0)
+        .map { markerSetId, configurationId, snpRds, scores ->
+            tuple(configurationId, markerSetId, snpRds, scores)
+        }
+
+    RUN_DONOR_KINSHIP_CONFIGURATION(
+        configurationInputs,
+        channel.value(preparedGds),
+        strata.first(),
+        trainingSet.first(),
+        channel.value(preregistration),
+        channel.value(configurationR),
+        channel.value(commonR),
+        channel.value(manifestPy),
+        channel.value(provenanceB64),
+    )
+
+    SELECT_DONOR_KINSHIP_CANDIDATES(
+        RUN_DONOR_KINSHIP_CONFIGURATION.out.pairs.collect(),
+        strata.first(),
+        RUN_DONOR_KINSHIP_PASS0.out.sample_universe,
+        RUN_DONOR_KINSHIP_PASS0.out.call_rates,
+        AUDIT_BASELINE_DONOR_IDENTITY.out.identities,
+        AUDIT_BASELINE_DONOR_IDENTITY.out.summary
+            .mix(FIT_DONOR_KINSHIP_PCA.out.summary)
+            .mix(RUN_DONOR_KINSHIP_PASS0.out.summary)
+            .collect(),
+        channel.value(preregistration),
+        channel.value(selectionPy),
+        channel.value(kinshipGraphPy),
+        channel.value(manifestPy),
+        channel.value(provenanceB64),
+    )
 }
