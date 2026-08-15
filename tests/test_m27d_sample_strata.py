@@ -1,4 +1,5 @@
 import csv
+import re
 import json
 import os
 import subprocess
@@ -288,24 +289,52 @@ class TestM27DNoKing(unittest.TestCase):
         self.assertIn("m27d_prepared_input_verification.json", module)
         self.assertIn("time = '75m'", cloud)
 
-    def test_every_audit_process_declares_container_and_resources(self):
+    AUDIT_PROCESSES = (
+        "VERIFY_DONOR_KINSHIP_PREPARED_INPUTS",
+        "RESOLVE_DONOR_KINSHIP_STRATA",
+        "AUDIT_BASELINE_DONOR_IDENTITY",
+        "RUN_DONOR_KINSHIP_PASS0",
+        "FIT_DONOR_KINSHIP_PCA",
+        "RUN_DONOR_KINSHIP_CONFIGURATION",
+        "SELECT_DONOR_KINSHIP_CANDIDATES",
+    )
+
+    def test_every_audit_process_is_pinned_to_the_analysis_container(self):
         """A process without an explicit container would silently inherit another one."""
         root = Path(__file__).resolve().parents[1]
         cloud = (root / "conf" / "google_batch.config").read_text(encoding="utf-8")
-        for process in (
-            "RESOLVE_DONOR_KINSHIP_STRATA",
-            "AUDIT_BASELINE_DONOR_IDENTITY",
-            "RUN_DONOR_KINSHIP_PASS0",
-            "FIT_DONOR_KINSHIP_PCA",
-            "RUN_DONOR_KINSHIP_CONFIGURATION",
-            "SELECT_DONOR_KINSHIP_CANDIDATES",
-        ):
+        for process in self.AUDIT_PROCESSES:
             line = next(
                 (row for row in cloud.splitlines() if f"withName: '{process}'" in row), None
             )
-            self.assertIsNotNone(line, msg=f"{process} has no resource block")
-            for directive in ("container", "cpus", "memory", "time", "disk"):
+            self.assertIsNotNone(line, msg=f"{process} has no cloud block")
+            for directive in ("container", "disk", "maxForks"):
                 self.assertIn(directive, line, msg=f"{process} does not declare {directive}")
+
+    def test_cpu_memory_and_time_have_a_single_source_of_truth(self):
+        """The module owns them; restating them in the cloud config could drift.
+
+        The cloud config also cannot resolve a param declared in another configuration
+        file, so referencing them there aborts the run before any task is created.
+        """
+        root = Path(__file__).resolve().parents[1]
+        cloud = (root / "conf" / "google_batch.config").read_text(encoding="utf-8")
+        module = (root / "modules" / "27D_DONOR_KINSHIP_AUDIT.nf").read_text(encoding="utf-8")
+        for process in self.AUDIT_PROCESSES:
+            line = next(row for row in cloud.splitlines() if f"withName: '{process}'" in row)
+            for directive in ("cpus", "memory", "time"):
+                self.assertNotIn(directive, line, msg=f"{process} restates {directive} in the cloud config")
+        for directive in ("cpus", "memory", "time"):
+            self.assertIn(directive, module, msg=f"the module never declares {directive}")
+
+    def test_cloud_config_never_reads_a_param_it_does_not_define(self):
+        """Nextflow aborts on a cross-file params reference inside a process block."""
+        root = Path(__file__).resolve().parents[1]
+        cloud = (root / "conf" / "google_batch.config").read_text(encoding="utf-8")
+        defined = set(re.findall(r"^\s{2}(\w+)\s*=", cloud, flags=re.MULTILINE))
+        referenced = set(re.findall(r"params\.(\w+)", cloud))
+        missing = sorted(referenced - defined)
+        self.assertEqual(missing, [], msg=f"referenced but not defined here: {missing}")
 
     def test_full_audit_is_gated_behind_an_explicit_authorization(self):
         root = Path(__file__).resolve().parents[1]
