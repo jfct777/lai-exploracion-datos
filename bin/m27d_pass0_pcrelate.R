@@ -94,7 +94,11 @@ snpgdsClose(gds)
 
 geno_reader <- GdsGenotypeReader(filename = gds_path)
 geno_data <- GenotypeData(geno_reader)
-geno_iter <- GenotypeBlockIterator(geno_data, snpInclude = snp_ids)
+geno_iter <- GenotypeBlockIterator(
+  geno_data,
+  snpInclude = snp_ids,
+  snpBlock = as.integer(contract$pcrelate$snp_block_size)
+)
 pcrelate_time <- system.time({
   related <- pcrelate(
     geno_iter,
@@ -119,6 +123,25 @@ if (n_pairs != expected_pairs) {
   stop("Unexpected PC-Relate pair count: expected ", expected_pairs, ", observed ", n_pairs)
 }
 
+# The closed form above is self-consistent: it recomputes the expectation from the same
+# n it just measured, so it cannot notice that the eligible universe changed.  The
+# checkpoint compares against the absolute number fixed before the run, which is what
+# the stop-rule actually means.
+checkpoint <- contract$pass0_checkpoint
+if (!is.null(checkpoint$expected_eligible_samples)) {
+  if (length(included) != as.integer(checkpoint$expected_eligible_samples)) {
+    stop(
+      "Eligible universe changed: the checkpoint fixes ",
+      checkpoint$expected_eligible_samples, " samples, observed ", length(included)
+    )
+  }
+}
+if (!is.null(checkpoint$expected_pairs)) {
+  if (n_pairs != as.numeric(checkpoint$expected_pairs)) {
+    stop("Pair count differs from the preregistered checkpoint ", checkpoint$expected_pairs)
+  }
+}
+
 # Only pairs at or above the lowest preregistered reporting threshold are written out.
 # The full 6.8 million rows carry no information the audit uses and the total count is
 # reported separately, so the stop-rule on pair count still has its number.
@@ -126,6 +149,16 @@ reported <- pairs[pairs$kin >= report_threshold, , drop = FALSE]
 write_private_tsv_gz(
   reported[order(-reported$kin), , drop = FALSE],
   file.path(outdir, "m27d_pass0_related_pairs.private.tsv.gz")
+)
+
+# GENESIS computes self-kinship in the same pass and the code used to discard it.  Its
+# diagonal is the inbreeding coefficient, which is the only observable in this module
+# that can separate a recent pedigree from drift inside an endogamous population: two
+# members of a small isolate look related to PC-Relate whether or not they share a
+# recent ancestor, and f tells those cases apart.  Recovering it later costs a full pass.
+write_private_tsv(
+  related$kinSelf,
+  file.path(outdir, "m27d_pass0_inbreeding.private.tsv")
 )
 
 scores <- data.frame(sample_id = rownames(pcs), pcs, stringsAsFactors = FALSE)

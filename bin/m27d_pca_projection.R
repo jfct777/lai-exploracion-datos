@@ -199,3 +199,16 @@ write_json(
   pretty = TRUE,
   auto_unbox = TRUE
 )
+
+# G2 is adjudicated here rather than only at selection time.  An axis carried by a
+# handful of people means PC-Relate would remove that family instead of ancestry, so
+# every configuration downstream would be estimating the wrong thing; letting the run
+# continue would pay for four PC-Relate passes before saying so.  The summary is written
+# first so the failure keeps its evidence.
+if (identical(g2_status, "FAIL")) {
+  stop(
+    "G2 failed for the '", marker_set_id, "' marker set: a component is carried by ",
+    round(min(effective_individuals), 1), " effective individuals, below the ",
+    round(min_effective, 1), " the preregistration requires"
+  )
+}

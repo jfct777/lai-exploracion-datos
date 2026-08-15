@@ -90,7 +90,11 @@ started <- Sys.time()
 seed <- apply_seed(contract)
 geno_reader <- GdsGenotypeReader(filename = gds_path)
 geno_data <- GenotypeData(geno_reader)
-geno_iter <- GenotypeBlockIterator(geno_data, snpInclude = snp_ids)
+geno_iter <- GenotypeBlockIterator(
+  geno_data,
+  snpInclude = snp_ids,
+  snpBlock = as.integer(contract$pcrelate$snp_block_size)
+)
 related <- pcrelate(
   geno_iter,
   pcs = pcs,
@@ -117,6 +121,11 @@ reported <- pairs[pairs$kin >= report_threshold, , drop = FALSE]
 write_private_tsv_gz(
   reported[order(-reported$kin), , drop = FALSE],
   file.path(outdir, sprintf("m27d_pcrelate_%s_pairs.private.tsv.gz", configuration_id))
+)
+
+write_private_tsv(
+  related$kinSelf,
+  file.path(outdir, sprintf("m27d_pcrelate_%s_inbreeding.private.tsv", configuration_id))
 )
 
 summary <- list(

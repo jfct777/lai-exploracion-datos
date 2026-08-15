@@ -337,6 +337,7 @@ process RUN_DONOR_KINSHIP_PASS0 {
     path "private/m27d_pass0_sample_universe.private.txt", emit: sample_universe
     path "private/m27d_pass0_sample_call_rate.private.tsv", emit: call_rates
     path "private/m27d_pass0_related_pairs.private.tsv.gz", emit: pairs
+    path "private/m27d_pass0_inbreeding.private.tsv", emit: inbreeding
     path "private/m27d_pass0_pca_scores.private.tsv.gz", emit: pca_scores
     path "m27d_pass0.manifest.json", emit: manifest
 
@@ -359,13 +360,15 @@ process RUN_DONOR_KINSHIP_PASS0 {
       --pairs m27d_pass0_related_pairs.private.tsv.gz \
       --samples m27d_pass0_sample_universe.private.txt \
       --call-rates m27d_pass0_sample_call_rate.private.tsv \
+      --strata ${strata} \
       --preregistration ${preregistration} \
       --stage M27D_PASS0_TRAINING_SET \
       --out-set m27d_pass0_training_set.private.txt \
       --out-alternate-set m27d_pass0_training_set_alternate_order.private.txt \
       --out-summary m27d_pass0_training_set.json
 
-    mv m27d_pass0_related_pairs.private.tsv.gz \
+    mv m27d_pass0_inbreeding.private.tsv \
+       m27d_pass0_related_pairs.private.tsv.gz \
        m27d_pass0_pca_scores.private.tsv.gz \
        m27d_pass0_sample_universe.private.txt \
        m27d_pass0_sample_call_rate.private.tsv \
@@ -388,6 +391,7 @@ process RUN_DONOR_KINSHIP_PASS0 {
       --output private/m27d_pass0_sample_universe.private.txt \
       --output private/m27d_pass0_sample_call_rate.private.tsv \
       --output private/m27d_pass0_related_pairs.private.tsv.gz \
+      --output private/m27d_pass0_inbreeding.private.tsv \
       --output private/m27d_pass0_pca_scores.private.tsv.gz \
       --provenance-b64 ${provenance_b64} \
       --params-json '{"scope":"m27d_pass0","provisional":true,"king_executed":false,"scientific_result":false}' \
@@ -478,6 +482,7 @@ process RUN_DONOR_KINSHIP_CONFIGURATION {
 
     output:
     path "private/m27d_pcrelate_${configuration_id}_pairs.private.tsv.gz", emit: pairs
+    path "private/m27d_pcrelate_${configuration_id}_inbreeding.private.tsv", emit: inbreeding
     path "m27d_pcrelate_${configuration_id}.json", emit: summary
     path "m27d_pcrelate_${configuration_id}.manifest.json", emit: manifest
 
@@ -503,7 +508,8 @@ process RUN_DONOR_KINSHIP_CONFIGURATION {
       --outdir .
 
     rm -f pca_scores_${marker_set_id}.tsv
-    mv m27d_pcrelate_${configuration_id}_pairs.private.tsv.gz private/
+    mv m27d_pcrelate_${configuration_id}_pairs.private.tsv.gz \
+       m27d_pcrelate_${configuration_id}_inbreeding.private.tsv private/
 
     python3 ${manifest_py} \
       --stage M27D_PCRELATE_CONFIGURATION \
@@ -517,6 +523,7 @@ process RUN_DONOR_KINSHIP_CONFIGURATION {
       --input ${common_r} \
       --output m27d_pcrelate_${configuration_id}.json \
       --output private/m27d_pcrelate_${configuration_id}_pairs.private.tsv.gz \
+      --output private/m27d_pcrelate_${configuration_id}_inbreeding.private.tsv \
       --provenance-b64 ${provenance_b64} \
       --params-json '{"scope":"m27d_pcrelate","configuration":"${configuration_id}","marker_set":"${marker_set_id}","training_set_reused":true,"king_executed":false}' \
       --stamp "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
@@ -580,7 +587,8 @@ process SELECT_DONOR_KINSHIP_CANDIDATES {
       --input ${call_rates} \
       --input ${baseline_identities} \
       --input ${preregistration} \
-      --input ${stage_summaries.first()} \
+      ${configuration_pairs.collect { "--input ${it}" }.join(' \\\n      ')} \
+      ${stage_summaries.collect { "--input ${it}" }.join(' \\\n      ')} \
       --input ${selection_py} \
       --input ${kinship_graph_py} \
       --output m27d_candidate_selection.json \

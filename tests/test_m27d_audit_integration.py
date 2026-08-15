@@ -64,7 +64,8 @@ Rscript /repo/bin/m27d_pass0_pcrelate.R --gds m27d_official_panel_autosomes.gds 
 
 python3 /repo/bin/m27d_kinship_graph.py --pairs m27d_pass0_related_pairs.private.tsv.gz \
   --samples m27d_pass0_sample_universe.private.txt \
-  --call-rates m27d_pass0_sample_call_rate.private.tsv --preregistration "$PREREG" \
+  --call-rates m27d_pass0_sample_call_rate.private.tsv --strata strata.private.tsv \
+  --preregistration "$PREREG" \
   --stage M27D_PASS0_TRAINING_SET --out-set training_set.txt \
   --out-alternate-set training_set_alt.txt --out-summary training_set.json
 

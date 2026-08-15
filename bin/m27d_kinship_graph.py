@@ -113,6 +113,35 @@ def maximal_independent_set(
     return sorted(selected, key=stable_hash)
 
 
+def read_strata_table(path: Path) -> dict[str, dict[str, str]]:
+    with path.open(encoding="utf-8", newline="") as handle:
+        return {row["sample_id"]: row for row in csv.DictReader(handle, delimiter="\t")}
+
+
+def stratum_coverage(
+    selected: list[str], universe: list[str], strata: dict[str, dict[str, str]], column: str
+) -> dict[str, dict[str, int]]:
+    """How many members of each stratum survived, next to how many were available.
+
+    Counting only the survivors hides the failure that matters: a whole population can
+    disappear because every one of its members is related to every other, and a total
+    that only goes down by a few looks unremarkable.  The denominator makes the loss
+    visible.
+    """
+    coverage: dict[str, dict[str, int]] = {}
+    chosen = set(selected)
+    for sample in universe:
+        row = strata.get(sample)
+        if row is None:
+            continue
+        label = str(row.get(column, "")).strip() or "(unlabelled)"
+        entry = coverage.setdefault(label, {"available": 0, "retained": 0})
+        entry["available"] += 1
+        if sample in chosen:
+            entry["retained"] += 1
+    return dict(sorted(coverage.items()))
+
+
 def read_call_rates(path: Path) -> dict[str, float]:
     call_rate: dict[str, float] = {}
     with open_text(path) as handle:
@@ -181,8 +210,22 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         args.out_alternate_set.write_text("\n".join(alternate) + "\n", encoding="utf-8")
 
     graph = adjacency(edges)
+    coverage: dict[str, object] = {}
+    if args.strata is not None:
+        strata = read_strata_table(args.strata)
+        for column in ("Population", "Ancestry", "Source", "Country"):
+            coverage[column] = stratum_coverage(primary, nodes, strata, column)
+        lost = sorted(
+            label
+            for label, counts in coverage["Population"].items()
+            if counts["available"] > 0 and counts["retained"] == 0
+        )
+        coverage["populations_with_no_survivor"] = lost
+        coverage["n_populations_with_no_survivor"] = len(lost)
+
     summary: dict[str, object] = {
         "stage": args.stage,
+        "stratum_coverage": coverage,
         "phi_threshold": args.threshold,
         "n_samples": len(nodes),
         "n_related_edges": len(edges),
@@ -208,6 +251,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pairs", type=Path, required=True)
     parser.add_argument("--samples", type=Path, required=True)
     parser.add_argument("--call-rates", type=Path, required=True)
+    parser.add_argument("--strata", type=Path, default=None)
     parser.add_argument("--preregistration", type=Path, default=None)
     parser.add_argument("--threshold", type=float, default=None)
     parser.add_argument("--stage", default="M27D_INDEPENDENT_SET")

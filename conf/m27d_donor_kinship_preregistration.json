@@ -78,6 +78,13 @@
       "trigger": "m27d-resource-smoke-20260814b reached its one-hour limit after conversion and both LD-pruning passes but before PC-Relate"
     }
   ],
+  "pass0_checkpoint": {
+    "expected_eligible_samples": 3685,
+    "expected_pairs": 6787770,
+    "max_peak_rss_gib": 22.4,
+    "max_wall_minutes": 90,
+    "note": "expected_pairs is written as an absolute number on purpose. Comparing the observed count against n(n-1)/2 recomputed from the same n is self-consistent and cannot detect a change in the eligible universe."
+  },
   "pca_axis_contract": {
     "confounding_note": "Source and Ancestry are not independent in this panel; their association with an axis is descriptive only.",
     "effective_individuals_metric": "participation ratio 1/sum(w_i^2), w_i = v_i^2 normalised over the axis",
@@ -108,7 +115,9 @@
     "maf_thresh": 0.01,
     "primary_phi_threshold": 0.0442,
     "scale": "overall",
-    "small_sample_correction": true
+    "small_sample_correction": true,
+    "snp_block_rationale": "Fixed rather than left to the GWASTools default so the number of blocks in flight, and therefore the peak memory, is a declared quantity instead of a library default that could change between versions.",
+    "snp_block_size": 10000
   },
   "privacy": {
     "private_outputs_location": "access-controlled GCS run prefix",

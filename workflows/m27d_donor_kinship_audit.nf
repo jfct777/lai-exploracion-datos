@@ -16,7 +16,7 @@ include {
 // The four M27D phases are launched one at a time on purpose.  An incomplete
 // preparation must never flow straight into a paid PC-Relate pass, and the audit must
 // never start without somebody reading the preparation hashes first.
-def PHASES = ['prepare', 'benchmark', 'strata', 'audit']
+def PHASES = ['prepare', 'benchmark', 'strata', 'pass0', 'audit']
 
 def sortedAutosomes(pattern, description) {
     channel
@@ -43,27 +43,31 @@ workflow {
     if( !(phase in PHASES) ) {
         throw new IllegalStateException("M27D phase must be one of ${PHASES.join(', ')}.")
     }
-    if( phase != 'audit' && !params.donor_kinship_smoke_only ) {
+    if( !(phase in ['pass0', 'audit']) && !params.donor_kinship_smoke_only ) {
         throw new IllegalStateException(
             'M27D technical phases run with --donor_kinship_smoke_only true.'
         )
     }
-    if( phase == 'audit' ) {
+    if( phase in ['pass0', 'audit'] ) {
         if( params.donor_kinship_smoke_only ) {
             throw new IllegalStateException(
-                'M27D audit is the full donor run. Set --donor_kinship_smoke_only false.'
+                "M27D ${phase} is part of the full donor run. Set --donor_kinship_smoke_only false."
             )
         }
         if( !params.donor_kinship_full_run_authorized ) {
             throw new IllegalStateException(
-                'M27D audit needs an explicit human authorization: --donor_kinship_full_run_authorized true.'
+                "M27D ${phase} needs an explicit human authorization: --donor_kinship_full_run_authorized true."
             )
         }
     }
 
     def repoDir = projectDir.resolve('..')
+    // Overridable so a test can point at a synthetic contract without rewriting the
+    // repository file in place. Swapping the real preregistration on disk to run a test
+    // risks leaving a fixture value committed, which would quietly destroy the evidence
+    // that the configurations were fixed before the results existed.
     def preregistration = file(
-        "${repoDir}/conf/m27d_donor_kinship_preregistration.json",
+        params.donor_kinship_preregistration ?: "${repoDir}/conf/m27d_donor_kinship_preregistration.json",
         checkIfExists: true,
     )
     def contract = new groovy.json.JsonSlurper().parse(preregistration)
@@ -227,6 +231,13 @@ workflow {
         channel.value(provenanceB64),
     )
     def trainingSet = RUN_DONOR_KINSHIP_PASS0.out.training_set
+
+    // The contract calls pass0 the real checkpoint, so it is launchable on its own.
+    // Committing the whole DAG in one go would pay for four PC-Relate configurations
+    // before anybody had read the number of related pairs the first pass found.
+    if( phase == 'pass0' ) {
+        return
+    }
 
     AUDIT_BASELINE_DONOR_IDENTITY(
         channel.value(preparedGds),

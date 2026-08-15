@@ -212,6 +212,15 @@ def build(outdir: Path, base_preregistration: Path) -> dict[str, object]:
         "threads": "selected from arm_full_n",
     }
     contract["resource_smoke"]["thread_screen"] = [1, 2]
+    # The checkpoint pins absolute numbers, so the fixture must restate its own instead
+    # of inheriting the panel's; otherwise pass0 would refuse to run on the fixture.
+    eligible = len(samples) - len(EXCLUDED)
+    contract["pass0_checkpoint"] = {
+        "expected_pairs": eligible * (eligible - 1) // 2,
+        "expected_eligible_samples": eligible,
+        "max_wall_minutes": 90,
+        "max_peak_rss_gib": 22.4,
+    }
     (outdir / "prereg.json").write_text(
         json.dumps(contract, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
