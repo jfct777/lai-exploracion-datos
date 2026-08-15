@@ -15,21 +15,24 @@ Three readings, each answering a different question:
     member, and blaming the greedy order is arithmetic nonsense.  This either exonerates
     the algorithm per population or names the individuals it actually costs.
 
-``pedigree_locus``
-    Whether an edge carries the IBS0 deficit that real identity-by-descent sharing
-    implies.  With no IBD2, pedigree relatedness satisfies k0 = 1 - 4*phi.  An estimate
-    inflated by a mis-specified allele frequency raises phi while leaving k0 near one, so
-    the residual k0 - (1 - 4*phi) separates genuine sharing from an estimation artifact.
-    It does **not** separate recent pedigree from old drift: both are real sharing, and
-    only segment *length*, which a moment estimator never sees, distinguishes their time
-    depth.  That question stays open here by construction.
+``k0_algebraic_identity``
+    An internal consistency check on the pair table, and **not** evidence about descent.
+    Below first degree GENESIS does not estimate k0 independently: ``correctK0`` replaces
+    it with ``1 - 4*kin + k2`` for every pair under the cutoff.  Comparing k0 against
+    ``1 - 4*phi`` inside that band therefore recovers k2 and nothing else, so it cannot
+    tell a real shared ancestor from an artifact of the fitted allele frequencies.  The
+    block is kept because the report has to carry that warning where the numbers are, and
+    because counting the edges that sit *above* the cutoff says how much of the table has
+    an independently estimated k0 at all.
 
-``axis_degeneracy``
+``axis_localization``
     The participation ratio of every principal component, next to the populations that
-    carry it.  This is the calibration the preregistration demands before any donor is
-    certified, and it is also a preflight: an axis carried by a handful of individuals
-    trips gate G2, and a configuration that would fail it should be known before a
-    machine is paid for rather than after.
+    carry it and the share carried by samples with no metadata row.  This is the
+    calibration the preregistration demands before any donor is certified.  It measures
+    how concentrated an axis is and stops there: a localised axis may be a family, a small
+    differentiated population, an isolate, a technical group or a bookkeeping gap, and
+    PC-Relate needs the axes that describe small differentiated populations.  Below the
+    contract fraction an axis is marked ``REVIEW``, never ``FAIL``.
 """
 
 from __future__ import annotations
@@ -45,6 +48,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from m27d_kinship_graph import (  # noqa: E402
+    is_interpretable,
     maximal_independent_set,
     maximum_independent_set_size,
     open_text,
@@ -52,6 +56,12 @@ from m27d_kinship_graph import (  # noqa: E402
     read_sample_universe,
     read_strata_table,
 )
+
+# GENESIS substitutes k0 below first degree instead of estimating it: correctK0() runs
+# `k0 := 1 - 4*kin + k2` for every pair with kin < 2^(-5/2), and pcrelate() calls it
+# whenever ibd.probs=TRUE.  Read in the source of the exact version this module runs, and
+# confirmed on the pass0 table, where the identity holds to 3e-15 over 2422 pairs.
+GENESIS_K0_SUBSTITUTION_CUTOFF = 2.0**-2.5
 
 
 def read_pairs_with_ibd(path: Path, threshold: float) -> list[dict[str, object]]:
@@ -145,16 +155,20 @@ def structural_ceiling(
     }
 
 
-def pedigree_locus(
+def k0_algebraic_identity(
     pairs: list[dict],
     strata: dict[str, dict[str, str]],
     lower: float,
     upper: float,
 ) -> dict[str, object]:
-    """Residual against k0 = 1 - 4*phi, the no-IBD2 pedigree line.
+    """Check the substitution GENESIS imposes on k0, and label it as non-independent.
 
-    Restricted to a kinship band because the line only holds where IBD2 is negligible; a
-    first-degree pair legitimately sits off it and would be read as inflation.
+    ``correctK0`` sets ``k0 := 1 - 4*kin + k2`` for every pair below the cutoff, and
+    ``pcrelate`` calls it whenever ``ibd.probs=TRUE``.  Everything reported here is that
+    identity or a restatement of k2; none of it is an independent observation about
+    descent.  Pairs at or above the cutoff keep the estimator's own k0 and are counted
+    apart, because those are the only rows where k0 carries information the identity did
+    not put there.
     """
     groups: dict[str, list[dict]] = defaultdict(list)
     for row in pairs:
@@ -168,46 +182,66 @@ def pedigree_locus(
 
     report = {}
     for label, rows in sorted(groups.items()):
-        residuals = sorted(row["k0"] - (1.0 - 4.0 * row["kin"]) for row in rows)
-        if not residuals:
-            continue
+        substituted = [row for row in rows if row["kin"] < GENESIS_K0_SUBSTITUTION_CUTOFF]
+        k2_values = sorted(row["k2"] for row in rows)
         report[label] = {
             "n_edges": len(rows),
-            "residual_median": round(statistics.median(residuals), 6),
-            "residual_q1": round(residuals[len(residuals) // 4], 6),
-            "residual_q3": round(residuals[3 * len(residuals) // 4], 6),
-            "fraction_residual_above_0_10": round(
-                sum(1 for value in residuals if value > 0.10) / len(residuals), 6
-            ),
-            "fraction_with_ibd2_above_0_05": round(
-                sum(1 for row in rows if row["k2"] > 0.05) / len(rows), 6
+            "n_edges_with_k0_substituted_by_genesis": len(substituted),
+            "n_edges_with_independently_estimated_k0": len(rows) - len(substituted),
+            # k2 is reported under its own name.  Reporting it as a "residual against the
+            # pedigree line" was the error this block now documents: inside the band the
+            # two are the same number.
+            "k2_median": round(statistics.median(k2_values), 6),
+            "k2_q1": round(k2_values[len(k2_values) // 4], 6),
+            "k2_q3": round(k2_values[3 * len(k2_values) // 4], 6),
+            "fraction_k2_above_0_05": round(
+                sum(1 for value in k2_values if value > 0.05) / len(k2_values), 6
             ),
         }
-    classified = sum(len(rows) for rows in groups.values())
+
+    in_band = [row for row in pairs if lower <= row["kin"] < upper]
+    substituted = [row for row in in_band if row["kin"] < GENESIS_K0_SUBSTITUTION_CUTOFF]
+    deviations = [
+        abs(row["k0"] - (1.0 - 4.0 * row["kin"] + row["k2"])) for row in substituted
+    ]
+    worst = max(deviations) if deviations else None
     return {
-        "kinship_band": [lower, upper],
-        "n_edges_in_band": classified,
-        "n_edges_outside_band": len([row for row in pairs if not lower <= row["kin"] < upper]),
-        "expected_k0_without_ibd2": "1 - 4*phi",
-        "by_group": report,
-        "what_a_positive_residual_would_mean": (
-            "phi raised without the matching IBS0 deficit, which is the signature of a "
-            "mis-specified allele frequency rather than of shared descent"
+        "diagnostic_class": "NON_INDEPENDENT_DIAGNOSTIC",
+        "evidence_status": "NOT_EVIDENCE_OF_IBD",
+        "warning": (
+            "Inside this band k0 was not estimated independently: GENESIS derived it from "
+            "kin and k2 through correctK0. Any comparison of k0 against 1 - 4*phi here "
+            "returns k2 by construction and says nothing about identity by descent."
         ),
+        "genesis_rule": "k0 := 1 - 4*kin + k2 for kin < 2^(-5/2)",
+        "genesis_rule_cutoff": GENESIS_K0_SUBSTITUTION_CUTOFF,
+        "genesis_rule_source": "GENESIS R/pcrelate.R, correctK0(), called when ibd.probs=TRUE",
+        "kinship_band": [lower, upper],
+        "n_edges_in_band": len(in_band),
+        "n_edges_outside_band": len(pairs) - len(in_band),
+        "n_edges_in_band_with_k0_substituted": len(substituted),
+        "n_edges_in_band_with_independently_estimated_k0": len(in_band) - len(substituted),
+        # A pair table that does not reproduce the substitution did not come from this
+        # code path, and the warning above would then be describing something else.
+        "max_abs_deviation_from_substitution": None if worst is None else float(f"{worst:.3e}"),
+        "substitution_reproduced": None if worst is None else worst < 1e-9,
+        "by_group": report,
         "what_this_cannot_decide": (
-            "Recent pedigree relatedness and old endogamy both produce a genuine IBS0 "
-            "deficit and both sit on this line. Separating them needs IBD segment lengths."
+            "Nothing here separates recent pedigree relatedness from old endogamy, and "
+            "nothing here separates either from a mis-specified individual-specific allele "
+            "frequency. Segment lengths are the evidence that could."
         ),
     }
 
 
-def axis_degeneracy(
+def axis_localization(
     scores_path: Path,
     strata: dict[str, dict[str, str]],
-    floor_fraction: float,
+    review_fraction: float,
     column: str,
     top_labels: int,
 ) -> dict[str, object]:
+    """How concentrated each axis is, and on whom. A measurement, not a verdict."""
     with open_text(scores_path) as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         components = [name for name in (reader.fieldnames or []) if name.startswith("PC")]
@@ -220,7 +254,7 @@ def axis_degeneracy(
             for index, name in enumerate(components):
                 columns[index].append(float(row[name]))
 
-    floor = floor_fraction * len(samples)
+    bound = review_fraction * len(samples)
     axes = {}
     for name, values in zip(components, columns):
         total = sum(value * value for value in values)
@@ -230,35 +264,48 @@ def axis_degeneracy(
         weights = [(value * value) / total for value in values]
         ratio = 1.0 / sum(weight * weight for weight in weights)
         carried: dict[str, float] = defaultdict(float)
+        unlabelled = 0.0
         for sample, weight in zip(samples, weights):
             row = strata.get(sample)
             label = (str(row.get(column, "")).strip() if row else "") or "(unlabelled)"
             carried[label] += weight
+            # The resolver emits a row for every panel member, so absence from the table is
+            # not the test: an unresolved sample has a row with empty fields. Using `row is
+            # None` made this field identically zero, including for the axis that is 90 per
+            # cent carried by exactly those samples. Same criterion the R gate uses.
+            if not is_interpretable(row):
+                unlabelled += weight
         leaders = sorted(carried.items(), key=lambda item: -item[1])[:top_labels]
         axes[name] = {
             "participation_ratio": round(ratio, 3),
-            "status": "PASS" if ratio >= floor else "FAIL",
+            "status": "PASS" if ratio >= bound else "REVIEW",
+            "fraction_carried_by_samples_without_metadata": round(unlabelled, 6),
             "carried_by": [
                 {"label": label, "weight_fraction": round(weight, 6)} for label, weight in leaders
             ],
         }
 
-    failing = sorted(name for name, row in axes.items() if row.get("status") == "FAIL")
+    flagged = sorted(name for name, row in axes.items() if row.get("status") == "REVIEW")
     prefixes = {}
     for count in range(1, len(components) + 1):
         subset = components[:count]
-        prefixes[count] = "FAIL" if any(axes[name]["status"] == "FAIL" for name in subset) else "PASS"
+        prefixes[count] = (
+            "REVIEW" if any(axes[name]["status"] == "REVIEW" for name in subset) else "PASS"
+        )
     return {
         "n_samples": len(samples),
-        "floor_fraction": floor_fraction,
-        "floor_effective_individuals": round(floor, 3),
+        "review_fraction": review_fraction,
+        "review_bound_effective_individuals": round(bound, 3),
         "by_axis": axes,
-        "failing_axes": failing,
-        "gate_status_by_leading_prefix": prefixes,
+        "axes_under_review": flagged,
+        "status_by_leading_prefix": prefixes,
+        "enforcement": "REPORT_ONLY_REVIEW_DOES_NOT_ABORT",
         "note": (
-            "Evaluated on the score table supplied. Gate G2 in the audit is applied to the "
-            "leading prefix a configuration uses, so a prefix marked FAIL here is a "
-            "configuration that would abort before PC-Relate."
+            "Evaluated on the score table supplied, and reported per leading prefix because "
+            "a configuration reads only the components it asks for. REVIEW means the axis is "
+            "concentrated on few individuals; it does not say why, and it does not abort a "
+            "run. Separating a family from a small differentiated population, an isolate, a "
+            "technical group or a metadata gap needs evidence this ratio does not carry."
         ),
     }
 
@@ -268,8 +315,9 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     if contract.get("pcrelate", {}).get("king_allowed"):
         raise SystemExit("M27D forbids KING")
     threshold = float(contract["pcrelate"]["primary_phi_threshold"])
-    floor_fraction = float(
-        contract["pca_axis_contract"]["min_effective_individual_fraction_per_axis"]
+    # One authority for the bound: the R gate and this report must not drift apart.
+    review_fraction = float(
+        contract["pca_axis_contract"]["g2b_axis_localization"]["review_fraction_per_axis"]
     )
 
     nodes = read_sample_universe(args.samples)
@@ -289,20 +337,24 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             pairs, nodes, strata, call_rate, args.population_column,
             args.min_population_members, args.max_component_nodes,
         ),
-        "pedigree_locus": pedigree_locus(pairs, strata, threshold, args.ibd2_band_upper),
+        "k0_algebraic_identity": k0_algebraic_identity(
+            pairs, strata, threshold, args.ibd2_band_upper
+        ),
         "sample_ids_emitted": False,
         "interpretation_limits": [
             "The structural ceiling exonerates or convicts the selection order only; it "
             "says nothing about why the edges exist.",
-            "The pedigree locus separates real sharing from an estimation artifact, never "
-            "recent pedigree from old endogamy.",
-            "Axis degeneracy is a property of the score table supplied, and the pass0 fit "
-            "included relatives, so a refit on the training set can move it.",
+            "The k0 identity check is algebra imposed by GENESIS, not evidence: it cannot "
+            "support or refute identity by descent, and this module offers nothing that "
+            "can. The cause of the edges is unidentified.",
+            "Axis localisation is a property of the score table supplied, and the pass0 fit "
+            "included relatives, so a refit on the training set can move it. A localised "
+            "axis is not by itself a family axis.",
         ],
     }
     if args.pca_scores is not None:
-        summary["axis_degeneracy"] = axis_degeneracy(
-            args.pca_scores, strata, floor_fraction, args.population_column, args.top_labels
+        summary["axis_localization"] = axis_localization(
+            args.pca_scores, strata, review_fraction, args.population_column, args.top_labels
         )
 
     args.out_summary.parent.mkdir(parents=True, exist_ok=True)
@@ -345,7 +397,10 @@ def parse_args() -> argparse.Namespace:
         "--ibd2-band-upper",
         type=float,
         default=0.177,
-        help="upper edge of the band where k0 = 1 - 4*phi holds, i.e. below first degree",
+        help=(
+            "upper edge of the reported band. It sits just above the 2^(-5/2) cutoff where "
+            "GENESIS stops substituting k0, so edges on either side are counted separately"
+        ),
     )
     parser.add_argument("--out-summary", type=Path, required=True)
     parser.add_argument("--out-table", type=Path, required=True)

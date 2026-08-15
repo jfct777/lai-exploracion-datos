@@ -278,14 +278,40 @@ class TestM27DAuditIntegration(unittest.TestCase):
             rows = list(csv.DictReader(handle, delimiter="\t"))
         self.assertTrue(all(row["detail"] for row in rows))
 
-    def test_g2_is_falsifiable_and_scales_with_cohort_size(self):
-        """A bound fixed as an absolute count would fail on any smaller cohort."""
+    def test_g2a_is_a_verdict_and_g2b_is_a_measurement(self):
+        """Only the technical check can fail; localisation is reported, never condemned."""
         for marker_set in ("anchor", "strict"):
             summary = self.summary(f"m27d_pca_{marker_set}.json")
-            self.assertIn(summary["g2_status"], {"PASS", "FAIL", "NOT_EVALUATED"})
-            expected_bound = summary["g2_bound_fraction"] * summary["n_eligible_samples"]
-            self.assertAlmostEqual(summary["g2_bound"], expected_bound, places=6)
-            self.assertEqual(len(summary["g2_effective_individuals_by_axis"]), summary["n_pcs"])
+            self.assertIn(summary["g2a_technical_integrity_status"], {"PASS", "FAIL"})
+            self.assertTrue(all(summary["g2a_checks"].values()), msg=summary["g2a_failed_checks"])
+            for entry in summary["g2b_status_by_preregistered_n_pcs"].values():
+                self.assertIn(entry["status"], {"PASS", "REVIEW", "NOT_EVALUATED"})
+
+    def test_the_localization_bound_scales_with_cohort_size(self):
+        """A bound fixed as an absolute count would fire on any smaller cohort."""
+        for marker_set in ("anchor", "strict"):
+            summary = self.summary(f"m27d_pca_{marker_set}.json")
+            expected_bound = summary["g2b_review_fraction"] * summary["n_eligible_samples"]
+            self.assertAlmostEqual(summary["g2b_review_bound"], expected_bound, places=6)
+            self.assertEqual(
+                len(summary["g2b_effective_individuals_by_axis"]), summary["n_pcs"]
+            )
+
+    def test_every_configuration_is_judged_on_its_own_prefix(self):
+        """The old aggregate over max_pcs condemned four configurations for one axis."""
+        contract = json.loads(
+            (REPO / "conf" / "m27d_donor_kinship_preregistration.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        expected = {f"n_pcs_{c['n_pcs']}" for c in contract["configurations"]}
+        for marker_set in ("anchor", "strict"):
+            summary = self.summary(f"m27d_pca_{marker_set}.json")
+            by_prefix = summary["g2b_status_by_preregistered_n_pcs"]
+            self.assertEqual(set(by_prefix), expected)
+            for key, entry in by_prefix.items():
+                used = summary["g2b_effective_individuals_by_axis"][: entry["n_pcs"]]
+                self.assertAlmostEqual(entry["min_effective_individuals"], min(used), places=6)
 
     def test_small_strata_are_suppressed_in_the_public_json_too(self):
         summary = self.summary("candidate_selection.json")

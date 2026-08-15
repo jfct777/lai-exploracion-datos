@@ -218,6 +218,19 @@ def read_strata_table(path: Path) -> dict[str, dict[str, str]]:
         return {row["sample_id"]: row for row in csv.DictReader(handle, delimiter="\t")}
 
 
+def is_interpretable(row: dict[str, str] | None) -> bool:
+    """Whether a sample has an attributable population.
+
+    The resolver emits a row for every panel member, so a missing metadata match is a row
+    with empty fields rather than a missing row.  Testing for the missing row instead of
+    the flag silently classifies every unresolved sample as resolved, which is how a field
+    meant to expose exactly those samples ended up identically zero.  One definition, here.
+    """
+    if row is None:
+        return False
+    return str(row.get("population_interpretable", "")).strip().upper() == "TRUE"
+
+
 def stratum_coverage(
     selected: list[str], universe: list[str], strata: dict[str, dict[str, str]], column: str
 ) -> dict[str, dict[str, int]]:

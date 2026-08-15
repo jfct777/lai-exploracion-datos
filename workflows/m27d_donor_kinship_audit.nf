@@ -247,9 +247,14 @@ workflow {
     // number self-consistent and wrong.
     def reusesPass0TrainingSet = phase == 'pc_sensitivity'
     if( reusesPass0TrainingSet ) {
+        // The universe and the call rates are listed here and not only at the point of
+        // use: without them the run built a PCA and both PC-Relate passes before dying on
+        // a null path, which is the expensive way to discover a missing argument.
         def missingReuse = [
             donor_kinship_pass0_training_set: params.donor_kinship_pass0_training_set,
             donor_kinship_pass0_training_set_sha256: params.donor_kinship_pass0_training_set_sha256,
+            donor_kinship_pass0_sample_universe: params.donor_kinship_pass0_sample_universe,
+            donor_kinship_pass0_call_rates: params.donor_kinship_pass0_call_rates,
         ].findAll { key, value -> !value }.keySet()
         if( missingReuse ) {
             throw new IllegalStateException(

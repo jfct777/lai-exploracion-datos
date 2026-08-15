@@ -165,7 +165,10 @@ M27D se detiene si ocurre cualquiera de estos casos:
 
 1. no se reconcilian muestra, build, cromosoma, REF/ALT o los 78 donantes del baseline;
 2. el panel común queda demasiado pobre o concentrado para obtener PCs de ancestría defendibles;
-3. los PCs usados por PC-Relate están dominados por familias o fuente técnica;
+3. los PCs usados por PC-Relate están dominados por familias o fuente técnica. Ojo con el
+   instrumento: la razón de participación mide concentración, no causa, y una población pequeña y
+   diferenciada la produce igual que una familia. Esta regla necesita evidencia que esa razón no
+   trae, así que hoy no puede adjudicarse sola;
 4. la segunda pasada no reduce la dependencia familiar de los PCs;
 5. la clasificación de candidatos cruza `phi=0,0442` entre configuraciones y no puede resolverse con
    la regla conservadora de unión;
@@ -473,18 +476,94 @@ puede decidir se lee como si todas hubieran pasado. `G0` admite además
 tiene gemelo en el panel: su parentesco con los candidatos no puede comprobarse, y eso
 es un punto ciego real y no un detalle de redondeo.
 
-`G2` se adjudica en la etapa de PCA y detiene la corrida allí. Dejar que fallara sólo en
-la selección obligaba a pagar antes las cuatro pasadas de PC-Relate.
+`G2` se adjudica en la etapa de PCA, pero ya no como un veredicto único. Eran tres
+preguntas distintas metidas en una sola, y la corrida se detenía por la tercera con el
+nombre de la primera. Quedan separadas así:
+
+- **`G2A`, integridad técnica.** Puntajes finitos, las muestras elegibles una sola vez y
+  en su orden, un único ajuste proyectado con sus propios loadings, el número de
+  componentes declarado y la semilla declarada. Son propiedades de la aritmética, no de
+  la cohorte: si algo de esto falla, ningún calibrado lo arregla. **Esta parte sí detiene
+  la etapa**, y se adjudica aquí para no pagar antes las cuatro pasadas de PC-Relate.
+- **`G2B`, localización de los ejes.** La razón de participación mide cuántos individuos
+  cargan efectivamente cada eje. Es una medida real y sin etiquetas, pero **no nombra la
+  causa**: un eje concentrado puede ser una familia, una población pequeña y diferenciada,
+  un aislado, un grupo técnico o las muestras sin fila de metadata. PC-Relate necesita
+  ejes que describan poblaciones pequeñas diferenciadas para estimar allí las frecuencias
+  individuales, así que tratar la concentración como avería quitaría justamente la
+  estructura sobre la que el estimador debe condicionar. Por debajo de la fracción el eje
+  queda en `REVIEW`, que es una petición de mirar y no un veredicto; `REVIEW` no detiene
+  la etapa y solo bloquea la certificación de donantes. **En la etapa de PCA** cada
+  configuración se juzga sobre el prefijo que realmente lee: una de 4 componentes no se
+  aborta por un PC11 que nunca ve. **En la certificación no hay ese alivio y no debe
+  prometerse**: la regla final de aristas es la **unión** sobre las cuatro
+  configuraciones, así que un donante certificado queda expuesto a todos los prefijos, y
+  un `REVIEW` en cualquiera corta.
+
+  Hay un precio que conviene decir en voz alta. Antes la corrida se detenía en la PCA,
+  **antes** de pagar las cuatro pasadas de PC-Relate; ahora se detiene en la selección,
+  **después**. Para el mismo desenlace la corrida cuesta cuatro pasadas más. Se acepta a
+  cambio de no producir un NO-GO falso con una medida que no distingue familia de
+  población pequeña, pero es un cambio de coste real y no una mejora gratis.
+- **`G2C`, representatividad de ancestría.** Queda en
+  `NOT_ADJUDICATED_REQUIRES_CALIBRATION`. Independencia bajo el grafo de parentesco y
+  representatividad de una población son propiedades distintas, y un conjunto puede
+  cumplir la primera perdiendo la segunda. No se declara umbral antes de medir la
+  supervivencia por población del conjunto de entrenamiento, porque eso sería elegir un
+  número para que salga el resultado deseado.
+
+La fracción del 2% no se movió al hacer esta separación.
 
 Se persisten dos objetos que el código anterior calculaba y tiraba:
 
 - el coeficiente de endogamia por individuo, que GENESIS devuelve en la misma llamada.
-  Es el único observable del módulo capaz de separar un pedigrí reciente de la deriva
-  dentro de una población pequeña, y recuperarlo después costaría otra pasada completa;
+  Es una salida descriptiva, no un control independiente: sale del mismo ajuste, con las
+  mismas componentes y las mismas frecuencias individuales, y GENESIS lo reinyecta en la
+  tabla de pares vía `correctK2`, que resta `f1*f2` de `k2`. Recuperarlo después costaría
+  otra pasada completa, y por eso se guarda; pero no arbitra entre pedigrí reciente y
+  deriva;
 - la cobertura por estrato del conjunto de entrenamiento y de los candidatos, con el
   denominador al lado del superviviente. Contar sólo supervivientes esconde justo el
   fallo que importa: que una población entera desaparezca porque todos sus miembros
   están emparentados entre sí.
+
+## Lo que `k0` no puede decir
+
+Conviene dejarlo escrito donde se lee el contrato, porque es una trampa fácil de repetir.
+
+Por debajo del primer grado GENESIS **no estima `k0`**: lo sustituye. En
+`GENESIS/R/pcrelate.R`, la función `correctK0()` ejecuta
+
+```
+kinBtwn[kin < 2^(-5/2), k0 := 1 - 4*kin + k2]
+```
+
+y `pcrelate()` la llama siempre que `ibd.probs=TRUE`. El corte `2^(-5/2)` vale
+0,1767767. Es decir: para toda pareja por debajo de ese φ, la relación entre `k0`, `kin` y
+`k2` la impone el software.
+
+La consecuencia práctica es que el residuo `k0 − (1 − 4φ)` **es exactamente `k2`** dentro
+de esa banda, y por tanto no puede usarse como prueba de que una arista corresponde a
+compartición por descendencia y no a un artefacto de las frecuencias alélicas
+individuales ajustadas. No es un argumento débil: es una identidad algebraica.
+
+Comprobado sobre la propia tabla de `pass0`: de las 2.502 parejas reportadas, 2.422 caen
+por debajo del corte y en todas ellas `k0 = 1 − 4·kin + k2` se cumple con una desviación
+máxima de 2,6·10⁻¹⁵. En la banda `[0,0442; 0,177)` hay 815 parejas y **ninguna** queda por
+encima del corte, así que la banda entera está sustituida. La mediana del «residuo» que se
+había reportado, +0,004203, coincide con la mediana de `k2`, +0,004203, con una diferencia
+máxima de 2,5·10⁻¹⁵.
+
+Las columnas `k0` y `k2` se conservan porque siguen siendo salidas descriptivas legítimas
+de PC-Relate. Lo que se retira es la lectura. El bloque del reporte queda marcado
+`NON_INDEPENDENT_DIAGNOSTIC` y `NOT_EVIDENCE_OF_IBD`, cuenta aparte las aristas que sí
+quedan por encima del corte —las únicas con un `k0` propio— y lleva el aviso al lado de
+los números.
+
+`F` tampoco sirve de árbitro, por la misma razón de fondo: sale del mismo ajuste y GENESIS
+lo reinyecta en la tabla de pares a través de `correctK2`. Lo que separaría parentesco
+reciente de coancestría antigua es la **longitud de los segmentos**, y un estimador de
+momentos no la ve.
 
 ## `pass0` es lanzable por separado
 

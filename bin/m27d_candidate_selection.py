@@ -31,6 +31,7 @@ from pathlib import Path
 
 from m27d_kinship_graph import (
     adjacency,
+    is_interpretable,
     maximal_independent_set,
     read_call_rates,
     read_pairs,
@@ -60,10 +61,6 @@ def read_strata(path: Path) -> dict[str, dict[str, str]]:
 
 def is_excluded(row: dict[str, str]) -> bool:
     return str(row.get("Exclude", "")).strip().upper() in {"TRUE", "T", "1", "YES", "Y"}
-
-
-def is_interpretable(row: dict[str, str]) -> bool:
-    return str(row.get("population_interpretable", "")).strip().upper() == "TRUE"
 
 
 def candidate_strata(row: dict[str, str]) -> set[str]:
@@ -233,20 +230,53 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         except (OSError, json.JSONDecodeError) as error:
             raise SystemExit(f"Could not read stage summary {path.name}: {error}")
 
-    def g2_status() -> tuple[str, str]:
+    def g2a_status() -> tuple[str, str]:
+        """Technical integrity of the fits. This one can fail the run."""
         verdicts = {
-            name: summary.get("g2_status")
+            name: summary.get("g2a_technical_integrity_status")
             for name, summary in upstream.items()
-            if "g2_status" in summary
+            if "g2a_technical_integrity_status" in summary
         }
         if not verdicts:
             return "NOT_EVALUATED", "no PCA summary reached the selection stage"
         if any(value == "FAIL" for value in verdicts.values()):
             failed = sorted(k for k, v in verdicts.items() if v == "FAIL")
-            return "FAIL", f"a principal component is carried by too few individuals in {failed}"
-        if any(value == "NOT_EVALUATED" for value in verdicts.values()):
-            return "NOT_EVALUATED", "at least one PCA fit could not be cross-tabulated"
-        return "PASS", "every component is carried by enough individuals to be a population axis"
+            return "FAIL", f"the PCA fit is not sound in {failed}"
+        if any(value != "PASS" for value in verdicts.values()):
+            return "NOT_EVALUATED", "at least one PCA fit could not be checked"
+        return "PASS", "every fit is finite, ordered and derived from a single projection"
+
+    def g2b_status() -> tuple[str, str]:
+        """Localisation of the axes. REVIEW is a request to look, not a failure.
+
+        This aggregates over every configuration, and that is deliberate rather than a
+        leftover of the old single verdict: the certified set is built from the *union* of
+        edges across all preregistered configurations, so a certified donor is exposed to
+        every prefix, not only to the one its own configuration read.  The per-prefix
+        relief belongs to the PCA stage, where a four-component run genuinely does not read
+        an eleventh axis and must not be aborted by it.  Here there is no such relief, and
+        promising it would be a false comfort.
+        """
+        flagged: dict[str, list[str]] = {}
+        seen = False
+        for name, summary in upstream.items():
+            by_prefix = summary.get("g2b_status_by_preregistered_n_pcs")
+            if not isinstance(by_prefix, dict):
+                continue
+            seen = True
+            for key, entry in by_prefix.items():
+                if isinstance(entry, dict) and entry.get("status") == "REVIEW":
+                    flagged.setdefault(name, []).append(key)
+        if not seen:
+            return "NOT_EVALUATED", "no PCA summary reached the selection stage"
+        if flagged:
+            detail = "; ".join(f"{name}: {', '.join(sorted(keys))}" for name, keys in sorted(flagged.items()))
+            return (
+                "REVIEW",
+                "an axis inside a preregistered prefix is carried by few individuals and "
+                f"its cause is unadjudicated ({detail})",
+            )
+        return "PASS", "every axis inside every preregistered prefix is carried broadly"
 
     def identity_status() -> tuple[str, str]:
         for summary in upstream.values():
@@ -264,7 +294,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         return "NOT_EVALUATED", "no baseline identity summary reached the selection stage"
 
     baseline_identity_verdict, baseline_identity_detail = identity_status()
-    g2_verdict, g2_detail = g2_status()
+    g2a_verdict, g2a_detail = g2a_status()
+    g2b_verdict, g2b_detail = g2b_status()
     disjoint = not (selected_set & baseline_identities) and not any(
         graph.get(sample, set()) & baseline_identities for sample in selected
     )
@@ -277,7 +308,13 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "NOT_EVALUATED",
             "decided by scientific review of the preparation stage, not by this stage",
         ),
-        "G2_pca_ancestry_not_family_or_source": (g2_verdict, g2_detail),
+        "G2A_pca_technical_integrity": (g2a_verdict, g2a_detail),
+        "G2B_axis_localization": (g2b_verdict, g2b_detail),
+        "G2C_ancestry_representativeness": (
+            "NOT_EVALUATED",
+            "the contract leaves this unadjudicated: it needs the per-population survival "
+            "of the training set, which is measured in its own stage",
+        ),
         "G3_pcrelate_iteration": (
             "PASS" if len(per_configuration) == len(expected_configurations) else "FAIL",
             f"{len(per_configuration)} of {len(expected_configurations)} configurations produced pairs",
@@ -344,8 +381,26 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     failed = [gate for gate, (status, _) in gates.items() if status == "FAIL"]
-    if failed and not args.report_only:
-        raise SystemExit("M27D candidate gates failed: " + ", ".join(sorted(failed)))
+    # REVIEW does not abort the PCA stage, and that is deliberate: an axis carried by few
+    # individuals may be a family, a small differentiated population, an isolate, a
+    # technical group or a metadata gap, and stopping a diagnostic on a measurement that
+    # cannot tell those apart would be a false NO-GO.  Certifying a donor is a different
+    # act, and the contract names it as the thing REVIEW blocks, so it blocks it here.
+    blocking_review = contract["pca_axis_contract"]["g2b_axis_localization"]["review_blocks"]
+    reviewed = (
+        [gate for gate, (status, _) in gates.items() if status == "REVIEW"]
+        if "donor_certification" in blocking_review
+        else []
+    )
+    if (failed or reviewed) and not args.report_only:
+        reasons = [f"failed: {', '.join(sorted(failed))}"] if failed else []
+        if reviewed:
+            reasons.append(
+                f"unadjudicated review: {', '.join(sorted(reviewed))}. The contract blocks "
+                "donor certification while an axis a configuration reads is localised and "
+                "its cause has not been named"
+            )
+        raise SystemExit("M27D candidate gates did not clear: " + "; ".join(reasons))
     return summary
 
 

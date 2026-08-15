@@ -54,7 +54,9 @@
   "gates": {
     "G0_input_identity_and_build": "PASS required",
     "G1_marker_qc_and_ld_pruning": "manual scientific review required; no forced SNP count",
-    "G2_pca_ancestry_not_family_or_source": "PASS required; every component must exceed pca_axis_contract.min_effective_individual_fraction_per_axis of the eligible cohort. Provisional floor; see operating_threshold_requires_calibration.",
+    "G2A_pca_technical_integrity": "PASS required; a failure aborts the PCA stage. See pca_axis_contract.g2a_technical_integrity.",
+    "G2B_axis_localization": "measured and reported per axis and per configuration prefix. REVIEW is not a failure and does not abort; it blocks donor certification only. See pca_axis_contract.g2b_axis_localization.",
+    "G2C_ancestry_representativeness": "NOT_ADJUDICATED_REQUIRES_CALIBRATION. See pca_axis_contract.g2c_ancestry_representativeness.",
     "G3_pcrelate_iteration": "pass0 and pass1 retained; candidate instability handled conservatively",
     "G4_baseline_disjointness": "no exact identity or phi>=0.0442 edge to any baseline donor",
     "G5_candidate_independence": "no phi>=0.0442 edge inside final set in any configuration",
@@ -93,6 +95,16 @@
       "failed_run_marker_counts_are_preliminary": true,
       "scientific_parameters_changed": false,
       "trigger": "m27d-resource-smoke-20260814b reached its one-hour limit after conversion and both LD-pruning passes but before PC-Relate"
+    },
+    {
+      "change": "split G2 into G2A technical integrity, G2B axis localisation and G2C ancestry representativeness; only G2A aborts, G2B reports PASS or REVIEW on the prefix each configuration reads, and G2C is left NOT_ADJUDICATED_REQUIRES_CALIBRATION",
+      "date": "2026-08-15",
+      "no_threshold_was_relaxed_to_let_a_run_pass": true,
+      "per_prefix_relief_applies_to": "the PCA stage only",
+      "scientific_parameters_changed": false,
+      "trigger": "The single G2 verdict aborted a run whenever any axis of max_pcs fell below the fraction, so a four-component configuration was blocked in the PCA stage by an eleventh axis it never reads. The participation ratio was also being read as evidence of a family component, which it cannot be: it measures localisation, and an isolate, a small differentiated population, a technical group or a metadata gap produce localisation as well. The fraction itself was not moved, and the enforcement was not removed: it moved from the PCA stage to donor certification, which is later and therefore costs the PC-Relate passes.",
+      "what_changed_besides_the_number": "The number did not move. The place where it bites did: the PCA stage no longer aborts on localisation, and donor certification refuses instead. That is the honest accounting, and it has a price: a run that would have stopped before paying for the PC-Relate passes now pays for them first.",
+      "why_certification_still_aggregates": "final_related_edge_rule is the union across all preregistered configurations, so a certified donor is exposed to every prefix and not only to its own."
     }
   ],
   "pass0_checkpoint": {
@@ -103,19 +115,69 @@
     "note": "expected_pairs is written as an absolute number on purpose. Comparing the observed count against n(n-1)/2 recomputed from the same n is self-consistent and cannot detect a change in the eligible universe."
   },
   "pca_axis_contract": {
-    "confounding_note": "Source and Ancestry are not independent in this panel; their association with an axis is descriptive only.",
-    "effective_individuals_metric": "participation ratio 1/sum(w_i^2), w_i = v_i^2 normalised over the axis",
-    "group_association_reported_not_gated": true,
-    "grouping_columns_reported": [
-      "Source",
-      "Ancestry",
-      "Country",
-      "Population"
-    ],
-    "min_effective_individual_fraction_per_axis": 0.02,
-    "operating_threshold_requires_calibration": "The 2 percent floor is provisional. Before any donor is certified, the observed distribution of participation ratios from the real pass0 must be inspected and the operating value justified against it. Until then this gate can only detect a degenerate axis, not adjudicate a borderline one.",
-    "rationale": "G2 asks whether an axis encodes ancestry rather than one family. Associating axes with Source cannot answer it: in this panel Source (1000_Genomes, HGDP, SGDP, NatWGS) is confounded with ancestry by construction, so a genuine ancestry axis separates sources strongly and a bound on that association would fail on correct behaviour. The participation ratio needs no group labels and counts how many individuals actually carry an axis. The bound is a FRACTION of the eligible cohort rather than an absolute count, because an absolute count calibrated for 3685 samples produces a false NO-GO on any smaller cohort. It is deliberately set as a floor, not as a discriminating threshold: a continental ancestry axis in a global reference panel is carried by hundreds of individuals, so 2 percent cannot fire on one, while an axis carried by a handful of relatives falls far below it.",
-    "status": "PROVISIONAL_DEGENERACY_FLOOR"
+    "g2a_technical_integrity": {
+      "checks": [
+        "every score is finite",
+        "the score table carries exactly the eligible samples, once each, in the eligible order",
+        "the training set is contained in the eligible universe and has no duplicates",
+        "the projection reuses the SNP loadings of the single fit and is not a second fit",
+        "the number of components equals the largest preregistered n_pcs"
+      ],
+      "enforcement": "PASS_REQUIRED_ABORTS_ON_FAIL",
+      "honest_scope": "Most of these restate a guard the stage already enforces with an earlier abort, so they document what was checked rather than add a new way to fail. The one that can genuinely fire on correct-looking input is the finiteness of the scores: the sample projection can return NaN for a sample the loadings cannot score, and nothing upstream looks. The seed is reported rather than checked, because comparing the applied value against the contract value it was taken from is a tautology.",
+      "rationale": "These are properties of the computation rather than of the cohort. A non-finite score, a permuted sample order or a second independent fit makes every downstream number meaningless, and no calibration can rescue it. This is the only part of G2 that can legitimately stop a run on its own."
+    },
+    "g2b_axis_localization": {
+      "confounding_note": "Source and Ancestry are not independent in this panel; their association with an axis is descriptive only.",
+      "effective_individuals_metric": "participation ratio 1/sum(w_i^2), w_i = v_i^2 normalised over the axis",
+      "enforcement": "REPORT_ONLY_REVIEW_DOES_NOT_ABORT",
+      "evaluated_on": "the leading prefix each configuration reads, never on max_pcs",
+      "group_association_reported_not_gated": true,
+      "grouping_columns_reported": [
+        "Source",
+        "Ancestry",
+        "Country",
+        "Population"
+      ],
+      "operating_threshold_requires_calibration": "The 2 percent value is provisional and marks the axes that deserve a look, not the axes that are wrong. Before any donor is certified the observed distribution of participation ratios has to be inspected and the operating value justified against it, together with the populations that carry each flagged axis.",
+      "rationale": "The participation ratio measures how many individuals effectively carry an axis, which is a real and label-free measurement. What it cannot do is name the cause: a localised axis may be a family, a small differentiated population, an isolate, a technical group or a set of samples with no metadata row, and PC-Relate legitimately needs axes that describe small differentiated populations in order to estimate individual-specific allele frequencies there. Turning the measurement into an automatic verdict would remove exactly the structure the estimator has to condition on. Associating axes with Source cannot answer the question either: in this panel Source is confounded with ancestry by construction, so a genuine ancestry axis separates sources strongly.",
+      "reported_per_axis": [
+        "participation_ratio",
+        "variance_explained",
+        "carrying Population, Ancestry and Source with their weight fractions",
+        "fraction of the axis carried by samples without a resolved metadata row"
+      ],
+      "review_blocks": [
+        "donor_certification"
+      ],
+      "review_does_not_block": [
+        "the PCA stage itself",
+        "diagnostic phases that certify no donor"
+      ],
+      "review_fraction_per_axis": 0.02,
+      "status_at_or_above_fraction": "PASS",
+      "status_below_fraction": "REVIEW",
+      "what_a_low_ratio_cannot_separate": [
+        "a family",
+        "a small differentiated population",
+        "an isolate",
+        "a technical or batch group",
+        "samples without a metadata row"
+      ]
+    },
+    "g2c_ancestry_representativeness": {
+      "inputs_required": [
+        "per-population membership before the kinship filter",
+        "per-population survival inside the training set",
+        "populations left with a single member",
+        "populations with no member left",
+        "populations whose induced kinship graph is a complete clique"
+      ],
+      "question": "whether the set the PCA is fitted on still represents the small populations well enough for its components to describe ancestry",
+      "status": "NOT_ADJUDICATED_REQUIRES_CALIBRATION",
+      "why_not_adjudicated": "Independence under the kinship graph and representativeness of a population are different properties, and a set can satisfy the first while losing the second. No threshold is declared here because inventing one before measuring the per-population survival of the training set would be choosing a number to fit a result."
+    },
+    "structure_note": "G2 used to be a single verdict that mixed a technical check, a localisation measurement and a representativeness question, and it aborted a run on the third of those under the name of the first. They are separated here because only the technical check can fail a run by itself."
   },
   "pcrelate": {
     "descriptive_phi_thresholds": [
@@ -234,7 +296,7 @@
   "status": "OPERATIONALLY_AMENDED_AFTER_TIMEOUT_BEFORE_RETRY",
   "stop_rules": [
     "Stop on identity, build, chromosome or REF/ALT mismatch.",
-    "Stop if ancestry PCs are dominated by family components or technical source.",
+    "Stop if ancestry PCs are dominated by family components or technical source. The participation ratio does not establish this on its own: it measures localisation, and a small differentiated population produces localisation too. Adjudicating this rule needs evidence G2B does not carry.",
     "Stop if a conservative independent and baseline-disjoint NAM candidate set cannot be formed.",
     "Stop before Gnomix or simulation if M27C readiness recomputed on final donors is below 0.80.",
     "Do not choose a parameter configuration after observing which one retains more donors.",

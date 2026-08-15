@@ -136,16 +136,54 @@ for (column in c("Source", "Ancestry", "Country", "Population")) {
   )
 }
 
-# G2 asks whether an axis encodes ancestry rather than one family.  Associating axes
-# with the Source column cannot answer that here: in this panel Source and ancestry are
-# confounded by construction, so a real ancestry axis separates sources strongly and a
-# bound on that association would fail on correct behaviour.
+# G2 used to be one verdict over three different questions, and it aborted runs on the
+# third of them under the name of the first.  They are separated here.
 #
-# The participation ratio needs no group labels.  For a unit-norm eigenvector it equals
-# the number of individuals effectively carrying the axis: about n when the axis is
-# spread across the cohort, about k when k people dominate it.  An axis carried by a
-# handful of people is a family axis, and removing it would remove that family rather
-# than ancestry.  The group associations stay in the report as description only.
+# G2A asks whether the computation is sound: finite scores, the eligible samples once
+# each and in the eligible order, one fit projected with its own SNP loadings, the
+# declared number of components, the declared seed.  Those are properties of the
+# arithmetic, so a failure aborts and no calibration can rescue it.
+#
+# G2B measures how many individuals carry each axis.  The participation ratio is a real,
+# label-free measurement, but it names no cause: a localised axis can be a family, a small
+# differentiated population, an isolate, a technical group or the samples with no metadata
+# row.  PC-Relate needs axes that describe small differentiated populations in order to
+# estimate individual-specific allele frequencies there, so treating localisation as
+# breakage would remove exactly the structure the estimator has to condition on.  Below
+# the fraction an axis is marked REVIEW, which is a request to look, not a verdict.
+#
+# G2C asks whether the fitting set still represents the small populations.  It is not
+# adjudicated here: that answer needs the per-population survival of the training set, and
+# declaring a threshold before measuring it would be choosing a number to fit a result.
+axis_contract <- contract$pca_axis_contract
+localization_contract <- axis_contract$g2b_axis_localization
+
+# Honest accounting of this receipt: most of these restate a guard the script already
+# enforced with stop() before reaching here, so they document what was checked rather than
+# add a new way to fail.  The one that can genuinely fire on correct-looking input is
+# scores_are_finite: snpgdsPCASampLoading can return NaN for a sample the loadings cannot
+# score, and nothing upstream looks.  A check that only repeats an earlier stop() is worth
+# publishing, but calling the whole list a gate would overstate it.
+g2a_checks <- list(
+  scores_are_finite = all(is.finite(scores)),
+  scores_cover_eligible_samples_in_order = identical(rownames(scores), included),
+  scores_have_no_duplicate_samples = !anyDuplicated(rownames(scores)),
+  component_count_matches_contract = identical(ncol(scores), as.integer(max_pcs)),
+  # snpgdsPCASNPLoading carries the sample set of the fit it was derived from, so this is
+  # what distinguishes reusing one fit from silently running a second one.
+  projection_reused_the_training_fit = identical(snp_loadings$sample.id, fit$sample.id),
+  training_set_inside_eligible_universe = all(training_set %in% included)
+)
+# The seed is reported, not checked. `apply_seed` returns the contract value it just
+# applied, so comparing the two was identical(x, x); and whether set.seed actually reached
+# the RNG is not observable from here. Publishing the number is the honest version.
+g2a_failed <- names(Filter(isFALSE, g2a_checks))
+g2a_status <- if (length(g2a_failed)) "FAIL" else "PASS"
+
+# The bound scales with the cohort: an absolute count calibrated for 3685 samples would
+# fire on any smaller panel for a reason that has nothing to do with the data.
+review_fraction <- as.numeric(localization_contract$review_fraction_per_axis)
+review_bound <- review_fraction * length(included)
 participation_ratio <- function(vector) {
   weights <- vector^2
   total <- sum(weights)
@@ -153,66 +191,87 @@ participation_ratio <- function(vector) {
   weights <- weights / total
   1 / sum(weights^2)
 }
-
-# The bound scales with the cohort: an absolute count calibrated for 3685 samples would
-# fail on any smaller panel for a reason that has nothing to do with the data.
-axis_contract <- contract$pca_axis_contract
-min_effective <- as.numeric(axis_contract$min_effective_individual_fraction_per_axis) * length(included)
 effective_individuals <- vapply(seq_len(ncol(scores)), function(i) participation_ratio(scores[, i]), numeric(1))
-g2_status <- if (anyNA(effective_individuals)) {
-  "NOT_EVALUATED"
-} else if (min(effective_individuals) >= min_effective) {
-  "PASS"
-} else {
-  "FAIL"
-}
+axis_status <- vapply(effective_individuals, function(value) {
+  if (is.na(value)) "NOT_EVALUATED" else if (value >= review_bound) "PASS" else "REVIEW"
+}, character(1))
 
-# The verdict is also reported per preregistered component count.  A configuration that
-# uses eight components is not made wrong by a degenerate twelfth axis it never reads, and
-# a single aggregate verdict over max_pcs cannot say which configurations are affected.
-# Enforcement stays as the contract declares it; this only makes the reason legible.
+# Every configuration is judged on the prefix it actually reads.  A run with four
+# components is not affected by an eleventh axis it never passes to PC-Relate, and the
+# old aggregate over max_pcs condemned all four configurations for one of them.
 prefixes <- sort(unique(vapply(contract$configurations, function(c) as.integer(c$n_pcs), integer(1))))
-g2_by_prefix <- lapply(prefixes, function(k) {
-  used <- effective_individuals[seq_len(min(k, length(effective_individuals)))]
+g2b_by_prefix <- lapply(prefixes, function(k) {
+  used <- seq_len(min(k, length(effective_individuals)))
+  flagged <- used[axis_status[used] == "REVIEW"]
   list(
     n_pcs = k,
-    min_effective_individuals = min(used),
-    status = if (anyNA(used)) "NOT_EVALUATED" else if (min(used) >= min_effective) "PASS" else "FAIL"
+    min_effective_individuals = min(effective_individuals[used]),
+    axes_under_review = paste0("PC", flagged),
+    status = if (any(axis_status[used] == "NOT_EVALUATED")) {
+      "NOT_EVALUATED"
+    } else if (length(flagged)) "REVIEW" else "PASS"
   )
 })
-names(g2_by_prefix) <- paste0("n_pcs_", prefixes)
+names(g2b_by_prefix) <- paste0("n_pcs_", prefixes)
 
-# The populations carrying each axis are the calibration the contract asks for before any
-# donor is certified: a bound on effective individuals is only interpretable next to who
-# those individuals are.
-carriers_for_axis <- function(index) {
+# A ratio is only interpretable next to who those individuals are, and the groups have to
+# include the samples with no metadata row: an axis they dominate is a bookkeeping gap
+# before it is anything biological.
+carriers_for_axis <- function(index, column) {
   weights <- scores[, index]^2
   total <- sum(weights)
   if (!is.finite(total) || total <= 0) return(list())
   weights <- weights / total
-  labels <- strata_included$Population
+  labels <- if (column %in% colnames(strata_included)) strata_included[[column]] else NULL
+  if (is.null(labels)) return(list())
+  labels <- as.character(labels)
   labels[is.na(labels) | !nzchar(trimws(labels))] <- "(unlabelled)"
-  by_label <- tapply(weights, factor(labels), sum)
-  by_label <- sort(by_label, decreasing = TRUE)
+  by_label <- sort(tapply(weights, factor(labels), sum), decreasing = TRUE)
   lapply(seq_len(min(3L, length(by_label))), function(i) {
     list(label = names(by_label)[i], weight_fraction = as.numeric(by_label[i]))
   })
 }
-axis_carriers <- lapply(seq_len(ncol(scores)), carriers_for_axis)
+grouping_columns <- as.character(localization_contract$grouping_columns_reported)
+unlabelled_fraction_for_axis <- function(index) {
+  weights <- scores[, index]^2
+  total <- sum(weights)
+  if (!is.finite(total) || total <= 0) return(NA_real_)
+  sum(weights[!annotated]) / total
+}
+axis_localization <- lapply(seq_len(ncol(scores)), function(index) {
+  carriers <- lapply(grouping_columns, function(column) carriers_for_axis(index, column))
+  names(carriers) <- grouping_columns
+  list(
+    participation_ratio = effective_individuals[index],
+    status = axis_status[index],
+    variance_explained = as.numeric(fit$varprop[index]),
+    fraction_carried_by_samples_without_metadata = unlabelled_fraction_for_axis(index),
+    carried_by = carriers
+  )
+})
+names(axis_localization) <- paste0("PC", seq_len(ncol(scores)))
+# Kept under its historical name so existing readers of the score summary do not break.
+axis_carriers <- lapply(seq_len(ncol(scores)), function(i) carriers_for_axis(i, "Population"))
 names(axis_carriers) <- paste0("PC", seq_len(ncol(scores)))
 
 summary <- list(
   stage = "M27D_PCA_PROJECTION",
   marker_set_id = marker_set_id,
-  g2_status = g2_status,
-  g2_min_effective_individuals = min(effective_individuals),
-  g2_effective_individuals_by_axis = as.numeric(effective_individuals),
-  g2_status_by_preregistered_n_pcs = g2_by_prefix,
-  g2_axis_carriers = axis_carriers,
-  g2_enforcement = "abort_if_any_preregistered_prefix_fails",
-  g2_bound = min_effective,
-  g2_bound_fraction = as.numeric(axis_contract$min_effective_individual_fraction_per_axis),
-  g2_bound_status = axis_contract$status,
+  g2a_technical_integrity_status = g2a_status,
+  g2a_checks = g2a_checks,
+  g2a_failed_checks = g2a_failed,
+  g2a_enforcement = "abort_on_fail",
+  g2b_axis_localization = axis_localization,
+  g2b_status_by_preregistered_n_pcs = g2b_by_prefix,
+  g2b_effective_individuals_by_axis = as.numeric(effective_individuals),
+  g2b_min_effective_individuals = min(effective_individuals),
+  g2b_axes_under_review = paste0("PC", which(axis_status == "REVIEW")),
+  g2b_axis_carriers = axis_carriers,
+  g2b_enforcement = "report_only_review_does_not_abort",
+  g2b_review_bound = review_bound,
+  g2b_review_fraction = review_fraction,
+  g2b_review_blocks = as.character(localization_contract$review_blocks),
+  g2c_ancestry_representativeness_status = axis_contract$g2c_ancestry_representativeness$status,
   scientific_result = FALSE,
   king_executed = FALSE,
   pcair_used = FALSE,
@@ -237,24 +296,35 @@ write_json(
   auto_unbox = TRUE
 )
 
-# G2 is adjudicated here rather than only at selection time.  An axis carried by a
-# handful of people means PC-Relate would remove that family instead of ancestry, so
-# every configuration downstream would be estimating the wrong thing; letting the run
-# continue would pay for four PC-Relate passes before saying so.  The summary is written
-# first so the failure keeps its evidence.
-if (identical(g2_status, "FAIL")) {
-  failing <- which(effective_individuals < min_effective)
-  blocked <- names(Filter(function(entry) identical(entry$status, "FAIL"), g2_by_prefix))
+# Only the technical check stops the stage, and it is adjudicated here rather than at
+# selection time so a broken fit does not get paid for four times.  The summary is written
+# first so the failure keeps its evidence.  G2B never stops anything: it is a measurement
+# whose flagged axes have to be read next to the populations carrying them, and the run
+# that certifies donors is the one that has to answer for them.
+if (identical(g2a_status, "FAIL")) {
   stop(
-    "G2 failed for the '", marker_set_id, "' marker set. Degenerate axes: ",
+    "G2A failed for the '", marker_set_id, "' marker set. Failed checks: ",
+    paste(g2a_failed, collapse = ", "),
+    ". These are properties of the computation, not of the cohort, so the stage cannot ",
+    "continue. The full receipt is in the summary written above."
+  )
+}
+
+if (any(axis_status == "REVIEW")) {
+  under_review <- which(axis_status == "REVIEW")
+  message(
+    "G2B marks ", length(under_review), " axis/axes for review in the '", marker_set_id,
+    "' marker set: ",
     paste0(
-      "PC", failing, " (", round(effective_individuals[failing], 1), " effective individuals)",
+      "PC", under_review, " (", round(effective_individuals[under_review], 1),
+      " effective individuals)",
       collapse = ", "
     ),
-    "; the preregistration requires at least ", round(min_effective, 1),
-    ". Blocked configurations: ", paste(blocked, collapse = ", "),
-    ". The per-axis ratios and their carrying populations are in the summary written above; ",
-    "the contract asks for the operating value to be justified against exactly that ",
+    "; the contract flags below ", round(review_bound, 1),
+    ". This is not a failure. A localised axis may be a family, a small differentiated ",
+    "population, an isolate, a technical group or the samples without a metadata row, and ",
+    "the ratio alone does not separate them. The carrying populations are in the summary ",
+    "written above, and the operating value still has to be justified against that ",
     "distribution before any donor is certified."
   )
 }

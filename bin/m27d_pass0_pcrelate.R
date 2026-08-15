@@ -151,11 +151,13 @@ write_private_tsv_gz(
   file.path(outdir, "m27d_pass0_related_pairs.private.tsv.gz")
 )
 
-# GENESIS computes self-kinship in the same pass and the code used to discard it.  Its
-# diagonal is the inbreeding coefficient, which is the only observable in this module
-# that can separate a recent pedigree from drift inside an endogamous population: two
-# members of a small isolate look related to PC-Relate whether or not they share a
-# recent ancestor, and f tells those cases apart.  Recovering it later costs a full pass.
+# GENESIS computes self-kinship in the same pass and the code used to discard it, so it
+# is kept: recovering it later costs a full pass.  It is a descriptive output and not an
+# independent check on the pairwise estimates.  f comes out of the same fit, conditioned
+# on the same components and the same individual-specific allele frequencies, and GENESIS
+# then feeds it back into the pair table through correctK2, which subtracts f1*f2 from k2.
+# Anything that biases phi in a small isolate biases f the same way, so f cannot arbitrate
+# between recent pedigree and drift.  Segment lengths are the evidence that could.
 write_private_tsv(
   related$kinSelf,
   file.path(outdir, "m27d_pass0_inbreeding.private.tsv")
