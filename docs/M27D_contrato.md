@@ -409,3 +409,93 @@ Medido sobre el panel sintético multiplicando por diez el número de bloques:
 La memoria es plana y solo el tiempo crece. El pico de 11,2 GB observado con 10.000 SNP y 3.685
 muestras debería sostenerse con 220.742, de modo que 32 GiB dejan alrededor del triple de margen.
 El pass0 real sigue siendo el punto de control: si el pico llega a 22,4 GiB, se detiene.
+
+## Corrección de la lectura del benchmark
+
+El texto anterior justificaba los 4 hilos diciendo que quedaron «a 3,95% del mejor
+tiempo». Esa lectura no se sostiene y conviene decirlo con claridad, porque de ella
+cuelga el dimensionamiento.
+
+El brazo de 10.000 SNP corrió con un solo bloque de marcadores: `GenotypeBlockIterator`
+usa bloques de 10.000 por defecto, de modo que `bpiterate` entregó un único elemento y
+sólo un trabajador tuvo trabajo. En esas condiciones el número de hilos no puede afectar
+a PC-Relate, y la diferencia del 3,95% entre 4, 8 y 16 hilos mide únicamente el escalado
+de la PCA. Se eligió el parámetro que gobierna el riesgo de memoria en un experimento
+donde ese parámetro no tenía efecto.
+
+Medido después sobre un panel sintético con la dimensión real de muestras (3.685
+individuos, 6.787.770 pares, cuatro bloques de marcadores en vuelo):
+
+| Trabajadores | Memoria máxima de R | RSS del árbol | Segundos |
+|---:|---:|---:|---:|
+| 1 | 4.467 MB | 2.210 MB | 218,3 |
+| 4 | 5.122 MB | 2.309 MB | 194,9 |
+
+Pasar de uno a cuatro trabajadores sube la memoria un 14,7%, no cuatro veces, y el
+tiempo baja un 11%. La conclusión operativa —4 hilos y 32 GiB— sobrevive, pero ahora
+descansa en una medida del eje correcto y no en un contraste que no podía discriminar.
+El tamaño de bloque se fija explícitamente en el preregistro para que el número de
+bloques en vuelo sea una cantidad declarada y no un valor por defecto de la librería.
+
+## Tiempo: el coste fijo domina
+
+La proyección de unos 66 minutos por pasada salía de multiplicar por 22 un único punto
+de 10.000 SNP. Ese método supone que todo el tiempo escala con los marcadores, y no es
+así: después de recorrer los bloques, GENESIS construye en el maestro y en un solo hilo
+las tablas de 6.787.770 filas, un coste que depende del número de muestras y no del de
+marcadores.
+
+Medido sobre el mismo panel sintético de 3.685 muestras:
+
+| SNP | Segundos |
+|---:|---:|
+| 2.500 | 167,4 |
+| 5.000 | 180,0 |
+| 10.000 | 168,9 |
+| 20.000 | 194,9 |
+
+El ajuste `t = 165,4 + 0,001325·m` da unos **7,6 minutos** para 220.742 marcadores y
+unos **5,9** para 141.249, frente a los 66 y 42 de la extrapolación lineal pura. El
+punto de 10.000 SNP reproduce además el tiempo del benchmark real (168,9 s medidos aquí
+frente a 179,8 s observados en la nube), lo que sugiere que el panel sintético es un
+buen sustituto para dimensionar.
+
+Sigue siendo una estimación: los datos reales tienen genotipos ausentes y estructura de
+LD que el panel sintético no reproduce, y ambas cosas añaden trabajo. Por eso la
+stop-rule de 90 minutos se mantiene sin tocar, ahora con un margen mucho mayor.
+
+## Compuertas y artefactos añadidos
+
+El recibo emite una fila por cada compuerta preregistrada, con tres estados posibles:
+`PASS`, `FAIL` y `NOT_EVALUATED`. Un recibo que omite las compuertas que esta etapa no
+puede decidir se lee como si todas hubieran pasado. `G0` admite además
+`PASS_WITH_BLIND_SPOT`, que es la lectura honesta cuando un donante del baseline no
+tiene gemelo en el panel: su parentesco con los candidatos no puede comprobarse, y eso
+es un punto ciego real y no un detalle de redondeo.
+
+`G2` se adjudica en la etapa de PCA y detiene la corrida allí. Dejar que fallara sólo en
+la selección obligaba a pagar antes las cuatro pasadas de PC-Relate.
+
+Se persisten dos objetos que el código anterior calculaba y tiraba:
+
+- el coeficiente de endogamia por individuo, que GENESIS devuelve en la misma llamada.
+  Es el único observable del módulo capaz de separar un pedigrí reciente de la deriva
+  dentro de una población pequeña, y recuperarlo después costaría otra pasada completa;
+- la cobertura por estrato del conjunto de entrenamiento y de los candidatos, con el
+  denominador al lado del superviviente. Contar sólo supervivientes esconde justo el
+  fallo que importa: que una población entera desaparezca porque todos sus miembros
+  están emparentados entre sí.
+
+## `pass0` es lanzable por separado
+
+El contrato llama a `pass0` «el punto de control real», así que ahora es una fase propia.
+Lanzar `audit` compromete el grafo entero y paga las cuatro configuraciones antes de que
+nadie haya leído cuántos pares emparentados encontró la primera pasada. La fase `pass0`
+se detiene justo después del conjunto de entrenamiento.
+
+El número de pares se compara contra el valor absoluto fijado en el preregistro
+(`pass0_checkpoint.expected_pairs = 6787770`) y no sólo contra `n(n-1)/2` recalculado a
+partir de la misma `n`, que es autoconsistente y no puede detectar que el universo
+elegible cambió. Comprobado sobre la metadata real: ninguna de las 3.685 muestras del
+panel tiene `Exclude=TRUE`, de modo que el universo elegible es 3.685 y el invariante de
+6.787.770 pares es correcto.
