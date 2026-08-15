@@ -24,98 +24,26 @@ import gzip
 import json
 import shutil
 import statistics
-import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "tests"))
+sys.path.insert(0, str(REPO / "bin"))
 
 import make_m27d_synthetic_fixture as fixture  # noqa: E402
-
-
-REPO = Path(__file__).resolve().parents[1]
-IMAGE = (
-    "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/dnabr-qc@sha256:"
-    "3a4661e41f7e397e986472bb8039671f85b1e8f7b86fc26af83a9837ef83d954"
+from m27d_pipeline_chain import (  # noqa: E402
+    FULL_AUDIT,
+    chain,
+    image_available,
+    run as run_chain,
 )
+
 PRIMARY_PHI = 0.0442
-
-CHAIN = r"""
-set -euo pipefail
-cd /out
-export PYTHONPATH=/repo/bin
-PREREG=/fx/prereg.json
-
-python3 /repo/bin/m27d_prepare_sample_strata.py --panel-vcf /fx/panel/panel.1.vcf \
-  --metadata /fx/metadata.tsv --private-out strata.private.tsv \
-  --summary-out strata_summary.json --suppress-below 1
-
-PANEL=$(for c in $(seq 1 22); do printf "%s," "/fx/panel/panel.$c.vcf"; done | sed 's/,$//')
-Rscript /repo/bin/m27d_prepare_genotype_resources.R --panel-vcfs "$PANEL" \
-  --exclude-bed /fx/exclude.bed --preregistration "$PREREG" --threads 2 --outdir . >/dev/null
-
-cp /repo/bin/m27d_common.R .
-Rscript /repo/bin/m27d_pass0_pcrelate.R --gds m27d_official_panel_autosomes.gds \
-  --snp-rds m27d_ld_pruned_anchor_snp_ids.rds --strata strata.private.tsv \
-  --preregistration "$PREREG" --threads 2 --outdir .
-
-python3 /repo/bin/m27d_kinship_graph.py --pairs m27d_pass0_related_pairs.private.tsv.gz \
-  --samples m27d_pass0_sample_universe.private.txt \
-  --call-rates m27d_pass0_sample_call_rate.private.tsv --strata strata.private.tsv \
-  --preregistration "$PREREG" \
-  --stage M27D_PASS0_TRAINING_SET --out-set training_set.txt \
-  --out-alternate-set training_set_alt.txt --out-summary training_set.json
-
-BASE=$(for c in $(seq 1 22); do printf "%s," "/fx/baseline/baseline.chr$c.vcf"; done | sed 's/,$//')
-Rscript /repo/bin/m27d_baseline_identity.R --panel-gds m27d_official_panel_autosomes.gds \
-  --baseline-vcfs "$BASE" --snp-rds m27d_ld_pruned_anchor_snp_ids.rds \
-  --strata strata.private.tsv --preregistration "$PREREG" --threads 2 --outdir . >/dev/null
-
-for pair in anchor:m27d_ld_pruned_anchor_snp_ids.rds strict:m27d_ld_pruned_strict_snp_ids.rds; do
-  id="${pair%%:*}"; rds="${pair##*:}"
-  Rscript /repo/bin/m27d_pca_projection.R --gds m27d_official_panel_autosomes.gds \
-    --snp-rds "$rds" --strata strata.private.tsv --training-set training_set.txt \
-    --preregistration "$PREREG" --marker-set-id "$id" --threads 2 --outdir .
-done
-
-python3 - "$PREREG" > configs.txt <<'PY'
-import json, sys
-for c in json.load(open(sys.argv[1]))["configurations"]:
-    print(c["id"], "anchor" if abs(float(c["ld_r2_max"]) - 0.2) < 1e-9 else "strict")
-PY
-
-while read -r cid marker; do
-  zcat "m27d_pca_${marker}_scores.private.tsv.gz" > "pca_scores_${marker}.tsv"
-  Rscript /repo/bin/m27d_pcrelate_configuration.R --gds m27d_official_panel_autosomes.gds \
-    --snp-rds "m27d_ld_pruned_${marker}_snp_ids.rds" --strata strata.private.tsv \
-    --training-set training_set.txt --pca-scores "pca_scores_${marker}.tsv" \
-    --preregistration "$PREREG" --configuration-id "$cid" --marker-set-id "$marker" \
-    --threads 2 --outdir .
-  rm -f "pca_scores_${marker}.tsv"
-done < configs.txt
-
-python3 /repo/bin/m27d_candidate_selection.py --pairs m27d_pcrelate_*_pairs.private.tsv.gz \
-  --strata strata.private.tsv --samples m27d_pass0_sample_universe.private.txt \
-  --call-rates m27d_pass0_sample_call_rate.private.tsv \
-  --baseline-identities m27d_baseline_panel_identities.private.txt \
-  --stage-summaries m27d_baseline_identity.json m27d_pass0_pcrelate.json \
-                    m27d_pca_anchor.json m27d_pca_strict.json \
-  --preregistration "$PREREG" --suppress-below 1 \
-  --out-private candidates.private.tsv --out-public candidate_counts.tsv \
-  --out-gates gates.tsv --out-summary candidate_selection.json
-"""
-
-
-def image_available() -> bool:
-    if shutil.which("docker") is None:
-        return False
-    probe = subprocess.run(
-        ["docker", "image", "inspect", IMAGE], capture_output=True, check=False
-    )
-    return probe.returncode == 0
+CHAIN = chain(FULL_AUDIT)  # kept: two tests assert on the chain text itself
 
 
 def read_pairs(path: Path) -> dict[tuple[str, str], float]:
@@ -140,22 +68,7 @@ class TestM27DAuditIntegration(unittest.TestCase):
         cls.expected = fixture.build(
             cls.fixture_dir, REPO / "conf" / "m27d_donor_kinship_preregistration.json"
         )
-        script = root / "chain.sh"
-        script.write_text(CHAIN, encoding="utf-8")
-        completed = subprocess.run(
-            [
-                "docker", "run", "--rm",
-                "-v", f"{REPO}:/repo:ro",
-                "-v", f"{cls.fixture_dir}:/fx:ro",
-                "-v", f"{cls.out}:/out",
-                "-v", f"{script}:/chain.sh:ro",
-                IMAGE, "bash", "/chain.sh",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=3600,
-        )
+        completed = run_chain(cls.fixture_dir, cls.out, REPO, FULL_AUDIT, timeout=3600)
         cls.completed = completed
         if completed.returncode != 0:
             raise AssertionError(f"M27D chain failed:\n{completed.stdout[-4000:]}\n{completed.stderr[-4000:]}")
