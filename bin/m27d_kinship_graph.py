@@ -113,6 +113,106 @@ def maximal_independent_set(
     return sorted(selected, key=stable_hash)
 
 
+def connected_components(nodes: list[str], graph: dict[str, set[str]]) -> list[list[str]]:
+    """Components of the kinship graph, restricted to nodes that carry an edge."""
+    seen: set[str] = set()
+    components: list[list[str]] = []
+    for start in nodes:
+        if start in seen or start not in graph:
+            continue
+        stack = [start]
+        seen.add(start)
+        component = []
+        while stack:
+            node = stack.pop()
+            component.append(node)
+            for neighbour in graph.get(node, ()):
+                if neighbour not in seen:
+                    seen.add(neighbour)
+                    stack.append(neighbour)
+        components.append(sorted(component, key=stable_hash))
+    return components
+
+
+def _component_maximum_independent_set(component: frozenset[str], graph, cache) -> int:
+    """Largest independent set inside one component, by branch and bound.
+
+    Two reductions carry most of the work.  An isolated vertex always belongs to some
+    maximum set, and so does a degree-one vertex: swapping it for its only neighbour can
+    never increase the total.  What remains branches on the highest-degree vertex, which
+    is the choice that removes the most of the graph on the inclusion side.
+    """
+    if not component:
+        return 0
+    key = component
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+
+    def degree(node: str) -> int:
+        return len(graph[node] & component)
+
+    pivot = max(component, key=lambda node: (degree(node), stable_hash(node)))
+    pivot_degree = degree(pivot)
+    if pivot_degree == 0:
+        result = len(component)
+    else:
+        low = min(component, key=lambda node: (degree(node), stable_hash(node)))
+        if degree(low) == 1:
+            neighbour = next(iter(graph[low] & component))
+            result = 1 + _component_maximum_independent_set(
+                component - {low, neighbour}, graph, cache
+            )
+        else:
+            with_pivot = 1 + _component_maximum_independent_set(
+                component - {pivot} - graph[pivot], graph, cache
+            )
+            without_pivot = _component_maximum_independent_set(component - {pivot}, graph, cache)
+            result = max(with_pivot, without_pivot)
+    cache[key] = result
+    return result
+
+
+def maximum_independent_set_size(
+    nodes: list[str], edges: set[tuple[str, str]], max_component_nodes: int = 60
+) -> dict[str, object]:
+    """Exact maximum independent set size, next to the components it could not solve.
+
+    The production selection is deliberately greedy and maximal-by-inclusion, not
+    maximum: the retained count must be a property of the data, not of a search.  This
+    function exists only to measure how much that choice costs, so it never feeds a
+    selection.  Maximum independent set is NP-hard, so a component larger than the cap
+    is reported as unsolved rather than approximated in silence, and the returned size
+    becomes a lower bound.
+    """
+    graph = adjacency(edges)
+    isolated = [node for node in nodes if node not in graph]
+    total = len(isolated)
+    unsolved = 0
+    largest = 0
+    largest_unsolved = 0
+    for component in connected_components(nodes, graph):
+        largest = max(largest, len(component))
+        if len(component) > max_component_nodes:
+            unsolved += 1
+            largest_unsolved = max(largest_unsolved, len(component))
+            # A component contributes at least the greedy answer, so the bound stays
+            # honest instead of dropping the component from the total.
+            induced = {edge for edge in edges if edge[0] in set(component) and edge[1] in set(component)}
+            total += len(maximal_independent_set(component, induced, {}))
+            continue
+        total += _component_maximum_independent_set(frozenset(component), graph, {})
+    return {
+        "size": total,
+        "exact": unsolved == 0,
+        "n_components": len(connected_components(nodes, graph)),
+        "largest_component_nodes": largest,
+        "n_components_not_solved_exactly": unsolved,
+        "largest_unsolved_component_nodes": largest_unsolved,
+        "max_component_nodes_solved": max_component_nodes,
+    }
+
+
 def read_strata_table(path: Path) -> dict[str, dict[str, str]]:
     with path.open(encoding="utf-8", newline="") as handle:
         return {row["sample_id"]: row for row in csv.DictReader(handle, delimiter="\t")}

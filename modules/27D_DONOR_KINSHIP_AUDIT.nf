@@ -9,6 +9,10 @@ process WRITE_DONOR_KINSHIP_RUN_PROVENANCE {
 
     input:
     val run_provenance_b64
+    val phase
+    val authorization_requested
+    path preregistration
+    path run_provenance_py
 
     output:
     path "run_provenance.json"
@@ -16,7 +20,12 @@ process WRITE_DONOR_KINSHIP_RUN_PROVENANCE {
     script:
     """
     set -euo pipefail
-    printf '%s' '${run_provenance_b64}' | base64 -d > run_provenance.json
+    python3 ${run_provenance_py} \
+      --base-b64 '${run_provenance_b64}' \
+      --phase '${phase}' \
+      --authorization-requested '${authorization_requested}' \
+      --preregistration ${preregistration} \
+      --out run_provenance.json
     """
 }
 
@@ -90,7 +99,7 @@ process PREPARE_DONOR_KINSHIP_RESOURCES {
       --output private/m27d_ld_pruned_anchor_snp_ids.rds \
       --output private/m27d_ld_pruned_strict_snp_ids.rds \
       --provenance-b64 ${provenance_b64} \
-      --params-json '{"scope":"m27d_marker_preparation","scientific_result":false,"full_run_authorized":false}' \
+      --params-json '{"scope":"m27d_marker_preparation","scientific_result":false}' \
       --stamp "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
       --run-provenance-ref ../run_provenance.json \
       --out m27d_marker_preparation.manifest.json
@@ -159,7 +168,7 @@ process BENCHMARK_DONOR_KINSHIP_RESOURCES {
       --output m27d_resource_smoke.json \
       --output m27d_resource_smoke.tsv \
       --provenance-b64 ${provenance_b64} \
-      --params-json '{"scope":"m27d_pcrelate_resource_smoke_only","pcrelate":"without_KING","scientific_result":false,"full_run_authorized":false}' \
+      --params-json '{"scope":"m27d_pcrelate_resource_smoke_only","pcrelate":"without_KING","scientific_result":false}' \
       --stamp "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
       --run-provenance-ref ../run_provenance.json \
       --out m27d_resource_smoke.manifest.json
@@ -241,7 +250,7 @@ process RESOLVE_DONOR_KINSHIP_STRATA {
       --output m27d_sample_strata_summary.json \
       --output private/m27d_sample_strata.private.tsv \
       --provenance-b64 ${provenance_b64} \
-      --params-json '{"scope":"m27d_sample_strata","scientific_result":false,"full_run_authorized":false}' \
+      --params-json '{"scope":"m27d_sample_strata","scientific_result":false}' \
       --stamp "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
       --run-provenance-ref ../run_provenance.json \
       --out m27d_sample_strata.manifest.json

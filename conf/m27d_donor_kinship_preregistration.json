@@ -1,4 +1,21 @@
 {
+  "authorization": {
+    "phases": [
+      "prepare",
+      "benchmark",
+      "strata",
+      "pass0",
+      "pc_sensitivity",
+      "audit"
+    ],
+    "phases_requiring_explicit_authorization": [
+      "pass0",
+      "pc_sensitivity",
+      "audit"
+    ],
+    "rationale": "The phase list and the subset that spends money used to be restated inside the workflow, once in the launch gate and once in the provenance record. The two copies drifted: the gate admitted pass0 while the record only recognised audit, so the authorized pass0 run published full_run_authorized=false and looked unauthorized in its own trail. Both the workflow and the provenance writer now read these lists from here, so there is one authority and no second copy to fall out of step.",
+    "reporting_contract": "Provenance must report the requested value, whether the phase consults it, and whether it was actually spent, under three separate names. A single field cannot answer those three questions and reading it as any one of them is how the discrepancy went unnoticed."
+  },
   "configurations": [
     {
       "id": "anchor_pc8_r2_020",

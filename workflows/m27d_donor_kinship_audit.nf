@@ -13,10 +13,35 @@ include {
     SELECT_DONOR_KINSHIP_CANDIDATES
 } from '../modules/27D_DONOR_KINSHIP_AUDIT'
 
-// The four M27D phases are launched one at a time on purpose.  An incomplete
-// preparation must never flow straight into a paid PC-Relate pass, and the audit must
-// never start without somebody reading the preparation hashes first.
-def PHASES = ['prepare', 'benchmark', 'strata', 'pass0', 'audit']
+// The M27D phases are launched one at a time on purpose.  An incomplete preparation
+// must never flow straight into a paid PC-Relate pass, and the audit must never start
+// without somebody reading the preparation hashes first.
+// The phase list and the subset that requires an explicit human authorization are read
+// from the preregistration, never restated here.  They were restated once, in the gate
+// and again in the provenance record, and the copies drifted far enough that an
+// authorized pass0 published itself as unauthorized.  bin/m27d_run_provenance.py reads
+// the same two lists from the same file, so there is nothing left to fall out of step.
+def authorizationPolicy(contract) {
+    def block = contract?.authorization
+    if( !(block instanceof Map) ) {
+        throw new IllegalStateException('M27D preregistration declares no authorization block.')
+    }
+    def phases = block.phases
+    def gated = block.phases_requiring_explicit_authorization
+    if( !(phases instanceof List) || !phases ) {
+        throw new IllegalStateException('M27D preregistration declares no authorization.phases.')
+    }
+    if( !(gated instanceof List) ) {
+        throw new IllegalStateException(
+            'M27D preregistration declares no authorization.phases_requiring_explicit_authorization.'
+        )
+    }
+    def unknown = (gated as Set) - (phases as Set)
+    if( unknown ) {
+        throw new IllegalStateException("M27D gated phases are not declared phases: ${unknown.sort().join(', ')}")
+    }
+    [phases: phases.collect { it.toString() }, gated: gated.collect { it.toString() }]
+}
 
 def sortedAutosomes(pattern, description) {
     channel
@@ -39,28 +64,6 @@ def sortedAutosomes(pattern, description) {
 }
 
 workflow {
-    def phase = params.donor_kinship_phase?.toString()
-    if( !(phase in PHASES) ) {
-        throw new IllegalStateException("M27D phase must be one of ${PHASES.join(', ')}.")
-    }
-    if( !(phase in ['pass0', 'audit']) && !params.donor_kinship_smoke_only ) {
-        throw new IllegalStateException(
-            'M27D technical phases run with --donor_kinship_smoke_only true.'
-        )
-    }
-    if( phase in ['pass0', 'audit'] ) {
-        if( params.donor_kinship_smoke_only ) {
-            throw new IllegalStateException(
-                "M27D ${phase} is part of the full donor run. Set --donor_kinship_smoke_only false."
-            )
-        }
-        if( !params.donor_kinship_full_run_authorized ) {
-            throw new IllegalStateException(
-                "M27D ${phase} needs an explicit human authorization: --donor_kinship_full_run_authorized true."
-            )
-        }
-    }
-
     def repoDir = projectDir.resolve('..')
     // Overridable so a test can point at a synthetic contract without rewriting the
     // repository file in place. Swapping the real preregistration on disk to run a test
@@ -73,6 +76,30 @@ workflow {
     def contract = new groovy.json.JsonSlurper().parse(preregistration)
     if( contract.pcrelate.king_allowed ) {
         throw new IllegalStateException('M27D preregistration must forbid KING.')
+    }
+    def policy = authorizationPolicy(contract)
+
+    def phase = params.donor_kinship_phase?.toString()
+    if( !(phase in policy.phases) ) {
+        throw new IllegalStateException("M27D phase must be one of ${policy.phases.join(', ')}.")
+    }
+    def phaseConsumesAuthorization = phase in policy.gated
+    if( !phaseConsumesAuthorization && !params.donor_kinship_smoke_only ) {
+        throw new IllegalStateException(
+            'M27D technical phases run with --donor_kinship_smoke_only true.'
+        )
+    }
+    if( phaseConsumesAuthorization ) {
+        if( params.donor_kinship_smoke_only ) {
+            throw new IllegalStateException(
+                "M27D ${phase} is part of the full donor run. Set --donor_kinship_smoke_only false."
+            )
+        }
+        if( !params.donor_kinship_full_run_authorized ) {
+            throw new IllegalStateException(
+                "M27D ${phase} needs an explicit human authorization: --donor_kinship_full_run_authorized true."
+            )
+        }
     }
 
     def pcrelateSmokeR = file("${repoDir}/bin/m27d_resource_smoke.R", checkIfExists: true)
@@ -106,12 +133,20 @@ workflow {
         thread_grid      : params.donor_kinship_thread_grid,
         phase            : phase,
         architecture     : 'persistent marker preparation, reusable benchmark, then a single-training-set donor audit',
-        full_run_authorized: phase == 'audit' ? true : false,
     ]
-    def runProvenanceB64 = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(runProvenance))
-        .bytes.encodeBase64().toString()
+    // The authorization fields are deliberately absent here.  They are added by
+    // bin/m27d_run_provenance.py, which derives them from the same preregistration the
+    // gate above consulted, so the record cannot disagree with the gate that let the run
+    // start.  Restating them in Groovy is what produced the discrepancy.
+    def runProvenanceB64 = groovy.json.JsonOutput.toJson(runProvenance).bytes.encodeBase64().toString()
 
-    WRITE_DONOR_KINSHIP_RUN_PROVENANCE(channel.value(runProvenanceB64))
+    WRITE_DONOR_KINSHIP_RUN_PROVENANCE(
+        channel.value(runProvenanceB64),
+        channel.value(phase),
+        channel.value(params.donor_kinship_full_run_authorized ? 'true' : 'false'),
+        channel.value(preregistration),
+        channel.value(file("${repoDir}/bin/m27d_run_provenance.py", checkIfExists: true)),
+    )
 
     if( phase == 'prepare' ) {
         def panelVcfs = sortedAutosomes(params.donor_kinship_panel_vcf_glob, 'the official panel')
