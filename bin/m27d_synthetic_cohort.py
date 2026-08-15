@@ -77,6 +77,18 @@ class Scenario:
     def between_deme_coancestry(self) -> float:
         return self.f_intermediate
 
+    @property
+    def within_background_group_coancestry(self) -> float:
+        """Two members of one background group share its drift, and that is not zero.
+
+        Labelling them zero buried the best available positive control: a group of fifty
+        with the same drift the method is asked to remove from a group of six. The two are
+        the same physical quantity, and the only difference is how representable the group
+        is — which is exactly what is under test, so calling one of them "nothing" made the
+        comparison circular.
+        """
+        return self.f_background
+
 
 # One pedigree unit is father, mother, a second mother, and two children: four
 # first-degree pairs and one second-degree pair, from five people.  Units are the
@@ -196,6 +208,13 @@ def all_samples(layout: CohortLayout) -> list[str]:
     return samples
 
 
+def background_group(layout: CohortLayout, sample: str) -> str:
+    """Which of the two background groups a sample belongs to, or none."""
+    if not sample.startswith("BG"):
+        return "NONE"
+    return "BG1" if int(sample[2:]) < layout.n_background_per_group else "BG2"
+
+
 def deme_of(layout: CohortLayout, sample: str) -> str:
     for deme in layout.demes:
         if sample in deme_ids(layout, deme):
@@ -287,7 +306,12 @@ def truth_pairs(layout: CohortLayout, scenario: Scenario) -> list[dict[str, obje
             relationship, location = pedigree.get(key, (UNRELATED, "none"))
             left_deme, right_deme = deme_of(layout, left), deme_of(layout, right)
             if left_deme == right_deme == "BACKGROUND":
-                coancestry_class, coancestry = "none", 0.0
+                same_group = background_group(layout, left) == background_group(layout, right)
+                if same_group:
+                    coancestry_class = "within_background_group"
+                    coancestry = scenario.within_background_group_coancestry
+                else:
+                    coancestry_class, coancestry = "between_background_groups", 0.0
             elif left_deme == right_deme:
                 coancestry_class = "within_deme"
                 coancestry = scenario.within_deme_coancestry

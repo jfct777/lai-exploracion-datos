@@ -87,6 +87,10 @@ def truth_class(row: dict[str, str]) -> str:
         return "coancestry_within_deme"
     if row["coancestry_class"] == "between_demes":
         return "coancestry_between_demes"
+    if row["coancestry_class"] == "within_background_group":
+        # A large group with the same drift the method is asked to remove from a small one.
+        # It is the positive control for absorption, and it only works if it is named.
+        return "coancestry_within_background_group"
     return "unrelated_no_coancestry"
 
 
@@ -96,7 +100,12 @@ POSITIVE_CLASSES = (
     "first_degree_in_background", "first_degree_in_deme",
     "second_degree_in_background", "second_degree_in_deme",
 )
-NEGATIVE_CLASSES = ("coancestry_within_deme", "coancestry_between_demes", "unrelated_no_coancestry")
+NEGATIVE_CLASSES = (
+    "coancestry_within_deme",
+    "coancestry_between_demes",
+    "coancestry_within_background_group",
+    "unrelated_no_coancestry",
+)
 
 
 def score_pass(
@@ -178,6 +187,15 @@ def score_pass(
 
     negatives = [row for name in NEGATIVE_CLASSES for row in by_class.get(name, [])]
     positives = [row for name in POSITIVE_CLASSES for row in by_class.get(name, [])]
+    # A global specificity is diluted by thousands of trivially unrelated pairs: it reads
+    # 0.99 in the same cells where three quarters of the coancestry-only pairs are called
+    # related. It is reported under a name that says what it is, next to the per-class
+    # rates that actually decide, so nobody can quote it as if it meant the method worked.
+    trivial = by_class.get("unrelated_no_coancestry", [])
+    informative = [
+        row for name in NEGATIVE_CLASSES if name != "unrelated_no_coancestry"
+        for row in by_class.get(name, [])
+    ]
     summary["overall"] = {
         "report_threshold": report_threshold,
         "primary_threshold": threshold,
@@ -189,9 +207,19 @@ def score_pass(
         "sensitivity": round(
             sum(1 for row in positives if row["retained"]) / len(positives), 6
         ) if positives else None,
-        "specificity": round(
+        "specificity_diluted_by_trivial_negatives": round(
             sum(1 for row in negatives if not row["retained"]) / len(negatives), 6
         ) if negatives else None,
+        "n_trivially_unrelated_pairs_in_that_denominator": len(trivial),
+        "specificity_over_informative_negatives_only": round(
+            sum(1 for row in informative if not row["retained"]) / len(informative), 6
+        ) if informative else None,
+        # The design is only safe if no truly related pair ends up entirely inside the set
+        # the frequencies are fitted on. It was never aggregated, so the property held by
+        # luck rather than by measurement.
+        "n_related_pairs_with_both_members_in_training": sum(
+            1 for row in positives if row["membership"] == "both_in_training"
+        ),
     }
     return summary
 

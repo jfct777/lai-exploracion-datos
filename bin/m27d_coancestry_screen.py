@@ -199,13 +199,17 @@ def score_run(outdir: Path, fixture_dir: Path, contract: dict) -> dict[str, obje
 
 
 def run_point(scenario: Scenario, seed: int, layout: CohortLayout, repo: Path,
-              preregistration: Path, threads: int, keep: Path | None) -> dict[str, object]:
+              preregistration: Path, threads: int, keep: Path | None,
+              point_timeout: int) -> dict[str, object]:
     workspace = Path(tempfile.mkdtemp(prefix=f"m27d-screen-{scenario.name}-{seed}-"))
     fixture_dir, outdir = workspace / "fx", workspace / "out"
     started = time.monotonic()
     try:
         build(fixture_dir, preregistration, scenario, layout, seed)
-        completed = run_chain(fixture_dir, outdir, repo, THROUGH_CONFIGURATIONS, threads)
+        completed = run_chain(
+            fixture_dir, outdir, repo, THROUGH_CONFIGURATIONS, threads,
+            timeout=point_timeout,
+        )
         elapsed = time.monotonic() - started
         if completed.returncode != 0:
             return {
@@ -216,8 +220,19 @@ def run_point(scenario: Scenario, seed: int, layout: CohortLayout, repo: Path,
                 "stderr_tail": completed.stderr[-2000:],
             }
         result = score_run(outdir, fixture_dir, load(fixture_dir / "prereg.json"))
-        result.update({"scenario": scenario.name, "seed": seed, "status": "OK",
-                       "elapsed_seconds": round(elapsed, 1)})
+        result.update({
+            "scenario": scenario.name,
+            "seed": seed,
+            "status": "OK",
+            "elapsed_seconds": round(elapsed, 1),
+            # Published, not merely computed: below one the deme is not separable by the
+            # components at all, so a null result there is a verdict on the cohort and not
+            # on the method. It was defined and never called, which is the same as absent.
+            "detectability_margin": detectability_margin(
+                scenario, layout.n_deme_members,
+                result["truth"]["n_samples"], result["truth"]["n_markers"],
+            ),
+        })
         if keep is not None:
             destination = keep / f"{scenario.name}-seed{seed}"
             destination.mkdir(parents=True, exist_ok=True)
@@ -260,7 +275,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
                 break
             results.append(
                 run_point(scenario, seed, layout, args.repo, args.preregistration,
-                          args.threads, args.keep_truth)
+                          args.threads, args.keep_truth, args.point_timeout_seconds)
             )
             print(
                 f"[{results[-1]['status']}] {scenario.name} seed={seed} "
@@ -326,6 +341,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--markers-per-chromosome", type=int, default=700)
     parser.add_argument("--threads", type=int, default=2)
     parser.add_argument("--max-wall-seconds", type=int, default=3600)
+    # The whole-run budget is only checked between points, so a hung container would
+    # never reach it. This bounds each point on its own.
+    parser.add_argument("--point-timeout-seconds", type=int, default=900)
     parser.add_argument("--keep-truth", type=Path, default=None)
     parser.add_argument("--out", type=Path, required=True)
     return parser.parse_args()

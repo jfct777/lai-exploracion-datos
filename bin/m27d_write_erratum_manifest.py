@@ -82,7 +82,11 @@ def build(
             "path": corrected.name,
             "bytes": corrected.stat().st_size,
             "sha256": sha256_file(corrected),
-            "unchanged": True,
+            # Not asserted here: this manifest pins the digest so a later change breaks it,
+            # which is a different and weaker claim than having compared against a prior
+            # one. Writing "unchanged: true" without that comparison was the only
+            # unverified line in the object whose whole purpose is verification.
+            "digest_pinned_for_future_comparison": True,
         },
         "required_statements_present": sorted(required),
         "git_commit": git_commit(repo),

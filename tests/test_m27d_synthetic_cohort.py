@@ -148,7 +148,35 @@ class TestNonKinshipTruth(unittest.TestCase):
         self.assertEqual(null.within_deme_coancestry, 0.0)
         self.assertEqual(null.between_deme_coancestry, 0.0)
         rows = truth_pairs(SMALL, null)
-        self.assertTrue(all(float(row["coancestry_phi"]) == 0.0 for row in rows))
+        deme_pairs = [
+            row for row in rows
+            if row["coancestry_class"] in ("within_deme", "between_demes")
+        ]
+        self.assertTrue(deme_pairs)
+        self.assertTrue(all(float(row["coancestry_phi"]) == 0.0 for row in deme_pairs))
+
+    def test_the_background_carries_its_own_drift_and_is_not_labelled_zero(self):
+        """Two members of one background group share f_background, which is not nothing.
+
+        Calling it zero buried the best positive control the cohort has: a large group with
+        the same drift the method is asked to remove from a small one.
+        """
+        rows = truth_pairs(SMALL, ISOLATE)
+        within = [row for row in rows if row["coancestry_class"] == "within_background_group"]
+        self.assertTrue(within)
+        for row in within:
+            self.assertAlmostEqual(
+                float(row["coancestry_phi"]), ISOLATE.f_background, places=6
+            )
+        across = [row for row in rows if row["coancestry_class"] == "between_background_groups"]
+        self.assertTrue(across)
+        self.assertTrue(all(float(row["coancestry_phi"]) == 0.0 for row in across))
+
+    def test_the_two_drift_terms_compose_and_are_not_added(self):
+        """A mutation replacing the composition with a sum survived every other test."""
+        scenario = Scenario("m", 0.0, 0.10, 0.10)
+        self.assertAlmostEqual(scenario.within_deme_coancestry, 1 - 0.9 * 0.9, places=9)
+        self.assertNotAlmostEqual(scenario.within_deme_coancestry, 0.20, places=4)
 
     def test_the_screen_spans_both_sides_of_the_graph_threshold(self):
         """A screen entirely on one side of 0.0442 would answer only half the question."""

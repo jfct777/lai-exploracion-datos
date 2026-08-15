@@ -37,13 +37,11 @@ sys.path.insert(0, str(REPO / "bin"))
 import make_m27d_synthetic_fixture as fixture  # noqa: E402
 from m27d_pipeline_chain import (  # noqa: E402
     FULL_AUDIT,
-    chain,
     image_available,
     run as run_chain,
 )
 
 PRIMARY_PHI = 0.0442
-CHAIN = chain(FULL_AUDIT)  # kept: two tests assert on the chain text itself
 
 
 def read_pairs(path: Path) -> dict[tuple[str, str], float]:
