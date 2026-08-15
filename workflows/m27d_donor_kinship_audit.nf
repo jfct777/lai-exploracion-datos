@@ -10,7 +10,8 @@ include {
     RUN_DONOR_KINSHIP_PASS0;
     FIT_DONOR_KINSHIP_PCA;
     RUN_DONOR_KINSHIP_CONFIGURATION;
-    SELECT_DONOR_KINSHIP_CANDIDATES
+    SELECT_DONOR_KINSHIP_CANDIDATES;
+    COMPARE_DONOR_KINSHIP_PC_COUNT
 } from '../modules/27D_DONOR_KINSHIP_AUDIT'
 
 // The M27D phases are launched one at a time on purpose.  An incomplete preparation
@@ -78,6 +79,20 @@ workflow {
         throw new IllegalStateException('M27D preregistration must forbid KING.')
     }
     def policy = authorizationPolicy(contract)
+    // The phases this file actually implements, checked against the contract before
+    // anything runs.  A phase declared in the preregistration without a branch used to
+    // pass the launch gate and fall through into the audit block: it would have re-run
+    // pass0, audited baseline identity over twenty-two VCFs and executed all four
+    // configurations, while the provenance record described a narrow technical phase.
+    def IMPLEMENTED_PHASES = ['prepare', 'benchmark', 'strata', 'pass0', 'pc_sensitivity', 'audit']
+    def declared = policy.phases as Set
+    if( declared != (IMPLEMENTED_PHASES as Set) ) {
+        throw new IllegalStateException(
+            'M27D phases drifted between the preregistration and the workflow. Declared but ' +
+            "not implemented: ${(declared - (IMPLEMENTED_PHASES as Set)).sort()}; implemented " +
+            "but not declared: ${((IMPLEMENTED_PHASES as Set) - declared).sort()}."
+        )
+    }
 
     def phase = params.donor_kinship_phase?.toString()
     if( !(phase in policy.phases) ) {
@@ -220,10 +235,31 @@ workflow {
         return
     }
 
-    // ---- audit ----------------------------------------------------------------
-    // The audit consumes a GDS produced by a run that finished days earlier, so the
+
+    // ---- audit, pass0 and pc_sensitivity ---------------------------------------
+    // All three consume a GDS produced by a run that finished days earlier, so the
     // manifest hash is re-checked here rather than trusted from the parameter alone.
     // Requiring the hash and never verifying it would make the parameter decorative.
+    //
+    // pc_sensitivity additionally reuses the pass0 training set instead of recomputing it,
+    // so its hash is checked too: the two configurations must provably fit their shared
+    // PCA on the same individuals, and a repointed path would leave every downstream
+    // number self-consistent and wrong.
+    def reusesPass0TrainingSet = phase == 'pc_sensitivity'
+    if( reusesPass0TrainingSet ) {
+        def missingReuse = [
+            donor_kinship_pass0_training_set: params.donor_kinship_pass0_training_set,
+            donor_kinship_pass0_training_set_sha256: params.donor_kinship_pass0_training_set_sha256,
+        ].findAll { key, value -> !value }.keySet()
+        if( missingReuse ) {
+            throw new IllegalStateException(
+                "M27D pc_sensitivity reuses the pass0 training set and is missing: ${missingReuse.join(', ')}"
+            )
+        }
+    }
+    def reusedTrainingSet = reusesPass0TrainingSet
+        ? file(params.donor_kinship_pass0_training_set, checkIfExists: true)
+        : preregistration
     VERIFY_DONOR_KINSHIP_PREPARED_INPUTS(
         channel.value(preparedGds),
         channel.value(anchorRds),
@@ -231,10 +267,11 @@ workflow {
         channel.value(preparationManifest),
         channel.value(params.donor_kinship_preparation_manifest_sha256),
         channel.value(verifyPreparedPy),
+        channel.value(reusedTrainingSet),
+        channel.value(reusesPass0TrainingSet ? params.donor_kinship_pass0_training_set_sha256 : ''),
     )
 
     def panelVcfs = sortedAutosomes(params.donor_kinship_panel_vcf_glob, 'the official panel')
-    def baselineVcfs = sortedAutosomes(params.donor_kinship_baseline_vcf_glob, 'the frozen baseline')
     def pass0R = file("${repoDir}/bin/m27d_pass0_pcrelate.R", checkIfExists: true)
     def pcaR = file("${repoDir}/bin/m27d_pca_projection.R", checkIfExists: true)
     def configurationR = file("${repoDir}/bin/m27d_pcrelate_configuration.R", checkIfExists: true)
@@ -253,6 +290,105 @@ workflow {
         channel.value(provenanceB64),
     )
     def strata = RESOLVE_DONOR_KINSHIP_STRATA.out.private_strata
+
+    // The configuration table is read from the preregistration, never restated here, so
+    // the code cannot drift from the contract it claims to implement.  The mapping from
+    // r2 to a prepared marker set is an explicit lookup rather than an if/else: with a
+    // fallback branch, a configuration asking for an r2 nobody prepared would quietly
+    // borrow the strict set and report a result for a pruning that never happened.
+    def PREPARED_MARKER_SETS = [(0.2d): 'anchor', (0.1d): 'strict']
+    def markerSetFor = { r2 ->
+        def match = PREPARED_MARKER_SETS.find { threshold, _id -> Math.abs((r2 as double) - threshold) < 1e-9 }
+        if( !match ) {
+            throw new IllegalStateException(
+                "M27D has no prepared marker set for r2=${r2}; prepared: ${PREPARED_MARKER_SETS.keySet()}"
+            )
+        }
+        match.value
+    }
+    def snpRdsFor = [anchor: anchorRds, strict: strictRds]
+
+    if( phase == 'pc_sensitivity' ) {
+        // A component-count comparison is only readable if the component count is the only
+        // thing that differs, so the pair is validated against the contract here rather
+        // than trusted from its name.  Which pair to compare stays a parameter: the
+        // spectrum, not the code, decides which contrast is informative.
+        def requested = params.donor_kinship_pc_sensitivity_configurations
+            .toString().split(',').collect { it.trim() }.findAll { it }
+        if( requested.size() != 2 ) {
+            throw new IllegalStateException(
+                "M27D pc_sensitivity compares exactly two configurations, got ${requested}"
+            )
+        }
+        def selected = requested.collect { id ->
+            def match = contract.configurations.find { it.id == id }
+            if( !match ) {
+                throw new IllegalStateException(
+                    "Configuration '${id}' is not preregistered; available: " +
+                    contract.configurations.collect { it.id }.join(', ')
+                )
+            }
+            match
+        }
+        if( (selected[0].ld_r2_max as double) != (selected[1].ld_r2_max as double) ) {
+            throw new IllegalStateException(
+                'The two configurations differ in the LD threshold as well as in the component count.'
+            )
+        }
+        if( (selected[0].n_pcs as int) == (selected[1].n_pcs as int) ) {
+            throw new IllegalStateException('The two configurations use the same component count.')
+        }
+        def markerSetId = markerSetFor(selected[0].ld_r2_max)
+
+        // One PCA fit, sliced twice.  Fitting per configuration would refit the axes and
+        // change two things at once, which is the failure this phase exists to avoid.
+        FIT_DONOR_KINSHIP_PCA(
+            channel.of([markerSetId, snpRdsFor[markerSetId]]),
+            channel.value(preparedGds),
+            strata.first(),
+            VERIFY_DONOR_KINSHIP_PREPARED_INPUTS.out.verification.map { reusedTrainingSet },
+            channel.value(preregistration),
+            channel.value(pcaR),
+            channel.value(commonR),
+            channel.value(manifestPy),
+            channel.value(provenanceB64),
+        )
+
+        def sensitivityInputs = channel.fromList(selected.collect { [markerSetId, it.id] })
+            .combine(FIT_DONOR_KINSHIP_PCA.out.scores, by: 0)
+            .map { setId, configurationId, scores ->
+                tuple(configurationId, setId, snpRdsFor[setId], scores)
+            }
+        RUN_DONOR_KINSHIP_CONFIGURATION(
+            sensitivityInputs,
+            channel.value(preparedGds),
+            strata.first(),
+            channel.value(reusedTrainingSet),
+            channel.value(preregistration),
+            channel.value(configurationR),
+            channel.value(commonR),
+            channel.value(manifestPy),
+            channel.value(provenanceB64),
+        )
+
+        COMPARE_DONOR_KINSHIP_PC_COUNT(
+            RUN_DONOR_KINSHIP_CONFIGURATION.out.pairs.collect(),
+            RUN_DONOR_KINSHIP_CONFIGURATION.out.inbreeding.collect(),
+            RUN_DONOR_KINSHIP_CONFIGURATION.out.summary.collect(),
+            strata.first(),
+            channel.value(file(params.donor_kinship_pass0_sample_universe, checkIfExists: true)),
+            channel.value(file(params.donor_kinship_pass0_call_rates, checkIfExists: true)),
+            channel.value(selected[0].id),
+            channel.value(preregistration),
+            channel.value(file("${repoDir}/bin/m27d_pc_comparison.py", checkIfExists: true)),
+            channel.value(kinshipGraphPy),
+            channel.value(manifestPy),
+            channel.value(provenanceB64),
+        )
+        return
+    }
+
+    def baselineVcfs = sortedAutosomes(params.donor_kinship_baseline_vcf_glob, 'the frozen baseline')
 
     RUN_DONOR_KINSHIP_PASS0(
         VERIFY_DONOR_KINSHIP_PREPARED_INPUTS.out.verification.map { preparedGds },
@@ -304,21 +440,6 @@ workflow {
         channel.value(provenanceB64),
     )
 
-    // The configuration table is read from the preregistration, never restated here, so
-    // the code cannot drift from the contract it claims to implement.  The mapping from
-    // r2 to a prepared marker set is an explicit lookup rather than an if/else: with a
-    // fallback branch, a configuration asking for an r2 nobody prepared would quietly
-    // borrow the strict set and report a result for a pruning that never happened.
-    def PREPARED_MARKER_SETS = [(0.2d): 'anchor', (0.1d): 'strict']
-    def markerSetFor = { r2 ->
-        def match = PREPARED_MARKER_SETS.find { threshold, _id -> Math.abs((r2 as double) - threshold) < 1e-9 }
-        if( !match ) {
-            throw new IllegalStateException(
-                "M27D has no prepared marker set for r2=${r2}; prepared: ${PREPARED_MARKER_SETS.keySet()}"
-            )
-        }
-        match.value
-    }
     def configurations = channel.fromList(
         contract.configurations.collect { config -> [markerSetFor(config.ld_r2_max), config.id] }
     )

@@ -149,18 +149,23 @@ class TestSingleAuthorityForTheRule(unittest.TestCase):
     WORKFLOW = (REPO / "workflows" / "m27d_donor_kinship_audit.nf").read_text(encoding="utf-8")
     MODULE = (REPO / "modules" / "27D_DONOR_KINSHIP_AUDIT.nf").read_text(encoding="utf-8")
 
-    def test_the_workflow_holds_no_literal_list_of_phases(self):
-        """The drift was two literal phase lists; the contract is now the only one.
+    def test_the_workflow_holds_no_second_copy_of_the_gated_phase_list(self):
+        """The drift was two lists of *gated* phases; the contract is now the only one.
 
-        Single-phase routing such as `if( phase == 'pass0' )` stays legal: it decides
-        where the DAG stops, not whether an authorization was spent.  What is banned is
-        a *list* of phases, because that is the shape the gate and the record each kept
-        their own copy of.
+        A list of implemented phases is a different fact and is allowed, because the
+        workflow verifies it against the contract before anything runs. What is banned is
+        a second list of the phases that consume the authorization, which is the shape the
+        gate and the provenance record each kept their own copy of.
         """
+        gated = set(CONTRACT["authorization"]["phases_requiring_explicit_authorization"])
         phases = "|".join(CONTRACT["authorization"]["phases"])
-        literal_list = re.compile(rf"\[\s*'({phases})'\s*,")
-        found = literal_list.findall(self.WORKFLOW)
-        self.assertEqual(found, [], msg=f"phase list restated in Groovy: {found}")
+        for literal in re.findall(rf"\[((?:\s*'(?:{phases})'\s*,?)+)\]", self.WORKFLOW):
+            members = set(re.findall(r"'([^']+)'", literal))
+            self.assertNotEqual(members, gated, msg=f"gated phase list restated: {members}")
+
+    def test_the_implemented_phase_list_is_checked_against_the_contract(self):
+        self.assertIn("IMPLEMENTED_PHASES", self.WORKFLOW)
+        self.assertIn("phases drifted between the preregistration and the workflow", self.WORKFLOW)
 
     def test_the_workflow_reads_the_policy_from_the_preregistration(self):
         self.assertIn("phases_requiring_explicit_authorization", self.WORKFLOW)

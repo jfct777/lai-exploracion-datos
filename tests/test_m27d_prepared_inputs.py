@@ -73,7 +73,26 @@ class TestM27DPreparedInputs(unittest.TestCase):
             payload["params"]["full_run_authorized"] = True
             manifest.write_text(json.dumps(payload), encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, "full run blocked"):
+            with self.assertRaisesRegex(ValueError, "claims an authorized full run"):
+                verifier.verify_prepared_inputs(manifest, paths, digest(manifest))
+
+    def test_accepts_a_manifest_without_the_legacy_run_level_flag(self):
+        """Authorization moved to run_provenance.json; a per-stage copy would drift."""
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest, paths = self.make_fixture(Path(tmp))
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            payload["params"].pop("full_run_authorized", None)
+            manifest.write_text(json.dumps(payload), encoding="utf-8")
+            result = verifier.verify_prepared_inputs(manifest, paths, digest(manifest))
+            self.assertTrue(result["verified"])
+
+    def test_rejects_a_manifest_that_claims_to_be_a_scientific_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest, paths = self.make_fixture(Path(tmp))
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            payload["params"]["scientific_result"] = True
+            manifest.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "non-scientific"):
                 verifier.verify_prepared_inputs(manifest, paths, digest(manifest))
 
 

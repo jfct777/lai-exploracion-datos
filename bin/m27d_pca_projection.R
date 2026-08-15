@@ -167,12 +167,49 @@ g2_status <- if (anyNA(effective_individuals)) {
   "FAIL"
 }
 
+# The verdict is also reported per preregistered component count.  A configuration that
+# uses eight components is not made wrong by a degenerate twelfth axis it never reads, and
+# a single aggregate verdict over max_pcs cannot say which configurations are affected.
+# Enforcement stays as the contract declares it; this only makes the reason legible.
+prefixes <- sort(unique(vapply(contract$configurations, function(c) as.integer(c$n_pcs), integer(1))))
+g2_by_prefix <- lapply(prefixes, function(k) {
+  used <- effective_individuals[seq_len(min(k, length(effective_individuals)))]
+  list(
+    n_pcs = k,
+    min_effective_individuals = min(used),
+    status = if (anyNA(used)) "NOT_EVALUATED" else if (min(used) >= min_effective) "PASS" else "FAIL"
+  )
+})
+names(g2_by_prefix) <- paste0("n_pcs_", prefixes)
+
+# The populations carrying each axis are the calibration the contract asks for before any
+# donor is certified: a bound on effective individuals is only interpretable next to who
+# those individuals are.
+carriers_for_axis <- function(index) {
+  weights <- scores[, index]^2
+  total <- sum(weights)
+  if (!is.finite(total) || total <= 0) return(list())
+  weights <- weights / total
+  labels <- strata_included$Population
+  labels[is.na(labels) | !nzchar(trimws(labels))] <- "(unlabelled)"
+  by_label <- tapply(weights, factor(labels), sum)
+  by_label <- sort(by_label, decreasing = TRUE)
+  lapply(seq_len(min(3L, length(by_label))), function(i) {
+    list(label = names(by_label)[i], weight_fraction = as.numeric(by_label[i]))
+  })
+}
+axis_carriers <- lapply(seq_len(ncol(scores)), carriers_for_axis)
+names(axis_carriers) <- paste0("PC", seq_len(ncol(scores)))
+
 summary <- list(
   stage = "M27D_PCA_PROJECTION",
   marker_set_id = marker_set_id,
   g2_status = g2_status,
   g2_min_effective_individuals = min(effective_individuals),
   g2_effective_individuals_by_axis = as.numeric(effective_individuals),
+  g2_status_by_preregistered_n_pcs = g2_by_prefix,
+  g2_axis_carriers = axis_carriers,
+  g2_enforcement = "abort_if_any_preregistered_prefix_fails",
   g2_bound = min_effective,
   g2_bound_fraction = as.numeric(axis_contract$min_effective_individual_fraction_per_axis),
   g2_bound_status = axis_contract$status,
@@ -206,9 +243,18 @@ write_json(
 # continue would pay for four PC-Relate passes before saying so.  The summary is written
 # first so the failure keeps its evidence.
 if (identical(g2_status, "FAIL")) {
+  failing <- which(effective_individuals < min_effective)
+  blocked <- names(Filter(function(entry) identical(entry$status, "FAIL"), g2_by_prefix))
   stop(
-    "G2 failed for the '", marker_set_id, "' marker set: a component is carried by ",
-    round(min(effective_individuals), 1), " effective individuals, below the ",
-    round(min_effective, 1), " the preregistration requires"
+    "G2 failed for the '", marker_set_id, "' marker set. Degenerate axes: ",
+    paste0(
+      "PC", failing, " (", round(effective_individuals[failing], 1), " effective individuals)",
+      collapse = ", "
+    ),
+    "; the preregistration requires at least ", round(min_effective, 1),
+    ". Blocked configurations: ", paste(blocked, collapse = ", "),
+    ". The per-axis ratios and their carrying populations are in the summary written above; ",
+    "the contract asks for the operating value to be justified against exactly that ",
+    "distribution before any donor is certified."
   )
 }

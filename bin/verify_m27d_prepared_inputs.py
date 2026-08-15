@@ -41,8 +41,13 @@ def verify_prepared_inputs(
         raise ValueError("Preparation manifest is missing params")
     if params.get("scope") != "m27d_marker_preparation":
         raise ValueError("Preparation manifest has an unexpected scope")
-    if params.get("full_run_authorized") is not False:
-        raise ValueError("Preparation manifest does not keep the full run blocked")
+    if params.get("scientific_result") is not False:
+        raise ValueError("Preparation manifest does not declare itself non-scientific")
+    # The legacy run-level flag was removed from stage manifests: authorization belongs to
+    # run_provenance.json, and a per-stage copy is a second place for it to drift. Old
+    # manifests still carry it, so it is rejected only when it claims an authorized run.
+    if params.get("full_run_authorized") not in (None, False):
+        raise ValueError("Preparation manifest claims an authorized full run")
 
     expected_hashes = manifest.get("sha256")
     if not isinstance(expected_hashes, dict):
@@ -90,6 +95,11 @@ def parse_args() -> argparse.Namespace:
     # run, so the audit must not verify itself against the superseded file.  The genotype
     # resources it does consume are still checked.
     parser.add_argument("--metadata-strata", type=Path, default=None)
+    # A phase that reuses a training set produced by an earlier run must prove it is the
+    # reviewed one. Naming the file is not proof: the path can be repointed at another
+    # run's output and every downstream number would still look self-consistent.
+    parser.add_argument("--training-set", type=Path, default=None)
+    parser.add_argument("--expected-training-set-sha256", default=None)
     parser.add_argument("--out", required=True, type=Path)
     return parser.parse_args()
 
@@ -104,6 +114,24 @@ def main() -> None:
         prepared,
         args.expected_manifest_sha256,
     )
+    if (args.training_set is None) != (args.expected_training_set_sha256 is None):
+        raise SystemExit("--training-set and --expected-training-set-sha256 go together")
+    if args.training_set is not None:
+        observed = sha256_file(args.training_set)
+        if observed != args.expected_training_set_sha256:
+            raise ValueError(
+                f"Training set SHA-256 mismatch: expected "
+                f"{args.expected_training_set_sha256}, observed {observed}"
+            )
+        result["reused_training_set"] = {
+            "bytes": args.training_set.stat().st_size,
+            "sha256": observed,
+            "n_samples": sum(
+                1
+                for line in args.training_set.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ),
+        }
     args.out.write_text(
         json.dumps(result, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

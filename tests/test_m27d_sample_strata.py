@@ -297,6 +297,8 @@ class TestM27DNoKing(unittest.TestCase):
         "FIT_DONOR_KINSHIP_PCA",
         "RUN_DONOR_KINSHIP_CONFIGURATION",
         "SELECT_DONOR_KINSHIP_CANDIDATES",
+        "COMPARE_DONOR_KINSHIP_PC_COUNT",
+        "WRITE_DONOR_KINSHIP_RUN_PROVENANCE",
     )
 
     def test_every_audit_process_is_pinned_to_the_analysis_container(self):

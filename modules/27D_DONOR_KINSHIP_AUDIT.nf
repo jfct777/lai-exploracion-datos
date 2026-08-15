@@ -189,11 +189,19 @@ process VERIFY_DONOR_KINSHIP_PREPARED_INPUTS {
     path preparation_manifest
     val preparation_manifest_sha256
     path verify_prepared_py
+    path reused_training_set
+    val reused_training_set_sha256
 
     output:
     path "m27d_prepared_input_verification.json", emit: verification
 
     script:
+    // The training-set arguments are added only when a phase actually reuses one. Passing
+    // them always would make the phase that produces the training set verify a file it has
+    // not written yet.
+    def reuseArgs = reused_training_set_sha256
+        ? "--training-set ${reused_training_set} --expected-training-set-sha256 '${reused_training_set_sha256}'"
+        : ''
     """
     set -euo pipefail
 
@@ -203,7 +211,78 @@ process VERIFY_DONOR_KINSHIP_PREPARED_INPUTS {
       --gds ${prepared_gds} \
       --anchor-rds ${anchor_rds} \
       --strict-rds ${strict_rds} \
+      ${reuseArgs} \
       --out m27d_prepared_input_verification.json
+    """
+}
+
+process COMPARE_DONOR_KINSHIP_PC_COUNT {
+    tag "m27d_pc_count_sensitivity"
+    publishDir "${params.donor_kinship_results_dir}/pc_sensitivity", mode: 'copy', overwrite: false
+    cpus 2
+    memory '16 GB'
+    time '1h'
+
+    input:
+    path configuration_pairs
+    path configuration_inbreeding
+    path configuration_summaries
+    path strata
+    path sample_universe
+    path call_rates
+    val reference_configuration
+    path preregistration
+    path comparison_py
+    path kinship_graph_py
+    path manifest_py
+    val provenance_b64
+
+    output:
+    path "m27d_pc_count_sensitivity.json", emit: summary
+    path "m27d_pc_count_sensitivity.tsv", emit: table
+    path "m27d_pc_count_sensitivity.manifest.json", emit: manifest
+
+    script:
+    // The configuration identifier is recovered from each file name so the comparison can
+    // never pair a table with the wrong arm's summary.
+    def pairArgs = configuration_pairs.collect {
+        "${it.name.replaceFirst(/^m27d_pcrelate_/, '').replaceFirst(/_pairs\.private\.tsv\.gz$/, '')}=${it}"
+    }.join(' ')
+    def fArgs = configuration_inbreeding.collect {
+        "${it.name.replaceFirst(/^m27d_pcrelate_/, '').replaceFirst(/_inbreeding\.private\.tsv$/, '')}=${it}"
+    }.join(' ')
+    def summaryArgs = configuration_summaries.collect { it.toString() }.join(' ')
+    """
+    set -euo pipefail
+
+    PYTHONPATH=. python3 ${comparison_py} \
+      --pairs ${pairArgs} \
+      --inbreeding ${fArgs} \
+      --summaries ${summaryArgs} \
+      --reference-configuration ${reference_configuration} \
+      --samples ${sample_universe} \
+      --call-rates ${call_rates} \
+      --strata ${strata} \
+      --preregistration ${preregistration} \
+      --out-summary m27d_pc_count_sensitivity.json \
+      --out-table m27d_pc_count_sensitivity.tsv
+
+    python3 ${manifest_py} \
+      --stage M27D_PC_COUNT_SENSITIVITY \
+      --input ${strata} \
+      --input ${sample_universe} \
+      --input ${call_rates} \
+      --input ${preregistration} \
+      --input ${comparison_py} \
+      --input ${kinship_graph_py} \
+      ${configuration_pairs.collect { "--input ${it}" }.join(' \\\n      ')} \
+      --output m27d_pc_count_sensitivity.json \
+      --output m27d_pc_count_sensitivity.tsv \
+      --provenance-b64 ${provenance_b64} \
+      --params-json '{"scope":"m27d_pc_count_sensitivity","scientific_result":false,"king_executed":false,"one_factor":"n_pcs"}' \
+      --stamp "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+      --run-provenance-ref ../run_provenance.json \
+      --out m27d_pc_count_sensitivity.manifest.json
     """
 }
 
@@ -294,7 +373,7 @@ process AUDIT_BASELINE_DONOR_IDENTITY {
       --snp-rds ${anchor_rds} \
       --strata ${strata} \
       --preregistration ${preregistration} \
-      --threads ${params.donor_kinship_pcrelate_cpus} \
+      --threads ${params.donor_kinship_pcrelate_threads} \
       --outdir .
 
     mv m27d_baseline_identity.private.tsv private/
@@ -362,7 +441,7 @@ process RUN_DONOR_KINSHIP_PASS0 {
       --snp-rds ${anchor_rds} \
       --strata ${strata} \
       --preregistration ${preregistration} \
-      --threads ${params.donor_kinship_pcrelate_cpus} \
+      --threads ${params.donor_kinship_pcrelate_threads} \
       --outdir .
 
     python3 ${kinship_graph_py} \
@@ -447,7 +526,7 @@ process FIT_DONOR_KINSHIP_PCA {
       --training-set ${training_set} \
       --preregistration ${preregistration} \
       --marker-set-id ${marker_set_id} \
-      --threads ${params.donor_kinship_pcrelate_cpus} \
+      --threads ${params.donor_kinship_pcrelate_threads} \
       --outdir .
 
     mv m27d_pca_${marker_set_id}_scores.private.tsv.gz private/
@@ -513,7 +592,7 @@ process RUN_DONOR_KINSHIP_CONFIGURATION {
       --preregistration ${preregistration} \
       --configuration-id ${configuration_id} \
       --marker-set-id ${marker_set_id} \
-      --threads ${params.donor_kinship_pcrelate_cpus} \
+      --threads ${params.donor_kinship_pcrelate_threads} \
       --outdir .
 
     rm -f pca_scores_${marker_set_id}.tsv
