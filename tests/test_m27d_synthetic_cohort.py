@@ -15,6 +15,8 @@ from __future__ import annotations
 import csv
 import gzip
 import json
+import random
+import statistics
 import sys
 import tempfile
 import unittest
@@ -39,8 +41,10 @@ from m27d_pipeline_chain import (  # noqa: E402
 from m27d_synthetic_cohort import (  # noqa: E402
     CohortLayout,
     Scenario,
+    _draw_first_cousins,
     build,
     compose,
+    first_cousin_units,
     offspring_of,
     pedigree_units,
     truth_pairs,
@@ -56,6 +60,16 @@ SMALL = CohortLayout(
     n_chromosomes=2,
 )
 ISOLATE = Scenario("isolate", 0.05, 0.04, 0.12)
+WITH_COUSINS = CohortLayout(
+    n_background_per_group=20,
+    n_deme_members=6,
+    n_pedigree_deme_members=8,
+    n_pedigree_units_in_background=2,
+    n_first_cousin_pairs_in_deme=1,
+    n_first_cousin_pairs_in_background=1,
+    n_markers_per_chromosome=8,
+    n_chromosomes=2,
+)
 
 
 def read_vcf_dosages(path: Path) -> tuple[list[str], list[list[int]]]:
@@ -118,6 +132,46 @@ class TestPedigreeTruth(unittest.TestCase):
             compose(ISOLATE.within_deme_coancestry, 0.25),
             places=5,
         )
+
+    def test_first_cousin_controls_have_third_degree_truth_and_are_never_fit(self):
+        with tempfile.TemporaryDirectory() as name:
+            truth = build(Path(name), PREREG, ISOLATE, WITH_COUSINS, seed=5)
+        units = first_cousin_units(WITH_COUSINS)
+        expected = {
+            tuple(sorted((unit["cousin_1"], unit["cousin_2"]))) for unit in units
+        }
+        observed = {
+            tuple(sorted((row["ID1"], row["ID2"])))
+            for row in truth_pairs(WITH_COUSINS, ISOLATE)
+            if row["true_degree"] == 3
+        }
+        self.assertEqual(observed, expected)
+        self.assertEqual(len(expected), 2)
+        self.assertEqual(
+            set(truth["always_excluded_from_training"]),
+            {sample for pair in expected for sample in pair},
+        )
+
+    def test_first_cousins_are_generated_by_mendelian_transmission(self):
+        """At p=0.5, dosage covariance approaches 4*phi*p*(1-p)=0.0625."""
+        rng = random.Random(20260816)
+        draws = [_draw_first_cousins(rng, 0.5) for _ in range(50_000)]
+        left = [sum(pair[0]) for pair in draws]
+        right = [sum(pair[1]) for pair in draws]
+        mean_left = statistics.fmean(left)
+        mean_right = statistics.fmean(right)
+        covariance = statistics.fmean(
+            (x - mean_left) * (y - mean_right) for x, y in zip(left, right)
+        )
+        self.assertAlmostEqual(covariance, 0.0625, delta=0.012)
+
+    def test_layout_rejects_more_pedigree_people_than_it_can_hold(self):
+        with self.assertRaises(ValueError):
+            CohortLayout(
+                n_pedigree_deme_members=6,
+                n_pedigree_units_in_deme=1,
+                n_first_cousin_pairs_in_deme=1,
+            )
 
 
 class TestNonKinshipTruth(unittest.TestCase):
@@ -290,6 +344,19 @@ class TestScoringKnownAnswers(unittest.TestCase):
         self.assertEqual(block["false_positive_rate"], 1.0)
         self.assertEqual(scored["overall"]["sensitivity"], 1.0)
         self.assertEqual(scored["overall"]["n_false_positives"], 1)
+
+    def test_a_first_cousin_is_scored_as_a_positive_control(self):
+        cousin = {
+            "ID1": "G", "ID2": "H", "true_relationship": "first_cousin",
+            "true_degree": "3", "pedigree_location": "background",
+            "pedigree_phi": "0.0625", "coancestry_class": "within_background_group",
+            "coancestry_phi": "0.05", "total_phi": "0.109375",
+            "has_recent_kinship": "True",
+        }
+        scored = score_pass({("G", "H"): 0.06}, [cousin], 0.0442, 0.0221)
+        self.assertEqual(scored["third_degree_in_background"]["sensitivity"], 1.0)
+        self.assertEqual(scored["overall"]["n_true_positives"], 1)
+        self.assertEqual(scored["overall"]["n_false_positives"], 0)
 
     def test_every_class_is_positive_or_negative_and_never_both(self):
         classes = {truth_class(row) for row in self.TRUTH}

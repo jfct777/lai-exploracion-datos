@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "stage": "M27D_SYNTHETIC_CROSSFIT_CONTROL",
+  "status": "PREREGISTERED_BEFORE_EXECUTION",
+  "parent_control": {
+    "path": "conf/m27d_representation_control_preregistration.json",
+    "sha256": "67e9189fdf35f37905e83e6dc915789567e841190497305fcd97c2862ec72c3d"
+  },
+  "base_preregistration": {
+    "path": "conf/m27d_donor_kinship_preregistration.json",
+    "sha256": "a7f3ded6fdf9002fce682515aa4060283a15ab2acdb52af247a745b8f556126b"
+  },
+  "scope": {
+    "synthetic_only": true,
+    "scientific_result": false,
+    "cloud_allowed": false,
+    "real_panel_allowed": false,
+    "king_allowed": false,
+    "pcair_allowed": false,
+    "gnomix_allowed": false,
+    "public_push_allowed": false,
+    "nextflow_required": false,
+    "nextflow_exception_reason": "Small local known-answer control reusing the pinned M27D container chain; it is not a production data pipeline stage"
+  },
+  "estimand": {
+    "target": "recent-pedigree false-positive fraction among the 15 pedigree-unrelated pairs of each six-person pure-coancestry deme when both evaluated endpoints are excluded from PCA and PC-Relate fitting",
+    "primary_threshold": 0.0442,
+    "independent_replicate": "independently_generated_seed",
+    "repeated_subunits": ["deme_within_seed", "pedigree_context_within_seed"],
+    "pair_or_fold_counts_are_replicates": false,
+    "primary_demes": ["DEME_A", "DEME_B"]
+  },
+  "fixture": {
+    "scenario": "isolate",
+    "markers_per_chromosome": 700,
+    "chromosomes": 22,
+    "pilot_seeds": [11, 23, 37],
+    "pure_deme_members": 6,
+    "pedigree_deme_members": 8,
+    "first_cousin_pairs_per_seed": {
+      "background": 1,
+      "deme": 1
+    },
+    "first_cousin_pedigree_phi": 0.0625,
+    "first_cousin_ancestors_are_latent": true,
+    "first_cousin_endpoints_always_excluded_from_fitting": true,
+    "first_cousin_endpoints_excluded_from_pass0_and_strict_selection": true,
+    "full_fixture_restored_for_final_projection_and_evaluation": true
+  },
+  "arms": {
+    "strict_without_cousin_endpoints": {
+      "role": "fresh negative control",
+      "pca_training": "pass0_strict_size_matched_after_excluding_first_cousin_endpoints",
+      "pcrelate_training": "same_set"
+    },
+    "represented_in_sample": {
+      "role": "fresh positive mechanism control",
+      "pca_training": "size_matched_deme_represented_without_known_pedigree_endpoints",
+      "pcrelate_training": "same_set"
+    },
+    "leave_pair_out": {
+      "role": "primary cross-fitted intervention",
+      "folds_per_seed": 15,
+      "fold_order": "all lexicographically ordered index pairs from the six members",
+      "held_out_per_fold": "the homologous pair from DEME_A and DEME_B",
+      "required_representatives": "the other four members of each primary deme",
+      "pca_training": "fold_specific_size_matched",
+      "pcrelate_training": "same_fold_specific_set"
+    }
+  },
+  "analysis": {
+    "configuration_id": "anchor_pc8_r2_020",
+    "primary_gate": {
+      "maximum_false_positives_per_15_pair_deme_subunit": 1,
+      "require_no_worsening_vs_strict_in_every_deme_subunit": true,
+      "require_improvement_when_strict_is_above_zero": true,
+      "require_all_three_seeds": true
+    },
+    "fixture_reproduction_gate": {
+      "strict_deme_a_must_exceed_primary_floor": true,
+      "represented_in_sample_maximum_false_positives_per_15_pairs": 1,
+      "require_every_seed_and_primary_deme": true
+    },
+    "positive_control_gate": {
+      "strict_must_detect_all_first_cousin_pairs": true,
+      "leave_pair_out_must_detect_each_first_cousin_pair_in_every_fold": true,
+      "first_and_second_degree_are_regression_controls": true,
+      "no_binomial_confidence_interval_or_pair_level_p_value": true
+    }
+  },
+  "resources": {
+    "threads": 2,
+    "point_timeout_seconds": 600,
+    "max_wall_seconds": 1800,
+    "batch_cost_usd_ceiling": 0.0,
+    "parallel_seed_workers": 1
+  },
+  "forbidden_changes": [
+    "change_pc_count",
+    "change_phi_threshold",
+    "change_drift_parameters",
+    "add_confirmation_seeds_after_results",
+    "treat_pairs_folds_or_demes_as_independent_replicates",
+    "interpret_as_real_donor_policy"
+  ],
+  "stop_rules": [
+    "abort_on_dirty_worktree",
+    "abort_on_parent_preregistration_hash_mismatch",
+    "abort_on_base_preregistration_hash_mismatch",
+    "abort_if_any_evaluated_endpoint_enters_pca_or_pcrelate_training",
+    "abort_if_any_first_cousin_endpoint_enters_any_fitting_set",
+    "abort_if_training_sets_differ_from_strict_size",
+    "abort_if_any_known_recent_pair_has_both_members_in_a_fitting_set",
+    "abort_if_any_primary_pair_is_not_evaluated_exactly_once",
+    "abort_if_modified_fixture_does_not_reproduce_strict_failure_and_in_sample_rescue",
+    "abort_if_output_result_details_or_manifest_already_exists",
+    "stop_if_leave_pair_out_fails_primary_gate_or_loses_any_third_degree_control",
+    "abort_on_point_timeout_or_wall_budget",
+    "stop_after_three_seeds_and_post_review"
+  ],
+  "declared_limitations": [
+    "Two first-cousin pairs per seed are a kill-shot control, not a sensitivity estimate",
+    "The fixture uses oracle deme labels and does not define a deployable real-panel policy",
+    "Markers are unlinked and missingness and DNABR demography are not simulated",
+    "Marker filtering and LD pruning see all fixture samples; fitting and strict selection exclude the first-cousin controls",
+    "A leave-pair-out failure cannot distinguish self-inclusion from insufficient representation by four remaining members"
+  ]
+}

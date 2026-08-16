@@ -83,6 +83,8 @@ def truth_class(row: dict[str, str]) -> str:
         return f"first_degree_in_{location}"
     if row["true_relationship"] == "half_sibling":
         return f"second_degree_in_{location}"
+    if row["true_relationship"] == "first_cousin":
+        return f"third_degree_in_{location}"
     if row["coancestry_class"] == "within_deme":
         return "coancestry_within_deme"
     if row["coancestry_class"] == "between_demes":
@@ -99,6 +101,7 @@ def truth_class(row: dict[str, str]) -> str:
 POSITIVE_CLASSES = (
     "first_degree_in_background", "first_degree_in_deme",
     "second_degree_in_background", "second_degree_in_deme",
+    "third_degree_in_background", "third_degree_in_deme",
 )
 NEGATIVE_CLASSES = (
     "coancestry_within_deme",

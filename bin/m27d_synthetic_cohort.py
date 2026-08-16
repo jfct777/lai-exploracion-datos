@@ -47,8 +47,14 @@ ALLELES = (("A", "G"), ("C", "T"), ("G", "A"), ("T", "C"))
 UNRELATED = "unrelated"
 PARENT_OFFSPRING = "parent_offspring"
 HALF_SIBLING = "half_sibling"
+FIRST_COUSIN = "first_cousin"
 # Expected pedigree kinship, before any coancestry the deme contributes on top.
-PEDIGREE_PHI = {PARENT_OFFSPRING: 0.25, HALF_SIBLING: 0.125, UNRELATED: 0.0}
+PEDIGREE_PHI = {
+    PARENT_OFFSPRING: 0.25,
+    HALF_SIBLING: 0.125,
+    FIRST_COUSIN: 0.0625,
+    UNRELATED: 0.0,
+}
 
 
 @dataclass(frozen=True)
@@ -113,6 +119,11 @@ class CohortLayout:
     # statement, so the background carries several and the deme carries the hard case.
     n_pedigree_units_in_deme: int = 1
     n_pedigree_units_in_background: int = 6
+    # Optional third-degree controls.  Their ancestors are latent: only the two first
+    # cousins are observed, which lets a cross-fitted analysis exclude both endpoints
+    # without leaking their pedigree through sampled parents or grandparents.
+    n_first_cousin_pairs_in_deme: int = 0
+    n_first_cousin_pairs_in_background: int = 0
     n_markers_per_chromosome: int = 700
     n_chromosomes: int = 22
     n_baseline_shared: int = 7
@@ -122,14 +133,23 @@ class CohortLayout:
     samples: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        needed = self.n_pedigree_units_in_deme * PEOPLE_PER_UNIT
+        needed = (
+            self.n_pedigree_units_in_deme * PEOPLE_PER_UNIT
+            + self.n_first_cousin_pairs_in_deme * 2
+        )
         if self.n_pedigree_deme_members < needed:
             raise ValueError(
                 f"The pedigree deme holds {self.n_pedigree_deme_members} people but "
                 f"{needed} are needed for {self.n_pedigree_units_in_deme} pedigree unit(s)"
             )
-        if 2 * self.n_background_per_group < self.n_pedigree_units_in_background * PEOPLE_PER_UNIT:
-            raise ValueError("The background is too small to hold its pedigree units")
+        background_needed = (
+            self.n_pedigree_units_in_background * PEOPLE_PER_UNIT
+            + self.n_first_cousin_pairs_in_background * 2
+        )
+        if self.n_background_per_group < background_needed:
+            raise ValueError(
+                "One background group is too small to hold its pedigree units"
+            )
 
 
 def beta_frequency(rng: random.Random, ancestral: float, drift: float) -> float:
@@ -177,6 +197,43 @@ def pedigree_units(layout: CohortLayout) -> list[dict[str, str]]:
                            len(background) - index * PEOPLE_PER_UNIT]
         units.append(_unit(block, "background", "BACKGROUND"))
     return units
+
+
+def first_cousin_units(layout: CohortLayout) -> list[dict[str, str]]:
+    """Observed first-cousin pairs whose connecting pedigree remains latent.
+
+    Keeping the ancestors outside the cohort prevents their genotypes from entering a
+    PCA or PC-Relate training set.  Each pair is generated from its own grandparents,
+    sibling parents and unrelated spouses, so different units are independent conditional
+    on the population frequency at a marker.
+    """
+    units: list[dict[str, str]] = []
+    deme_members = deme_ids(layout, layout.pedigree_deme)
+    deme_start = layout.n_pedigree_units_in_deme * PEOPLE_PER_UNIT
+    for index in range(layout.n_first_cousin_pairs_in_deme):
+        block = deme_members[deme_start + 2 * index: deme_start + 2 * (index + 1)]
+        units.append(_first_cousin_unit(block, "deme", layout.pedigree_deme))
+
+    background = background_ids(layout)
+    nuclear_start = len(background) - layout.n_pedigree_units_in_background * PEOPLE_PER_UNIT
+    cousin_start = nuclear_start - 2 * layout.n_first_cousin_pairs_in_background
+    for index in range(layout.n_first_cousin_pairs_in_background):
+        block = background[cousin_start + 2 * index: cousin_start + 2 * (index + 1)]
+        units.append(
+            _first_cousin_unit(block, "background", background_group(layout, block[0]))
+        )
+    return units
+
+
+def _first_cousin_unit(block: list[str], location: str, group: str) -> dict[str, str]:
+    if len(block) != 2:
+        raise ValueError(f"A first-cousin unit needs two observed people, got {block}")
+    return {
+        "cousin_1": block[0],
+        "cousin_2": block[1],
+        "location": location,
+        "group": group,
+    }
 
 
 def _unit(block: list[str], location: str, group: str) -> dict[str, str]:
@@ -237,16 +294,22 @@ def build_marker(
     }
 
     offspring = offspring_of(layout)
+    cousin_units = first_cousin_units(layout)
+    cousin_members = {
+        unit[key]
+        for unit in cousin_units
+        for key in ("cousin_1", "cousin_2")
+    }
     haplotypes: dict[str, tuple[int, int]] = {}
     for position, sample in enumerate(background_ids(layout)):
-        if sample in offspring:
+        if sample in offspring or sample in cousin_members:
             continue
         frequency = group_frequency[0 if position < layout.n_background_per_group else 1]
         haplotypes[sample] = (int(rng.random() < frequency), int(rng.random() < frequency))
     for deme in layout.demes:
         frequency = deme_frequency[deme]
         for sample in deme_ids(layout, deme):
-            if sample in offspring:
+            if sample in offspring or sample in cousin_members:
                 continue
             haplotypes[sample] = (
                 int(rng.random() < frequency),
@@ -260,11 +323,46 @@ def build_marker(
             haplotypes[mother][rng.randrange(2)],
         )
 
+    for unit in cousin_units:
+        if unit["location"] == "background":
+            frequency = group_frequency[0 if unit["group"] == "BG1" else 1]
+        else:
+            frequency = deme_frequency[unit["group"]]
+        first, second = _draw_first_cousins(rng, frequency)
+        haplotypes[unit["cousin_1"]] = first
+        haplotypes[unit["cousin_2"]] = second
+
     index_of = {sample: position for position, sample in enumerate(samples)}
     row = [0] * len(samples)
     for sample, (left, right) in haplotypes.items():
         row[index_of[sample]] = left + right
     return row
+
+
+def _draw_diploid(rng: random.Random, frequency: float) -> tuple[int, int]:
+    return int(rng.random() < frequency), int(rng.random() < frequency)
+
+
+def _inherit(
+    rng: random.Random, parent_1: tuple[int, int], parent_2: tuple[int, int]
+) -> tuple[int, int]:
+    return parent_1[rng.randrange(2)], parent_2[rng.randrange(2)]
+
+
+def _draw_first_cousins(
+    rng: random.Random, frequency: float
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Draw two first cousins by explicit Mendelian transmission at one marker."""
+    grandparent_1 = _draw_diploid(rng, frequency)
+    grandparent_2 = _draw_diploid(rng, frequency)
+    sibling_parent_1 = _inherit(rng, grandparent_1, grandparent_2)
+    sibling_parent_2 = _inherit(rng, grandparent_1, grandparent_2)
+    spouse_1 = _draw_diploid(rng, frequency)
+    spouse_2 = _draw_diploid(rng, frequency)
+    return (
+        _inherit(rng, sibling_parent_1, spouse_1),
+        _inherit(rng, sibling_parent_2, spouse_2),
+    )
 
 
 def compose(coancestry: float, pedigree_phi: float) -> float:
@@ -298,6 +396,11 @@ def truth_pairs(layout: CohortLayout, scenario: Scenario) -> list[dict[str, obje
         pedigree[tuple(sorted((unit["child"], unit["half_sibling"])))] = (
             HALF_SIBLING, unit["location"]
         )
+    for unit in first_cousin_units(layout):
+        pedigree[tuple(sorted((unit["cousin_1"], unit["cousin_2"])))] = (
+            FIRST_COUSIN,
+            unit["location"],
+        )
 
     rows: list[dict[str, object]] = []
     for left_index, left in enumerate(samples):
@@ -326,9 +429,12 @@ def truth_pairs(layout: CohortLayout, scenario: Scenario) -> list[dict[str, obje
                     "ID1": key[0],
                     "ID2": key[1],
                     "true_relationship": relationship,
-                    "true_degree": {PARENT_OFFSPRING: 1, HALF_SIBLING: 2, UNRELATED: 0}[
-                        relationship
-                    ],
+                    "true_degree": {
+                        PARENT_OFFSPRING: 1,
+                        HALF_SIBLING: 2,
+                        FIRST_COUSIN: 3,
+                        UNRELATED: 0,
+                    }[relationship],
                     "pedigree_location": location,
                     "pedigree_phi": pedigree_phi,
                     "coancestry_class": coancestry_class,
@@ -472,8 +578,17 @@ def build(outdir: Path, base_preregistration: Path, scenario: Scenario,
         "n_markers": layout.n_chromosomes * layout.n_markers_per_chromosome,
         "demes": {deme: deme_ids(layout, deme) for deme in layout.demes},
         "pedigree_units": pedigree_units(layout),
+        "first_cousin_units": first_cousin_units(layout),
+        "always_excluded_from_training": sorted(
+            unit[key]
+            for unit in first_cousin_units(layout)
+            for key in ("cousin_1", "cousin_2")
+        ),
         "n_pedigree_units_in_deme": layout.n_pedigree_units_in_deme,
-        "n_pedigree_units_in_background": layout.n_pedigree_units_in_background,        "n_pairs_by_class": {
+        "n_pedigree_units_in_background": layout.n_pedigree_units_in_background,
+        "n_first_cousin_pairs_in_deme": layout.n_first_cousin_pairs_in_deme,
+        "n_first_cousin_pairs_in_background": layout.n_first_cousin_pairs_in_background,
+        "n_pairs_by_class": {
             name: sum(1 for row in pairs if row["coancestry_class"] == name)
             for name in ("none", "within_deme", "between_demes")
         },
@@ -485,7 +600,7 @@ def build(outdir: Path, base_preregistration: Path, scenario: Scenario,
                 1 for row in pairs
                 if row["true_degree"] == degree and row["pedigree_location"] == location
             )
-            for degree in (1, 2) for location in ("deme", "background")
+            for degree in (1, 2, 3) for location in ("deme", "background")
         },
         "n_baseline_shared": layout.n_baseline_shared,
     }

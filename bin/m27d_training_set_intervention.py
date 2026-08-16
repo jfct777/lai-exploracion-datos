@@ -97,6 +97,8 @@ def represented_training_set(
     seed: int,
 ) -> tuple[list[str], dict]:
     strict = set(strict_ids)
+    if len(strict) != len(strict_ids):
+        raise ValueError("Strict set contains duplicate sample identifiers")
     universe = set(population)
     if not strict <= universe:
         raise ValueError("Strict set contains samples outside fixture metadata")
@@ -107,9 +109,12 @@ def represented_training_set(
         for unit in truth["pedigree_units"]
         for person in (unit["child"], unit["half_sibling"])
     }
+    always_excluded = set(truth.get("always_excluded_from_training", []))
+    if not always_excluded <= universe:
+        raise ValueError("Always-excluded samples fall outside fixture metadata")
     required: set[str] = set()
     for deme, members in truth["demes"].items():
-        candidates = set(members) - offspring
+        candidates = set(members) - offspring - always_excluded
         if deme != "DEME_C" and candidates != set(members):
             raise ValueError(f"Pure-coancestry deme {deme} unexpectedly contains offspring")
         required.update(candidates)
@@ -118,7 +123,7 @@ def represented_training_set(
     if required_conflicts:
         raise ValueError(f"Required represented members contain pedigree pairs: {required_conflicts}")
 
-    represented = set(strict)
+    represented = set(strict) - always_excluded
     # Adding a founder can complete a known pair whose offspring survived the strict set.
     # Remove the non-required endpoint before adding the required members.
     represented.update(required)
@@ -130,6 +135,23 @@ def represented_training_set(
         represented.remove(sorted(removable, key=lambda value: stable_rank(value, seed))[0])
 
     target_size = len(strict)
+    if len(represented) < target_size:
+        pedigree_people = {sample for pair in pedigree for sample in pair}
+        safe_additions = sorted(
+            (
+                sample
+                for sample in universe - represented - always_excluded
+                if population[sample].startswith("POP_BG")
+                and sample not in pedigree_people
+            ),
+            key=lambda value: stable_rank(value, seed),
+        )
+        need = target_size - len(represented)
+        if len(safe_additions) < need:
+            raise ValueError(
+                f"Need {need} safe background replacements but only {len(safe_additions)} exist"
+            )
+        represented.update(safe_additions[:need])
     n_remove = len(represented) - target_size
     if n_remove < 0:
         raise ValueError("Represented set became smaller than the strict set before size matching")
@@ -177,6 +199,7 @@ def represented_training_set(
         "n_represented": len(represented),
         "same_size_as_strict": len(represented) == len(strict),
         "required_deme_members": sorted(required),
+        "always_excluded_from_training": sorted(always_excluded),
         "added_to_strict": sorted(represented - strict),
         "removed_from_strict": sorted(strict - represented),
         "removed_for_size_matching": sorted(removed_for_size),

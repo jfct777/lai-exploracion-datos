@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / "bin"))
 from m27d_synthetic_cohort import (  # noqa: E402
     CohortLayout,
     Scenario,
+    first_cousin_units,
     metadata_rows,
     truth_pairs,
 )
@@ -27,6 +28,17 @@ LAYOUT = CohortLayout(
     n_pedigree_deme_members=6,
     n_pedigree_units_in_deme=1,
     n_pedigree_units_in_background=2,
+    n_markers_per_chromosome=2,
+    n_chromosomes=1,
+)
+COUSIN_LAYOUT = CohortLayout(
+    n_background_per_group=20,
+    n_deme_members=6,
+    n_pedigree_deme_members=8,
+    n_pedigree_units_in_deme=1,
+    n_pedigree_units_in_background=2,
+    n_first_cousin_pairs_in_deme=1,
+    n_first_cousin_pairs_in_background=1,
     n_markers_per_chromosome=2,
     n_chromosomes=1,
 )
@@ -104,6 +116,38 @@ class TestM27DTrainingSetIntervention(unittest.TestCase):
         _, summary = self.build()
         self.assertFalse(summary["uses_final_pcrelate_estimates"])
         self.assertNotIn("estimated_phi", " ".join(summary["selection_inputs"]))
+
+    def test_first_cousin_endpoints_are_excluded_and_size_is_preserved(self):
+        from m27d_synthetic_cohort import deme_ids, pedigree_units
+
+        truth = {
+            "demes": {
+                deme: deme_ids(COUSIN_LAYOUT, deme) for deme in COUSIN_LAYOUT.demes
+            },
+            "pedigree_units": pedigree_units(COUSIN_LAYOUT),
+            "always_excluded_from_training": sorted(
+                unit[key]
+                for unit in first_cousin_units(COUSIN_LAYOUT)
+                for key in ("cousin_1", "cousin_2")
+            ),
+        }
+        pop = {
+            row["IID"]: row["Population"] for row in metadata_rows(COUSIN_LAYOUT)
+        }
+        strict = list(dict.fromkeys(self.strict + truth["always_excluded_from_training"]))
+        values, summary = represented_training_set(
+            strict,
+            truth,
+            truth_pairs(COUSIN_LAYOUT, ISOLATE),
+            pop,
+            seed=11,
+        )
+        self.assertEqual(len(values), len(strict))
+        self.assertFalse(set(truth["always_excluded_from_training"]) & set(values))
+        self.assertEqual(
+            summary["always_excluded_from_training"],
+            truth["always_excluded_from_training"],
+        )
 
 
 if __name__ == "__main__":

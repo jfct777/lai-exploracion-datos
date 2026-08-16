@@ -17,6 +17,7 @@ two independent observations.  Pair counts are descriptive within each deme.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import shutil
@@ -33,7 +34,11 @@ from m27d_coancestry_screen import SCENARIOS, load, score_run  # noqa: E402
 from m27d_fixture_scoring import read_pairs, read_truth  # noqa: E402
 from m27d_pipeline_chain import (  # noqa: E402
     IMAGE,
+    PASS0,
+    PREPARE,
     REFIT_CONFIGURATIONS,
+    STRATA,
+    TRAINING_SET,
     THROUGH_TRAINING_SET,
     image_available,
     run as run_chain,
@@ -203,20 +208,31 @@ def prepare_context(
     preregistration: Path,
     threads: int,
     point_timeout: int,
+    pass0_excluded: set[str] | None = None,
 ) -> PointContext:
     workspace = Path(tempfile.mkdtemp(prefix=f"m27d-representation-{scenario.name}-{seed}-"))
     try:
         fixture_dir = workspace / "fixture"
         base_out = workspace / "base"
         build(fixture_dir, preregistration, scenario, layout, seed)
-        completed = run_chain(
-            fixture_dir,
-            base_out,
-            repo,
-            THROUGH_TRAINING_SET,
-            threads=threads,
-            timeout=point_timeout,
-        )
+        if pass0_excluded:
+            completed = _prepare_context_with_pass0_exclusions(
+                fixture_dir,
+                base_out,
+                repo,
+                threads,
+                point_timeout,
+                pass0_excluded,
+            )
+        else:
+            completed = run_chain(
+                fixture_dir,
+                base_out,
+                repo,
+                THROUGH_TRAINING_SET,
+                threads=threads,
+                timeout=point_timeout,
+            )
         if completed.returncode != 0:
             raise RuntimeError(
                 f"Base chain failed for {scenario.name} seed={seed}:\n{completed.stderr[-4000:]}"
@@ -236,6 +252,111 @@ def prepare_context(
         raise
 
 
+def _prepare_context_with_pass0_exclusions(
+    fixture_dir: Path,
+    base_out: Path,
+    repo: Path,
+    threads: int,
+    point_timeout: int,
+    excluded: set[str],
+) -> subprocess.CompletedProcess:
+    """Build full resources, but keep named controls out of pass0 and graph selection.
+
+    The complete strata table is restored before PCA projection and final PC-Relate, so
+    controls remain evaluation samples while never influencing the pass0 training graph.
+    """
+    completed = run_chain(
+        fixture_dir,
+        base_out,
+        repo,
+        (STRATA, PREPARE),
+        threads=threads,
+        timeout=point_timeout,
+    )
+    if completed.returncode != 0:
+        return completed
+
+    strata_path = base_out / "strata.private.tsv"
+    contract_path = fixture_dir / "prereg.json"
+    original_strata = strata_path.read_bytes()
+    original_contract = contract_path.read_bytes()
+    with strata_path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        rows = list(reader)
+        fieldnames = reader.fieldnames
+    if not fieldnames or "sample_id" not in fieldnames or "Exclude" not in fieldnames:
+        raise ValueError("Synthetic strata lacks sample_id or Exclude")
+    found = {row["sample_id"] for row in rows if row["sample_id"] in excluded}
+    if found != excluded:
+        raise ValueError(f"Pass0 exclusions absent from strata: {sorted(excluded - found)}")
+    for row in rows:
+        if row["sample_id"] in excluded:
+            row["Exclude"] = "TRUE"
+    staged_strata = strata_path.with_name(f".{strata_path.name}.crossfit-partial")
+    with staged_strata.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(rows)
+    staged_strata.replace(strata_path)
+    pass0_strata_sha256 = sha256_file(strata_path)
+
+    contract = load(contract_path)
+    full_n = int(contract["pass0_checkpoint"]["expected_eligible_samples"])
+    pass0_n = full_n - len(excluded)
+    contract["pass0_checkpoint"]["expected_eligible_samples"] = pass0_n
+    contract["pass0_checkpoint"]["expected_pairs"] = pass0_n * (pass0_n - 1) // 2
+    staged_contract = contract_path.with_name(f".{contract_path.name}.crossfit-partial")
+    staged_contract.write_text(
+        json.dumps(contract, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    staged_contract.replace(contract_path)
+    pass0_contract_sha256 = sha256_file(contract_path)
+    try:
+        completed = run_chain(
+            fixture_dir,
+            base_out,
+            repo,
+            (PASS0, TRAINING_SET),
+            threads=threads,
+            timeout=point_timeout,
+        )
+    finally:
+        restored_strata = strata_path.with_name(f".{strata_path.name}.crossfit-restore")
+        restored_strata.write_bytes(original_strata)
+        restored_strata.replace(strata_path)
+        restored_contract = contract_path.with_name(f".{contract_path.name}.crossfit-restore")
+        restored_contract.write_bytes(original_contract)
+        restored_contract.replace(contract_path)
+    if completed.returncode != 0:
+        return completed
+
+    universe = set(read_ids(base_out / "m27d_pass0_sample_universe.private.txt"))
+    strict = set(read_ids(base_out / "training_set.txt"))
+    if excluded & universe or excluded & strict:
+        raise AssertionError("Pass0-excluded controls reached its universe or training set")
+    summary = load(base_out / "m27d_pass0_pcrelate.json")
+    if int(summary["n_eligible_samples"]) != pass0_n:
+        raise AssertionError("Pass0 receipt disagrees with the excluded-control contract")
+    receipt = {
+        "stage": "M27D_PASS0_CONTROL_EXCLUSION",
+        "excluded_sample_ids": sorted(excluded),
+        "n_excluded_controls": len(excluded),
+        "n_full_fixture_samples": full_n,
+        "n_pass0_samples": pass0_n,
+        "excluded_absent_from_pass0_universe": True,
+        "excluded_absent_from_strict_training_set": True,
+        "full_strata_sha256": hashlib.sha256(original_strata).hexdigest(),
+        "pass0_strata_sha256": pass0_strata_sha256,
+        "full_contract_sha256": hashlib.sha256(original_contract).hexdigest(),
+        "pass0_contract_sha256": pass0_contract_sha256,
+        "full_strata_and_contract_restored_for_final_evaluation": True,
+    }
+    (base_out / "crossfit_pass0_exclusion.json").write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return completed
+
+
 def run_arm(
     context: PointContext,
     arm: str,
@@ -243,9 +364,7 @@ def run_arm(
     threads: int,
     point_timeout: int,
 ) -> dict[str, object]:
-    arm_out = context.workspace / arm
-    clone_base(context.base_out, arm_out)
-    strict = read_ids(arm_out / "training_set.txt")
+    strict = read_ids(context.base_out / "training_set.txt")
     if arm == ARM_STRICT:
         pca_set, pcrelate_set = strict, strict
     elif arm == ARM_PCA_REPRESENTED:
@@ -254,6 +373,45 @@ def run_arm(
         pca_set, pcrelate_set = context.represented_set, context.represented_set
     else:
         raise ValueError(f"Unknown arm: {arm}")
+    passed_pca_name = "training_set.txt" if arm == ARM_STRICT else "pca_training_set.txt"
+    passed_pcrelate_name = (
+        "pcrelate_training_set.txt" if arm == ARM_BOTH_REPRESENTED else "training_set.txt"
+    )
+    return run_training_arm(
+        context,
+        arm,
+        repo,
+        threads,
+        point_timeout,
+        pca_set,
+        pcrelate_set,
+        passed_pca_name=passed_pca_name,
+        passed_pcrelate_name=passed_pcrelate_name,
+    )
+
+
+def run_training_arm(
+    context: PointContext,
+    arm: str,
+    repo: Path,
+    threads: int,
+    point_timeout: int,
+    pca_set: list[str],
+    pcrelate_set: list[str],
+    *,
+    passed_pca_name: str = "pca_training_set.txt",
+    passed_pcrelate_name: str = "pcrelate_training_set.txt",
+    intervention_summary: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Run one named arm with explicit, size-matched fitting sets.
+
+    The public helper keeps the R execution and receipt logic in one place.  Cross-fitted
+    controls use explicit files for both stages; the historical control retains the exact
+    basenames that its audit contract already records.
+    """
+    arm_out = context.workspace / arm
+    clone_base(context.base_out, arm_out)
+    strict = read_ids(arm_out / "training_set.txt")
     if len(pca_set) != len(strict) or len(pcrelate_set) != len(strict):
         raise ValueError(
             f"Arm {arm} is not size matched: strict={len(strict)}, "
@@ -264,12 +422,16 @@ def run_arm(
     pcrelate_name = "pcrelate_training_set.txt"
     write_ids(arm_out / pca_name, pca_set)
     write_ids(arm_out / pcrelate_name, pcrelate_set)
-    passed_pca_name = "training_set.txt" if arm == ARM_STRICT else pca_name
-    passed_pcrelate_name = (
-        "pcrelate_training_set.txt" if arm == ARM_BOTH_REPRESENTED else "training_set.txt"
-    )
+    if passed_pca_name not in {"training_set.txt", pca_name}:
+        raise ValueError(f"Unsupported PCA input basename: {passed_pca_name}")
+    if passed_pcrelate_name not in {"training_set.txt", pcrelate_name}:
+        raise ValueError(f"Unsupported PC-Relate input basename: {passed_pcrelate_name}")
     (arm_out / "training_set_intervention.json").write_text(
-        json.dumps(context.intervention_summary, indent=2, sort_keys=True) + "\n",
+        json.dumps(
+            intervention_summary or context.intervention_summary,
+            indent=2,
+            sort_keys=True,
+        ) + "\n",
         encoding="utf-8",
     )
     started = time.monotonic()
@@ -290,6 +452,14 @@ def run_arm(
             f"Arm {arm} failed for {context.scenario.name} seed={context.seed}:\n"
             f"{completed.stderr[-4000:]}"
         )
+    pca_receipt = load(arm_out / "m27d_pca_anchor.json")
+    pcrelate_receipt = load(
+        arm_out / f"m27d_pcrelate_{PRIMARY_CONFIGURATION}.json"
+    )
+    if pca_receipt.get("training_set_input_basename") != passed_pca_name:
+        raise AssertionError(f"Arm {arm}: PCA consumed an unexpected training set")
+    if pcrelate_receipt.get("training_set_input_basename") != passed_pcrelate_name:
+        raise AssertionError(f"Arm {arm}: PC-Relate consumed an unexpected training set")
     contract = load(context.fixture_dir / "prereg.json")
     threshold = float(contract["pcrelate"]["primary_phi_threshold"])
     pair_path = arm_out / f"m27d_pcrelate_{PRIMARY_CONFIGURATION}_pairs.private.tsv.gz"
