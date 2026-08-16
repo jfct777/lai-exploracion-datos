@@ -58,6 +58,7 @@ class TestM27FValidTransfer(unittest.TestCase):
         self.assertIn("source_test_opened: false", workflow)
         self.assertIn('m27f_valid_cpus = 2', config)
         self.assertIn('m27f_valid_memory = "4 GB"', config)
+        self.assertIn("m27f_valid_results_dir = null", config)
         self.assertEqual(module.count("container params.m27f_valid_container_image"), 3)
         self.assertNotIn("KING", module + workflow + config)
 
