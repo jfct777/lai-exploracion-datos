@@ -51,10 +51,10 @@ process AUDIT_IBD_RARE_TRANSFER_FEASIBILITY {
     path "m27e_ibd_rare_transfer.manifest.json", emit: manifest
 
     script:
-    def ibdArgs = ibd_files.collect { "--ibd-file ${it}" }.join(' \\\n+      ')
-    def logArgs = ibd_logs.collect { "--ibd-log ${it}" }.join(' \\\n+      ')
-    def mapArgs = genetic_maps.collect { "--genetic-map ${it}" }.join(' \\\n+      ')
-    def manifestInputs = (ibd_files + ibd_logs + genetic_maps).collect { "--input ${it}" }.join(' \\\n+      ')
+    def ibdArgs = ibd_files.collect { "--ibd-file ${it}" }.join(' ')
+    def logArgs = ibd_logs.collect { "--ibd-log ${it}" }.join(' ')
+    def mapArgs = genetic_maps.collect { "--genetic-map ${it}" }.join(' ')
+    def manifestInputs = (ibd_files + ibd_logs + genetic_maps).collect { "--input ${it}" }.join(' ')
     """
     set -euo pipefail
     PYTHONPATH=. python3 ${audit_py} \

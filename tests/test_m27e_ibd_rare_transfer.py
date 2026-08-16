@@ -170,6 +170,7 @@ class TestM27EContracts(unittest.TestCase):
         self.assertIn("--resolved-strata ${resolved_strata}", module)
         self.assertIn("(?:[._]|$)", workflow)
         self.assertIn("resourceLabels = [team: 'frank']", cloud)
+        self.assertNotIn("\\n+", module)
         self.assertNotIn("sbatch", workflow + module)
 
 
