@@ -1,6 +1,6 @@
 {
   "stage": "M27F_BLIND_ROLE_SPLIT",
-  "version": 4,
+  "version": 3,
   "scope": "frozen_metadata_and_ibd_only_no_vcf_or_genotype_access",
   "upstream_contract": {
     "expected_panel_samples": 3685,
@@ -15,11 +15,6 @@
   },
   "target_ancestries": ["African", "European", "Native_American"],
   "roles": ["REF_TRAIN", "SOURCE_VALID", "SOURCE_TEST"],
-  "role_fractions": {
-    "REF_TRAIN": 0.5,
-    "SOURCE_VALID": 0.25,
-    "SOURCE_TEST": 0.25
-  },
   "discovery": {
     "source": "NatWGS",
     "ancestry": "Native_American",
@@ -35,11 +30,23 @@
     "kinship_definition": "sum_reported_ibd_cm/(4*observed_autosomal_map_span_cm)"
   },
   "assignment_algorithm": {
-    "name": "deterministic_hamilton_quota_largest_block_first",
+    "name": "balanced_atomic_units_with_exact_small_stratum_audit",
     "atomic_unit": "connected_component_of_canonical_population_and_primary_ibd_edges",
-    "apportionment": "Hamilton largest remainder on atomic-unit counts; ties SOURCE_VALID,SOURCE_TEST,REF_TRAIN",
+    "role_count_objective": "maximize the weakest role by minimizing the range in atomic-unit counts; when the total is not divisible by three, protect SOURCE_VALID and then SOURCE_TEST before REF_TRAIN",
+    "small_stratum_exact_limit": 12,
+    "small_stratum_search": "enumerate every role assignment; for 8 Native_American units this is 3^8=6561 candidates",
+    "exact_lexicographic_objective": [
+      "minimum atomic-unit count range",
+      "maximum minimum atomic-unit count",
+      "minimum REF_TRAIN atomic-unit count",
+      "minimum SOURCE_VALID versus SOURCE_TEST atomic-unit-count difference",
+      "minimum population-count range",
+      "minimum sample-count range",
+      "minimum squared sample-count deviation from equal thirds",
+      "sha256 tie break over the private assignment"
+    ],
     "order_units": "descending number of populations, descending sample count, ascending sha256 of sorted private member IDs",
-    "balance_objective": "within exact unit quotas, greedily minimize normalized population fill, then normalized sample fill, then fixed role order",
+    "large_stratum_assignment": "within balanced unit quotas, greedily minimize population fill, then sample fill, then fixed role order",
     "minimum_units_per_role_and_ancestry": 2,
     "minimum_populations_per_role_and_ancestry": 2,
     "forbidden_features": [
@@ -52,7 +59,7 @@
       "LAI_result"
     ],
     "random_seed": null,
-    "ratio_screen": false,
+    "ratio_screen": "exact for Native_American; balanced thirds are selected because they maximize the minimum number of independent atomic units available to any role",
     "post_result_rebalancing": false
   },
   "gates": {
@@ -61,7 +68,7 @@
     "F2": "No individual, canonical population or primary IBD block crosses roles, and no mixed-ancestry atomic unit is assigned.",
     "F3": "AFR, EUR and NAM each retain at least two atomic units and two populations in each source role.",
     "F4": "No VCF, genotype, rare-support, position, baseline-overlap or LAI result is an input to the split.",
-    "F5": "Per ancestry, assigned atomic-unit counts exactly equal the preregistered 50/25/25 Hamilton quotas.",
+    "F5": "Per ancestry, assigned atomic-unit counts satisfy the preregistered balanced-role objective; every small stratum is exhaustively enumerated.",
     "F6": "Assignment is invariant to input order; public outputs contain no sample IDs or population labels."
   },
   "allowed_decisions": [
@@ -69,32 +76,26 @@
     "STOP_ROLE_LEAKAGE",
     "STOP_SPLIT_NOT_IDENTIFIABLE",
     "STOP_ALLOCATION_CONTRACT",
-    "GO_OPEN_TRAIN_VALID_SUPPORT_AUDIT"
+    "GO_REF_EXTRACTION_ONLY"
   ],
   "privacy": {
     "private_manifest_contains_ids_and_population_labels": true,
     "public_receipt_contains_ids_or_population_labels": false,
     "source_test_is_sealed_after_manifest_hash": true
   },
-  "next_gate": "Read rare/common data only for DISCOVERY, REF_TRAIN and SOURCE_VALID; verify zero SOURCE_TEST columns; estimate support and detectable effect without simulation or training.",
+  "next_gate": "Extract REF_TRAIN only with a positive sample allow-list; verify that DISCOVERY, SOURCE_VALID and SOURCE_TEST contribute zero columns; derive the candidate catalog from the 954 discovery-frozen sites in REF_TRAIN before opening SOURCE_VALID once.",
   "amendments": [
     {
       "version": 2,
-      "timing": "before the canonical split and before any M27F genotype access",
-      "reason": "Fix 50/25/25, authenticate the exact M27E metadata and IBD inputs, and remove VCF headers from the role-assignment interface.",
-      "status": "CANONICAL_GENERATOR_3b27440"
+      "timing": "before the final split and before any M27F genotype access",
+      "reason": "Authenticate the exact M27E metadata and IBD inputs and remove VCF headers from the role-assignment interface.",
+      "delta": "Derive the discovery identities from the frozen strata, authenticate 46 upstream inputs through the M27E manifest, and prohibit VCF or genotype access during assignment."
     },
     {
       "version": 3,
-      "timing": "after the canonical split, without genotype access",
-      "reason": "An intermediate proposal changed the objective to balanced thirds.",
-      "status": "REJECTED_NO_CANONICAL_ARTIFACT_CONTRADICTED_RECORDED_PRE"
-    },
-    {
-      "version": 4,
-      "timing": "after the discrepancy was detected, without rerunning the scientific split",
-      "reason": "Restore the recorded PRE decision and the byte-equivalent 50/25/25 generator; retain version 3 only as an auditable rejected proposal.",
-      "status": "CURRENT_NO_SCIENTIFIC_RERUN"
+      "timing": "after the first metadata-only balanced split and its Council POST review, before any M27F genotype access",
+      "reason": "Only eight Native-American atomic units remain after discovery quarantine, so an undeclared greedy tie break could materially change the effective replication.",
+      "delta": "Retain the original balanced-thirds objective, enumerate all 3^8 Native-American assignments, protect validation and test when thirds are not exact, and use a canonical hash only for otherwise identical assignments. No genotype, rare support, position, baseline or LAI result was available."
     }
   ]
 }
