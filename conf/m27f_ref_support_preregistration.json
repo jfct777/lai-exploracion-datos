@@ -1,0 +1,67 @@
+{
+  "stage": "M27F_REF_SUPPORT_AUDIT",
+  "version": 1,
+  "scope": "mechanical_discovery_and_ref_projection_then_ref_only_support_audit",
+  "upstream_contract": {
+    "m27f_split_manifest_sha256": "fcb372ff03f644db2184dc3c5c97f2d3d123b462774639a8a2e7194012769e37",
+    "m27f_split_private_sha256": "39bc061ba0a2660fed84bade9d658fb28fadc6813af097e89e0ad28949f1ed3f",
+    "m27f_split_public_sha256": "b8fb6e465053cb2b2ff8033e7d62bed1e96095a497f34e60c0692f11cbb6d905",
+    "m27f_split_generator_commit": "ff7b7a219540129f7c430a4070248e87285260d6",
+    "m27e_manifest_sha256": "3ce179868e358784d16764a6cc1c337c4a16a7946dd767660e609da79451653e",
+    "m27e_support_sha256": "ac7f39701963f18698e6ab6944495182ff611f83b1e38c0dcaaddc85249c4ee9",
+    "raw_wgs_vcf_sha256": "ecd30e0ea1091aa2e44fae83e78e3e8db2231ae461cb5c0802a87bf3e9a9f5af",
+    "phased_panel_vcf_sha256": "71161973b2e233963321feb03db63eff04f14bc5c7a561a2f0dbce623fc05395",
+    "expected_panel_samples": 3685,
+    "expected_discovery_core_samples": 128,
+    "expected_ref_samples": 435,
+    "expected_ref_samples_by_ancestry": {
+      "African": 173,
+      "European": 246,
+      "Native_American": 16
+    },
+    "expected_ref_native_american_atomic_units": 2,
+    "expected_panel_variant_records": 43026,
+    "expected_direct_phase_bridge_sites": 954,
+    "expected_direct_bridge_key_orientation_sha256": "243a2b0d4adb381d63bfebe65c73bea22be6945d61aa41bdf5b926ae4b4af1be"
+  },
+  "projection_contract": {
+    "tool": "bcftools",
+    "version": "1.16",
+    "container": "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/dnabr-qc@sha256:3baca87521291075c1ea5c7b17a3706a5030adda65174313fbc203c1a1324b35",
+    "output_format": "BCF",
+    "sample_selection": "positive allow-list only",
+    "update_info_ac_an": false,
+    "variant_filters": [],
+    "genotype_filters": [],
+    "preserve_variant_keys_and_order": true,
+    "publish_discovery_projection": false,
+    "publish_ref_projection_privately": true
+  },
+  "support_contract": {
+    "rare_orientation": "frozen minor allele from NatWGS-128",
+    "heterozygous_carrier_requires_phase": true,
+    "homozygous_carrier_phase_required": false,
+    "unit_of_replication": "canonical_population_plus_primary_IBD_atomic_unit",
+    "ref_native_american_pass_rule": "at least one of the 954 frozen sites has a usable carrier in both of the two Native-American REF atomic units",
+    "reorient_in_ref": false,
+    "select_using_validation": false
+  },
+  "gates": {
+    "R0": "All split, M27E and VCF hashes and counts match the frozen upstream contract.",
+    "R1": "DISCOVERY_CORE and REF positive allow-lists are exact, unique and disjoint from every other role.",
+    "R2": "The REF BCF header is exactly the 435 REF samples; no DISCOVERY, SOURCE_VALID or SOURCE_TEST sample is emitted.",
+    "R3": "Source, discovery projection and REF projection contain the same 43,026 variant keys in the same order; no variant or genotype filter is applied.",
+    "R4": "The discovery-only projection reproduces exactly 954 frozen sites and their key-plus-orientation SHA-256.",
+    "R5": "At least one frozen site has phased or homozygous usable minor-allele support in both Native-American REF atomic units."
+  },
+  "allowed_decisions": [
+    "STOP_PROVENANCE",
+    "STOP_ALLOWLIST",
+    "STOP_OUTPUT_MEMBERSHIP",
+    "STOP_VARIANT_PROJECTION",
+    "STOP_TARGET_REPRODUCTION",
+    "STOP_REF_NO_SUPPORT",
+    "GO_VALID_FEASIBILITY_ONLY"
+  ],
+  "next_gate": "If REF passes, freeze the eligible site catalog and criteria by hash before opening SOURCE_VALID once. SOURCE_TEST remains sealed."
+}
