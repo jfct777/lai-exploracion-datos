@@ -59,6 +59,8 @@ process AUDIT_M27F_BLIND_ROLE_SPLIT {
       --preregistration ${preregistration} \
       --outdir .
 
+    chmod 600 m27f_split.private.tsv
+
     python3 ${manifest_py} \
       --stage M27F_BLIND_ROLE_SPLIT \
       ${manifestInputs} \

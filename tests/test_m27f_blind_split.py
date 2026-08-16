@@ -99,6 +99,7 @@ class TestM27FBlindSplit(unittest.TestCase):
         self.assertIn("WRITE_M27F_SPLIT_RUN_PROVENANCE", workflow)
         self.assertIn("workflow.commandLine", workflow)
         self.assertIn("--upstream-m27e-manifest", module)
+        self.assertIn("chmod 600 m27f_split.private.tsv", module)
         self.assertIn('"source_test_opened":false', module)
 
 
