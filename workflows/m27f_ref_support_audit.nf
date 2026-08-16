@@ -15,6 +15,7 @@ workflow {
         run_id: params.cloud_run_id,
         container_path: params.m27f_ref_container_image,
         container_sha256: params.m27f_ref_container_digest,
+        container_options: params.m27f_ref_container_options,
         scientific_scope: 'Mechanical DISCOVERY_CORE and REF projections followed by REF-only support audit; VALID and TEST remain sealed',
     ]
     def provenanceB64 = groovy.json.JsonOutput.toJson(provenance).bytes.encodeBase64().toString()

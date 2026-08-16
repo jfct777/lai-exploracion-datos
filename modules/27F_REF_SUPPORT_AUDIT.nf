@@ -4,6 +4,7 @@ process WRITE_M27F_REF_RUN_PROVENANCE {
     tag "m27f_ref_run_provenance"
     publishDir "${params.m27f_ref_results_dir}", mode: 'copy', overwrite: false
     container params.m27f_ref_container_image
+    containerOptions params.m27f_ref_container_options
     cpus 1
     memory '1 GB'
     time '5m'
@@ -25,6 +26,7 @@ process PROJECT_M27F_REF_PANEL {
     tag "m27f_ref_positive_allowlist_projection"
     publishDir "${params.m27f_ref_results_dir}", mode: 'copy', overwrite: false, pattern: 'm27f_ref*'
     container params.m27f_ref_container_image
+    containerOptions params.m27f_ref_container_options
     cpus params.m27f_ref_cpus
     memory params.m27f_ref_memory
     time params.m27f_ref_time
@@ -61,6 +63,7 @@ process AUDIT_M27F_REF_SUPPORT {
     tag "m27f_ref_only_frozen_954_support"
     publishDir "${params.m27f_ref_results_dir}", mode: 'copy', overwrite: false
     container params.m27f_ref_container_image
+    containerOptions params.m27f_ref_container_options
     cpus params.m27f_ref_cpus
     memory params.m27f_ref_memory
     time params.m27f_ref_time
