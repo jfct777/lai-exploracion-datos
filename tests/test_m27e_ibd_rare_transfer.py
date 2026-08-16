@@ -85,8 +85,8 @@ class TestM27EContracts(unittest.TestCase):
                 "Population",
             ]
             rows = [
-                ["A", "MATCHED", "TRUE", "S", "Native_American", "P"],
-                ["B", "MATCHED", "TRUE", "S", "Native_American", "P"],
+                ["A", "MATCHED", "TRUE", "S1", "Native_American", "P"],
+                ["B", "MATCHED", "TRUE", "S2", "Native_American", "P"],
                 ["U", "UNMATCHED", "FALSE", "", "", ""],
             ]
             with table.open("w", encoding="utf-8", newline="") as handle:
@@ -120,6 +120,62 @@ class TestM27EContracts(unittest.TestCase):
         self.assertEqual(roots["A"], roots["B"])
         self.assertNotEqual(roots["A"], roots["U"])
         self.assertEqual(summary["n_blocks_total"], 2)
+
+    def test_unphased_heterozygote_is_not_a_usable_haplotype_carrier(self):
+        self.assertFalse(m27e.is_usable_minor_carrier(1, False, True, True))
+        self.assertTrue(m27e.is_usable_minor_carrier(1, True, True, True))
+        self.assertTrue(m27e.is_usable_minor_carrier(2, False, True, True))
+        self.assertFalse(m27e.is_usable_minor_carrier(0, True, True, True))
+
+    def test_effective_number_reports_concentration(self):
+        self.assertEqual(m27e.effective_number([5, 5]), 2.0)
+        self.assertAlmostEqual(m27e.effective_number([9, 1]), 100 / 82)
+        self.assertEqual(m27e.effective_number([]), 0.0)
+
+    def test_joint_baseline_and_leave_population_out_counts(self):
+        samples = ["D1", "D2", "E1", "E2", "E3"]
+        populations = {"D1": "D1", "D2": "D2", "E1": "P1", "E2": "P2", "E3": "P3"}
+        metadata = {
+            sample: {
+                "Ancestry": "Native_American",
+                "Source": "NatWGS" if sample.startswith("D") else "External",
+                "Population": populations[sample],
+                "_population_interpretable": "True",
+            }
+            for sample in samples
+        }
+        roots = {sample: sample for sample in samples}
+        key = ("22", 100, "A", "G")
+        with tempfile.TemporaryDirectory() as tmp:
+            panel = Path(tmp) / "panel.vcf"
+            panel.write_text(
+                "##fileformat=VCFv4.2\n"
+                + "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t"
+                + "\t".join(samples)
+                + "\n22\t100\t.\tA\tG\t.\tPASS\t.\tGT\t"
+                + "\t".join(["0|1"] * len(samples))
+                + "\n",
+                encoding="utf-8",
+            )
+            summary = m27e.summarize_panel_bridge(
+                panel,
+                samples,
+                samples,
+                ["D1", "D2"],
+                {key: m27e.RawRareSite(True, bytes([1, 1]))},
+                metadata,
+                {"primary": roots},
+                set(),
+                "primary",
+            )
+        self.assertEqual(summary["n_direct_phase_bridge_sites"], 1)
+        self.assertEqual(
+            summary["primary_native_american_transferable_sites_outside_frozen_baseline"], 1
+        )
+        self.assertEqual(summary["primary_native_american_baseline_disjoint_lopo_robust_sites"], 1)
+        concentration = summary["primary_native_american_baseline_disjoint_concentration"]
+        self.assertEqual(concentration["n_contributing_external_populations"], 3)
+        self.assertEqual(concentration["effective_external_populations_by_site_support"], 3.0)
 
     def test_recent_kinship_requires_anchor_segment_and_total_ibd(self):
         metadata = {

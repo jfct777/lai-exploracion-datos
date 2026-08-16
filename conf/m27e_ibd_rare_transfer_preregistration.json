@@ -1,6 +1,6 @@
 {
   "stage": "M27E_IBD_RARE_TRANSFER_FEASIBILITY",
-  "version": 2,
+  "version": 3,
   "scope": "read_only_autosomal_ibd_and_chr22_rare_transfer_feasibility",
   "question": "Can the official phased panel provide population- and recent-kinship-disjoint source blocks with rare-allele support outside the NatWGS-128 ascertainment panel?",
   "upstream_contract": {
@@ -41,7 +41,7 @@
       "strict_third_degree_expectation": 0.0625
     },
     "threshold_source": "IBD_relatedness relatedness_v1.py uses total IBD divided by four genome lengths for kinship and names 0 or 10 cM as typical max-segment filters; pedigree expectations define the three kinship thresholds.",
-    "primary_block_policy": "max_segment_cm>=10 and kinship>=0.04419417382415922, unioned with exact Ancestry x Source x Population strata"
+    "primary_block_policy": "max_segment_cm>=10 and kinship>=0.04419417382415922, unioned with exact Ancestry x canonical Population strata; Source is retained as batch provenance but cannot split the same biological population"
   },
   "rare_contract": {
     "chromosome": "22",
@@ -56,6 +56,8 @@
     "afr_eur_support_is_descriptive_only": true,
     "minimum_fit_blocks": 2,
     "minimum_external_source_blocks": 2,
+    "require_baseline_disjoint_primary_support": true,
+    "leave_one_external_population_out": true,
     "feature_keys_or_sample_ids_may_be_published": false
   },
   "gates": [
@@ -77,7 +79,7 @@
     {
       "id": "E3",
       "name": "three_role_block_feasibility",
-      "pass_rule": "Under the primary recent-kinship policy, AFR, EUR and NAM each retain at least three Source x Population x kinship blocks; raw >=2 cM connected components are reported only as a percolation diagnostic and are not interpreted as pedigrees."
+      "pass_rule": "Under the primary recent-kinship policy, AFR, EUR and NAM each retain at least three canonical-Population x kinship blocks; raw >=2 cM connected components are reported only as a percolation diagnostic and are not interpreted as pedigrees."
     },
     {
       "id": "E4",
@@ -87,7 +89,12 @@
     {
       "id": "E5",
       "name": "baseline_channel_separation",
-      "pass_rule": "The exact overlap between the 954 keys and the frozen Gnomix baseline is measured. Any compatible future baseline must exclude all overlapping keys before simulation; this audit does not construct that baseline."
+      "pass_rule": "The exact overlap between the 954 keys and the frozen Gnomix baseline is measured, and at least one primary transferable Native-American site is exact-key disjoint from that baseline."
+    },
+    {
+      "id": "E6",
+      "name": "external_population_concentration",
+      "pass_rule": "At least one baseline-disjoint primary transferable Native-American site still has two external blocks after removing each carrier canonical Population stratum in turn. This is a concentration diagnostic, not a claim of biological replication."
     }
   ],
   "allowed_decisions": [
@@ -95,6 +102,8 @@
     "STOP_RARE_BRIDGE_NOT_REPRODUCED",
     "STOP_NO_THREE_ROLE_BLOCK_FEASIBILITY",
     "STOP_NO_TRANSFERABLE_NAM_SUPPORT",
+    "STOP_NO_BASELINE_DISJOINT_TRANSFERABLE_NAM_SUPPORT",
+    "STOP_EXTERNAL_POPULATION_CONCENTRATION",
     "GO_BASELINE_REDESIGN_AND_POWER_ONLY",
     "GO_POWER_DESIGN_ONLY"
   ],
@@ -114,6 +123,12 @@
       "reason": "The frozen M27D strata artifact resolves all 3,685 panel identities but documents population metadata for 3,675; ten samples are unmatched. Requiring invented population labels would violate the fail-closed identity policy.",
       "timing": "before_implementation_commit_and_before_any_m27e_result",
       "delta": "Use the hash-pinned M27D resolved-strata artifact; keep all samples in identity/IBD accounting and exclude only the ten documented unmatched samples from ancestry-specific summaries. No IBD, rare-allele or gate threshold changed."
+    },
+    {
+      "version": 3,
+      "reason": "The first complete M27E output reported 237 transferable Native-American sites and 507 baseline overlaps separately, which cannot establish whether any transferable site is actually absent from the baseline or robust to one external population dominating support.",
+      "timing": "after_first_complete_m27e_audit_but_before_the_baseline_disjoint_and_leave_population_out_recomputation",
+      "delta": "Add exact joint counts for transferability x baseline overlap, require phased external heterozygous carriers, merge identical biological populations across data sources, and add anonymized leave-one-external-population-out and effective-concentration summaries. Thresholds, variant selection, allele orientation, IBD calls and input files remain frozen."
     }
   ],
   "privacy": {
