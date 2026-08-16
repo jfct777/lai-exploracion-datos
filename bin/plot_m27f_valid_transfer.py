@@ -57,14 +57,15 @@ def render(args: argparse.Namespace) -> None:
 
     stages = [
         ("Catálogo\nDISCOVERY", int(ref["n_frozen_target_sites"])),
-        ("Algún portador\nNAM en REF", int(ref["n_sites_with_any_native_american_ref_carrier"])),
-        ("Ambos bloques\nNAM de REF", int(ref["n_sites_with_carriers_in_both_native_american_ref_atomic_units"])),
-        ("Fuera del baseline\nhistórico", int(valid["n_primary_historical_baseline_disjoint_sites"])),
-        ("Transferidos a\n3/3 bloques VALID", int(valid["n_primary_sites_transferred_all_nam_valid_blocks"])),
+        ("Algún portador\nNAM\nen REF", int(ref["n_sites_with_any_native_american_ref_carrier"])),
+        ("Ambos bloques\nNAM\nde REF", int(ref["n_sites_with_carriers_in_both_native_american_ref_atomic_units"])),
+        ("Fuera del\nbaseline\nhistórico", int(valid["n_primary_historical_baseline_disjoint_sites"])),
+        ("Transferidos a\n3/3 bloques\nVALID", int(valid["n_primary_sites_transferred_all_nam_valid_blocks"])),
     ]
 
-    fig = plt.figure(figsize=(12.2, 5.8), facecolor="white")
+    fig = plt.figure(figsize=(13.4, 6.1), facecolor="white")
     grid = fig.add_gridspec(1, 2, width_ratios=[1.55, 1], wspace=0.34)
+    fig.subplots_adjust(top=0.78, bottom=0.18)
     ax_flow = fig.add_subplot(grid[0, 0])
     ax_matrix = fig.add_subplot(grid[0, 1])
 
@@ -97,7 +98,7 @@ def render(args: argparse.Namespace) -> None:
             color=ink,
             bbox={"boxstyle": "round,pad=0.55", "facecolor": face, "edgecolor": blue if value else border, "lw": 1.4},
         )
-        ax_flow.text(index, -0.22, label, ha="center", va="top", fontsize=9.2, color=ink)
+        ax_flow.text(index, -0.20, label, ha="center", va="top", fontsize=8.8, color=ink)
     ax_flow.set_title("Pérdida de soporte a través de los filtros independientes", loc="left", fontsize=12, color=ink, pad=12)
 
     array = np.asarray(matrix)
@@ -126,10 +127,10 @@ def render(args: argparse.Namespace) -> None:
     ax_matrix.set_title("Transferencia en los tres bloques NAM de VALID", loc="left", fontsize=12, color=ink, pad=12)
     ax_matrix.set_xlabel("Bloques independientes (población + IBD)", fontsize=9.5, color=ink, labelpad=10)
 
-    fig.suptitle("M27F: transferencia del catálogo raro de chr22", x=0.055, y=0.98, ha="left", fontsize=16, fontweight="bold", color=ink)
+    fig.suptitle("M27F: transferencia del catálogo raro de chr22", x=0.055, y=0.97, ha="left", fontsize=16, fontweight="bold", color=ink)
     fig.text(
         0.055,
-        0.925,
+        0.90,
         "Catálogo y orientación congelados antes de VALID; los tres patrones primarios estaban fuera del baseline histórico.",
         ha="left",
         fontsize=10.3,
