@@ -71,7 +71,7 @@ process AUDIT_M27F_BLIND_ROLE_SPLIT {
       --output m27f_split.private.tsv \
       --output m27f_split.public.json \
       --provenance-b64 ${provenance_b64} \
-      --params-json '{"allocation":"balanced_atomic_units_with_exact_small_stratum_audit","vcf_inputs_declared":false,"genotypes_parsed":false,"rare_support_used":false,"source_test_opened":false}' \
+      --params-json '{"role_fractions":{"REF_TRAIN":0.5,"SOURCE_VALID":0.25,"SOURCE_TEST":0.25},"vcf_inputs_declared":false,"genotypes_parsed":false,"rare_support_used":false,"source_test_opened":false}' \
       --stamp "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
       --run-provenance-ref ../run_provenance.json \
       --out m27f_split.manifest.json
