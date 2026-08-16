@@ -1,6 +1,6 @@
 {
   "stage": "M27E_IBD_RARE_TRANSFER_FEASIBILITY",
-  "version": 3,
+  "version": 4,
   "scope": "read_only_autosomal_ibd_and_chr22_rare_transfer_feasibility",
   "question": "Can the official phased panel provide population- and recent-kinship-disjoint source blocks with rare-allele support outside the NatWGS-128 ascertainment panel?",
   "upstream_contract": {
@@ -56,7 +56,7 @@
     "afr_eur_support_is_descriptive_only": true,
     "minimum_fit_blocks": 2,
     "minimum_external_source_blocks": 2,
-    "require_baseline_disjoint_primary_support": true,
+    "require_baseline_overlap_audit": true,
     "leave_one_external_population_out": true,
     "feature_keys_or_sample_ids_may_be_published": false
   },
@@ -88,13 +88,13 @@
     },
     {
       "id": "E5",
-      "name": "baseline_channel_separation",
-      "pass_rule": "The exact overlap between the 954 keys and the frozen Gnomix baseline is measured, and at least one primary transferable Native-American site is exact-key disjoint from that baseline."
+      "name": "baseline_overlap_audit",
+      "pass_rule": "Exact-key and same-position overlap between the 954 keys and the frozen Gnomix baseline are measured with explicit contingency invariants. This is diagnostic; a future compatible baseline must exclude every target rare position from its common channel."
     },
     {
       "id": "E6",
       "name": "external_population_concentration",
-      "pass_rule": "At least one baseline-disjoint primary transferable Native-American site still has two external blocks after removing each carrier canonical Population stratum in turn. This is a concentration diagnostic, not a claim of biological replication."
+      "pass_rule": "At least one primary transferable Native-American site still has two external role-eligible blocks after removing each carrier canonical Population stratum in turn. Blocks that also contain NatWGS discovery samples are never external-role eligible. This is a concentration diagnostic, not a claim of biological replication."
     }
   ],
   "allowed_decisions": [
@@ -102,7 +102,6 @@
     "STOP_RARE_BRIDGE_NOT_REPRODUCED",
     "STOP_NO_THREE_ROLE_BLOCK_FEASIBILITY",
     "STOP_NO_TRANSFERABLE_NAM_SUPPORT",
-    "STOP_NO_BASELINE_DISJOINT_TRANSFERABLE_NAM_SUPPORT",
     "STOP_EXTERNAL_POPULATION_CONCENTRATION",
     "GO_BASELINE_REDESIGN_AND_POWER_ONLY",
     "GO_POWER_DESIGN_ONLY"
@@ -129,6 +128,12 @@
       "reason": "The first complete M27E output reported 237 transferable Native-American sites and 507 baseline overlaps separately, which cannot establish whether any transferable site is actually absent from the baseline or robust to one external population dominating support.",
       "timing": "after_first_complete_m27e_audit_but_before_the_baseline_disjoint_and_leave_population_out_recomputation",
       "delta": "Add exact joint counts for transferability x baseline overlap, require phased external heterozygous carriers, merge identical biological populations across data sources, and add anonymized leave-one-external-population-out and effective-concentration summaries. Thresholds, variant selection, allele orientation, IBD calls and input files remain frozen."
+    },
+    {
+      "version": 4,
+      "reason": "The second PRE review found that an IBD/population block containing both NatWGS discovery and external samples could be counted on both sides, and that exact-key absence from the unusable frozen baseline is not the separation rule for the future redesigned baseline.",
+      "timing": "after_v3_code_review_and_before_any_v3_or_v4_recomputation",
+      "delta": "Define external-role-eligible blocks as external blocks minus all discovery blocks; use only those blocks for transferability, leave-one-population-out and concentration. Keep exact-key and same-position baseline overlap as an audited diagnostic, but require the future common baseline to exclude all 954 target positions. Sites, orientation, IBD calls, thresholds and inputs remain frozen."
     }
   ],
   "privacy": {

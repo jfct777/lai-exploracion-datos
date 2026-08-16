@@ -503,26 +503,32 @@ def summarize_panel_bridge(
                 policy_counts = {}
                 for policy, roots in block_roots.items():
                     discovery_blocks = {roots[sample] for sample in discovered}
-                    external_blocks = {roots[sample] for sample in external}
+                    external_blocks_raw = {roots[sample] for sample in external}
+                    external_role_eligible_blocks = external_blocks_raw - discovery_blocks
                     external_blocks_by_population: dict[str, set[str]] = defaultdict(set)
                     for sample in external:
-                        external_blocks_by_population[population_stratum(metadata[sample])].add(
-                            roots[sample]
-                        )
+                        root = roots[sample]
+                        if root in external_role_eligible_blocks:
+                            external_blocks_by_population[
+                                population_stratum(metadata[sample])
+                            ].add(root)
                     minimum_after_leave_one_population_out = min(
                         (
-                            len(external_blocks - population_blocks)
+                            len(external_role_eligible_blocks - population_blocks)
                             for population_blocks in external_blocks_by_population.values()
                         ),
                         default=0,
                     )
                     policy_counts[policy] = {
                         "discovery_blocks": len(discovery_blocks),
-                        "external_blocks": len(external_blocks),
+                        "external_blocks_raw": len(external_blocks_raw),
+                        "external_role_eligible_blocks": len(
+                            external_role_eligible_blocks
+                        ),
                         "minimum_external_blocks_after_leave_one_population_out": (
                             minimum_after_leave_one_population_out
                         ),
-                        "external_block_ids_private": external_blocks,
+                        "external_block_ids_private": external_role_eligible_blocks,
                         "external_population_ids_private": set(external_blocks_by_population),
                     }
                 row["ancestry"][ancestry] = {
@@ -553,8 +559,12 @@ def summarize_panel_bridge(
             ceiling = baseline_overlap = baseline_disjoint = lopo_robust = 0
             for row in direct_rows:
                 counts = row["ancestry"][ancestry]["policies"][policy]
-                ceiling += counts["discovery_blocks"] >= 1 and counts["external_blocks"] >= 1
-                if counts["discovery_blocks"] >= 2 and counts["external_blocks"] >= 2:
+                ceiling += counts["discovery_blocks"] >= 1 and counts[
+                    "external_role_eligible_blocks"
+                ] >= 1
+                if counts["discovery_blocks"] >= 2 and counts[
+                    "external_role_eligible_blocks"
+                ] >= 2:
                     transferable_rows.append(row)
                     baseline_overlap += bool(row["in_frozen_baseline"])
                     baseline_disjoint += not bool(row["in_frozen_baseline"])
@@ -570,31 +580,98 @@ def summarize_panel_bridge(
             }
         summary_by_policy[policy] = per_ancestry
 
+    direct_in_baseline = sum(bool(row["in_frozen_baseline"]) for row in direct_rows)
+    direct_outside_baseline = len(direct_rows) - direct_in_baseline
+    baseline_positions = {(chrom, position) for chrom, position, _ref, _alt in baseline_markers}
+    direct_at_baseline_position = sum(
+        (row["key"][0], row["key"][1]) in baseline_positions for row in direct_rows
+    )
+    primary_nam_support = summary_by_policy[primary_policy]["Native_American"]
+    transferable_in_baseline = primary_nam_support[
+        "n_transferable_sites_in_frozen_baseline"
+    ]
+    transferable_outside_baseline = primary_nam_support[
+        "n_transferable_sites_outside_frozen_baseline"
+    ]
+    not_transferable_in_baseline = direct_in_baseline - transferable_in_baseline
+    not_transferable_outside_baseline = (
+        direct_outside_baseline - transferable_outside_baseline
+    )
+    contingency = {
+        "transferable": {
+            "in_frozen_baseline": transferable_in_baseline,
+            "outside_frozen_baseline": transferable_outside_baseline,
+            "total": transferable_in_baseline + transferable_outside_baseline,
+        },
+        "not_transferable": {
+            "in_frozen_baseline": not_transferable_in_baseline,
+            "outside_frozen_baseline": not_transferable_outside_baseline,
+            "total": not_transferable_in_baseline + not_transferable_outside_baseline,
+        },
+        "column_totals": {
+            "in_frozen_baseline": direct_in_baseline,
+            "outside_frozen_baseline": direct_outside_baseline,
+        },
+        "grand_total": len(direct_rows),
+    }
+    cell_total = sum(
+        contingency[row][column]
+        for row in ("transferable", "not_transferable")
+        for column in ("in_frozen_baseline", "outside_frozen_baseline")
+    )
+    if min(
+        transferable_in_baseline,
+        transferable_outside_baseline,
+        not_transferable_in_baseline,
+        not_transferable_outside_baseline,
+    ) < 0 or cell_total != len(direct_rows):
+        raise ValueError("Transferability-by-baseline contingency invariants failed")
+    contingency["invariants"] = {
+        "four_cells_sum_to_direct_bridge": cell_total == len(direct_rows),
+        "transferable_margin_matches_primary_support": contingency["transferable"][
+            "total"
+        ]
+        == primary_nam_support["n_sites_with_two_fit_and_two_external_blocks"],
+        "baseline_margin_matches_direct_overlap": contingency["column_totals"][
+            "in_frozen_baseline"
+        ]
+        == direct_in_baseline,
+    }
+    if not all(contingency["invariants"].values()):
+        raise ValueError("Transferability-by-baseline margins failed")
+
     primary_nam_rows = []
     for row in direct_rows:
         counts = row["ancestry"]["Native_American"]["policies"][primary_policy]
         if (
             counts["discovery_blocks"] >= 2
-            and counts["external_blocks"] >= 2
-            and not row["in_frozen_baseline"]
+            and counts["external_role_eligible_blocks"] >= 2
         ):
             primary_nam_rows.append(row)
     block_support = Counter()
     population_support = Counter()
-    lopo_robust_baseline_disjoint = 0
+    lopo_robust = 0
     for row in primary_nam_rows:
         counts = row["ancestry"]["Native_American"]["policies"][primary_policy]
         block_support.update(counts["external_block_ids_private"])
         population_support.update(counts["external_population_ids_private"])
-        lopo_robust_baseline_disjoint += counts[
+        lopo_robust += counts[
             "minimum_external_blocks_after_leave_one_population_out"
         ] >= 2
     block_total = sum(block_support.values())
     population_total = sum(population_support.values())
     concentration = {
-        "n_baseline_disjoint_primary_transferable_sites": len(primary_nam_rows),
+        "n_primary_transferable_sites": len(primary_nam_rows),
         "n_sites_robust_to_leave_one_external_population_out": (
-            lopo_robust_baseline_disjoint
+            lopo_robust
+        ),
+        "fraction_robust_among_primary_transferable_sites": (
+            lopo_robust / len(primary_nam_rows)
+            if primary_nam_rows
+            else None
+        ),
+        "fraction_robust_among_all_direct_bridge_sites": (
+            lopo_robust / len(direct_rows) if direct_rows else None
         ),
         "n_contributing_external_blocks": len(block_support),
         "effective_external_blocks_by_site_support": effective_number(block_support.values()),
@@ -620,12 +697,13 @@ def summarize_panel_bridge(
         "direct_bridge_key_orientation_sha256": digest,
         "variant_keys_emitted": False,
         "sample_ids_emitted": False,
-        "n_direct_bridge_sites_in_frozen_baseline": sum(
-            bool(row["in_frozen_baseline"]) for row in direct_rows
+        "n_direct_bridge_sites_in_frozen_baseline": direct_in_baseline,
+        "n_direct_bridge_sites_outside_frozen_baseline": direct_outside_baseline,
+        "n_direct_bridge_sites_at_frozen_baseline_position": direct_at_baseline_position,
+        "n_direct_bridge_sites_same_position_but_not_exact_key": (
+            direct_at_baseline_position - direct_in_baseline
         ),
-        "n_direct_bridge_sites_outside_frozen_baseline": sum(
-            not bool(row["in_frozen_baseline"]) for row in direct_rows
-        ),
+        "primary_native_american_transferability_by_baseline": contingency,
         "unphased_heterozygous_carriers_excluded_by_ancestry": {
             ancestry: unphased_heterozygous_carriers_excluded[ancestry]
             for ancestry in TARGET_ANCESTRIES
@@ -647,10 +725,8 @@ def summarize_panel_bridge(
         "primary_native_american_transferable_sites_outside_frozen_baseline": summary_by_policy[
             primary_policy
         ]["Native_American"]["n_transferable_sites_outside_frozen_baseline"],
-        "primary_native_american_baseline_disjoint_lopo_robust_sites": (
-            lopo_robust_baseline_disjoint
-        ),
-        "primary_native_american_baseline_disjoint_concentration": concentration,
+        "primary_native_american_lopo_robust_sites": lopo_robust,
+        "primary_native_american_transferable_concentration": concentration,
     }
 
 
@@ -795,21 +871,20 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     primary_blocks = block_summaries[primary_policy]["per_ancestry"]
     e3 = all(primary_blocks[ancestry]["n_blocks"] >= 3 for ancestry in TARGET_ANCESTRIES)
     e4 = rare_summary["primary_native_american_transferable_sites"] > 0
-    e5 = (
-        rare_summary[
-            "primary_native_american_transferable_sites_outside_frozen_baseline"
-        ]
-        > 0
+    e5 = all(
+        rare_summary["primary_native_american_transferability_by_baseline"][
+            "invariants"
+        ].values()
     )
-    e6 = rare_summary["primary_native_american_baseline_disjoint_lopo_robust_sites"] > 0
+    e6 = rare_summary["primary_native_american_lopo_robust_sites"] > 0
     gates = [
         {"gate": "E0", "name": "input_and_provenance_contract", "status": "PASS" if e0 else "FAIL", "reason": "22 matched IBD/log/map inputs; frozen Refined-IBD version and segment schema."},
         {"gate": "E1", "name": "identity_and_population_coverage_contract", "status": "PASS" if e1 else "FAIL", "reason": "Panel, IBD and NatWGS identities match the hash-pinned M27D strata; the 10 documented unmatched samples are excluded only from ancestry summaries."},
         {"gate": "E2", "name": "rare_bridge_reproduction", "status": "PASS" if e2 else "FAIL", "reason": "M27B rare definition and direct phased-carrier bridge reproduced with private-key digest."},
         {"gate": "E3", "name": "three_role_block_feasibility", "status": "PASS" if e3 else "FAIL", "reason": "At least three canonical-population/recent-kinship blocks remain per target ancestry; a joint role assignment is still pending."},
         {"gate": "E4", "name": "external_native_american_rare_support", "status": "PASS" if e4 else "FAIL", "reason": "Frozen NatWGS allele appears in >=2 discovery and >=2 external NAM blocks under the primary policy."},
-        {"gate": "E5", "name": "baseline_channel_separation", "status": "PASS" if e5 else "FAIL", "reason": "At least one primary transferable NAM site is exact-key disjoint from the frozen baseline; the baseline itself is not yet redesigned."},
-        {"gate": "E6", "name": "external_population_concentration", "status": "PASS" if e6 else "FAIL", "reason": "At least one baseline-disjoint primary site retains two external blocks after leaving out each carrier biological population."},
+        {"gate": "E5", "name": "baseline_overlap_audit", "status": "PASS" if e5 else "FAIL", "reason": "Exact-key and same-position overlap with the frozen baseline were measured with reconstructable margins; this does not certify the future baseline."},
+        {"gate": "E6", "name": "external_population_concentration", "status": "PASS" if e6 else "FAIL", "reason": "At least one primary site retains two external role-eligible blocks after leaving out each carrier biological population."},
     ]
     if not e0 or not e1:
         decision = "STOP_INPUT_OR_IDENTITY_CONTRACT"
@@ -819,14 +894,10 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         decision = "STOP_NO_THREE_ROLE_BLOCK_FEASIBILITY"
     elif not e4:
         decision = "STOP_NO_TRANSFERABLE_NAM_SUPPORT"
-    elif not e5:
-        decision = "STOP_NO_BASELINE_DISJOINT_TRANSFERABLE_NAM_SUPPORT"
     elif not e6:
         decision = "STOP_EXTERNAL_POPULATION_CONCENTRATION"
-    elif rare_summary["n_direct_bridge_sites_in_frozen_baseline"]:
-        decision = "GO_BASELINE_REDESIGN_AND_POWER_ONLY"
     else:
-        decision = "GO_POWER_DESIGN_ONLY"
+        decision = "GO_BASELINE_REDESIGN_AND_POWER_ONLY"
 
     input_contract = {
         "stage": prereg["stage"],
@@ -869,7 +940,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "source_test_opened": False,
         "sample_ids_emitted": False,
         "variant_keys_emitted": False,
-        "interpretation": "M27E establishes baseline-disjoint structural feasibility only. It cannot certify pedigree, power, a final split, a compatible common baseline, or rare-channel improvement of LAI.",
+        "interpretation": "M27E establishes structural transfer feasibility using external role-eligible blocks. Baseline overlap is diagnostic only; it cannot certify pedigree, power, a final split, a compatible common baseline, or rare-channel improvement of LAI.",
     }
     args.outdir.mkdir(parents=True, exist_ok=True)
     write_json(args.outdir / "m27e_input_contract.json", input_contract)
