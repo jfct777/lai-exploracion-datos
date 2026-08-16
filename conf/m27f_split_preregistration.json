@@ -1,17 +1,25 @@
 {
   "stage": "M27F_BLIND_ROLE_SPLIT",
-  "version": 1,
-  "scope": "metadata_and_frozen_ibd_only_no_genotype_access",
+  "version": 2,
+  "scope": "frozen_metadata_and_ibd_only_no_vcf_or_genotype_access",
   "upstream_contract": {
     "expected_panel_samples": 3685,
     "expected_discovery_samples": 128,
     "expected_population_interpretable_samples": 3675,
     "expected_population_unresolved_samples": 10,
     "resolved_strata_sha256": "1b41c4d1b02e84ebd3b7715d2b5c399238d04e7754a1a0520433f4e3595671e1",
-    "resolved_strata_manifest_sha256": "b4e97140e5af3cb28131002b3b52f909a3496ddb6095b4fb117700fcb048faa3"
+    "resolved_strata_manifest_sha256": "b4e97140e5af3cb28131002b3b52f909a3496ddb6095b4fb117700fcb048faa3",
+    "m27e_manifest_sha256": "3ce179868e358784d16764a6cc1c337c4a16a7946dd767660e609da79451653e",
+    "m27e_manifest_stage": "M27E_IBD_RARE_TRANSFER_FEASIBILITY",
+    "m27e_generator_commit": "b076be945304769bcea08c3ceae7e10cab7f8a48"
   },
   "target_ancestries": ["African", "European", "Native_American"],
   "roles": ["REF_TRAIN", "SOURCE_VALID", "SOURCE_TEST"],
+  "role_fractions": {
+    "REF_TRAIN": 0.5,
+    "SOURCE_VALID": 0.25,
+    "SOURCE_TEST": 0.25
+  },
   "discovery": {
     "source": "NatWGS",
     "ancestry": "Native_American",
@@ -27,30 +35,46 @@
     "kinship_definition": "sum_reported_ibd_cm/(4*observed_autosomal_map_span_cm)"
   },
   "assignment_algorithm": {
-    "name": "deterministic_largest_block_first_balanced_counts",
-    "input_features": ["canonical_ancestry", "canonical_population", "frozen_ibd_block", "block_sample_count"],
-    "forbidden_features": ["genotype", "rare_carrier", "rare_burden", "variant_position", "baseline_overlap", "LAI_result"],
-    "order_blocks": "descending sample count, then ascending sha256 of sorted private member IDs",
-    "assign_role": "minimum current block count, then minimum current sample count, then fixed role order REF_TRAIN,SOURCE_VALID,SOURCE_TEST",
+    "name": "deterministic_hamilton_quota_largest_block_first",
+    "atomic_unit": "connected_component_of_canonical_population_and_primary_ibd_edges",
+    "apportionment": "Hamilton largest remainder on atomic-unit counts; ties SOURCE_VALID,SOURCE_TEST,REF_TRAIN",
+    "order_units": "descending number of populations, descending sample count, ascending sha256 of sorted private member IDs",
+    "balance_objective": "within exact unit quotas, greedily minimize normalized population fill, then normalized sample fill, then fixed role order",
+    "minimum_units_per_role_and_ancestry": 2,
+    "minimum_populations_per_role_and_ancestry": 2,
+    "forbidden_features": [
+      "VCF",
+      "genotype",
+      "rare_carrier",
+      "rare_burden",
+      "variant_position",
+      "baseline_overlap",
+      "LAI_result"
+    ],
     "random_seed": null,
+    "ratio_screen": false,
     "post_result_rebalancing": false
   },
   "gates": {
-    "F0": "Panel, discovery, metadata, IBD and map identities and counts satisfy the frozen M27E contract.",
-    "F1": "Every sample receives exactly one role or explicit out-of-scope status; all 128 NatWGS samples and their complete population/IBD closure are DISCOVERY.",
-    "F2": "No population or frozen primary IBD block crosses roles.",
-    "F3": "AFR, EUR and NAM each retain at least two blocks in REF_TRAIN, SOURCE_VALID and SOURCE_TEST.",
-    "F4": "The splitter reads VCF headers only and does not inspect any genotype, rare support, position or LAI result."
+    "F0": "The M27E manifest authenticates all 22 IBD files, 22 maps and the frozen strata; identities and counts match.",
+    "F1": "All 128 NatWGS samples and their complete canonical-population/primary-IBD closure are quarantined in DISCOVERY.",
+    "F2": "No individual, canonical population or primary IBD block crosses roles, and no mixed-ancestry atomic unit is assigned.",
+    "F3": "AFR, EUR and NAM each retain at least two atomic units and two populations in each source role.",
+    "F4": "No VCF, genotype, rare-support, position, baseline-overlap or LAI result is an input to the split.",
+    "F5": "Per ancestry, assigned atomic-unit counts exactly equal the preregistered 50/25/25 Hamilton quotas.",
+    "F6": "Assignment is invariant to input order; public outputs contain no sample IDs or population labels."
   },
   "allowed_decisions": [
     "STOP_INPUT_OR_IDENTITY_CONTRACT",
     "STOP_ROLE_LEAKAGE",
     "STOP_SPLIT_NOT_IDENTIFIABLE",
-    "GO_OPEN_ROLE_EXTRACTION_ONLY"
+    "STOP_ALLOCATION_CONTRACT",
+    "GO_OPEN_TRAIN_VALID_SUPPORT_AUDIT"
   ],
   "privacy": {
-    "private_manifest_contains_ids": true,
-    "public_receipt_contains_ids_or_population_labels": false
+    "private_manifest_contains_ids_and_population_labels": true,
+    "public_receipt_contains_ids_or_population_labels": false,
+    "source_test_is_sealed_after_manifest_hash": true
   },
-  "next_gate": "Mechanically extract DISCOVERY+REF_TRAIN+SOURCE_VALID columns, verify zero SOURCE_TEST IDs, then derive support from the 954 discovery-frozen sites using REF_TRAIN and evaluate it once in SOURCE_VALID."
+  "next_gate": "Read rare/common data only for DISCOVERY, REF_TRAIN and SOURCE_VALID; verify zero SOURCE_TEST columns; estimate support and detectable effect without simulation or training."
 }
