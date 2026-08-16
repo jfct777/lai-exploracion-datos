@@ -13,22 +13,19 @@ sys.path.insert(0, str(REPO / "bin"))
 import audit_m27f_blind_split as m27f  # noqa: E402
 
 
-FRACTIONS = {"REF_TRAIN": 0.5, "SOURCE_VALID": 0.25, "SOURCE_TEST": 0.25}
-
-
 class TestM27FBlindSplit(unittest.TestCase):
-    def test_hamilton_quotas_follow_preregistered_fraction_and_ties(self):
+    def test_balanced_quotas_protect_validation_then_test(self):
         self.assertEqual(
-            m27f.hamilton_quotas(19, FRACTIONS),
-            {"REF_TRAIN": 9, "SOURCE_VALID": 5, "SOURCE_TEST": 5},
+            m27f.balanced_quotas(19),
+            {"REF_TRAIN": 6, "SOURCE_VALID": 7, "SOURCE_TEST": 6},
         )
         self.assertEqual(
-            m27f.hamilton_quotas(31, FRACTIONS),
-            {"REF_TRAIN": 15, "SOURCE_VALID": 8, "SOURCE_TEST": 8},
+            m27f.balanced_quotas(31),
+            {"REF_TRAIN": 10, "SOURCE_VALID": 11, "SOURCE_TEST": 10},
         )
         self.assertEqual(
-            m27f.hamilton_quotas(52, FRACTIONS),
-            {"REF_TRAIN": 26, "SOURCE_VALID": 13, "SOURCE_TEST": 13},
+            m27f.balanced_quotas(8),
+            {"REF_TRAIN": 2, "SOURCE_VALID": 3, "SOURCE_TEST": 3},
         )
 
     def test_assignment_is_order_invariant_and_meets_exact_quotas(self):
@@ -38,10 +35,10 @@ class TestM27FBlindSplit(unittest.TestCase):
                 [(40, 2), (30, 1), (20, 1), (10, 1), (8, 1), (6, 1), (4, 1), (2, 1)]
             )
         ]
-        first, receipt = m27f.deterministic_assignment(units, FRACTIONS)
-        second, _ = m27f.deterministic_assignment(list(reversed(units)), FRACTIONS)
+        first, receipt = m27f.deterministic_assignment(units)
+        second, _ = m27f.deterministic_assignment(list(reversed(units)))
         self.assertEqual(first, second)
-        self.assertEqual(receipt["quotas"], {"REF_TRAIN": 4, "SOURCE_VALID": 2, "SOURCE_TEST": 2})
+        self.assertEqual(receipt["quotas"], {"REF_TRAIN": 2, "SOURCE_VALID": 3, "SOURCE_TEST": 3})
         self.assertEqual(
             {role: list(first.values()).count(role) for role in m27f.ROLES},
             receipt["quotas"],
@@ -50,8 +47,23 @@ class TestM27FBlindSplit(unittest.TestCase):
     def test_duplicate_atomic_unit_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "not unique"):
             m27f.deterministic_assignment(
-                [("same", 2, 1), ("same", 3, 1)], FRACTIONS
+                [("same", 2, 1), ("same", 3, 1)]
             )
+
+    def test_native_american_scale_is_exhaustive_and_order_invariant(self):
+        units = [
+            (hashlib.sha256(str(index).encode()).hexdigest(), size, 1)
+            for index, size in enumerate([21, 9, 8, 5, 3, 2, 1, 1])
+        ]
+        first, receipt = m27f.exhaustive_assignment(units)
+        second, second_receipt = m27f.exhaustive_assignment(list(reversed(units)))
+        self.assertEqual(first, second)
+        self.assertEqual(receipt["n_assignments_evaluated"], 6561)
+        self.assertEqual(second_receipt["n_assignments_evaluated"], 6561)
+        self.assertEqual(
+            {role: list(first.values()).count(role) for role in m27f.ROLES},
+            {"REF_TRAIN": 2, "SOURCE_VALID": 3, "SOURCE_TEST": 3},
+        )
 
     def test_upstream_manifest_authenticates_reused_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
