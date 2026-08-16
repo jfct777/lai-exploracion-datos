@@ -151,9 +151,12 @@ def score_pass(
             "n_absent_from_pair_table": sum(1 for row in rows if not row["present"]),
         }
         if present:
-            block["phi_median"] = round(statistics.median(present), 6)
-            block["phi_min"] = round(min(present), 6)
-            block["phi_max"] = round(max(present), 6)
+            # The production stage suppresses every pair below report_threshold.  These
+            # summaries therefore describe the published upper tail, not the full class.
+            block["phi_median_among_reported_pairs"] = round(statistics.median(present), 6)
+            block["phi_min_among_reported_pairs"] = round(min(present), 6)
+            block["phi_max_among_reported_pairs"] = round(max(present), 6)
+            block["phi_summary_scope"] = "reported_pairs_only_left_truncated"
         counts = [row["nsnp"] for row in rows if row["nsnp"] is not None]
         if counts:
             block["nsnp_median"] = int(statistics.median(counts))
@@ -173,10 +176,10 @@ def score_pass(
             present = [row["phi"] for row in rows if row["present"]]
             block["expected_pedigree_phi"] = pedigree_expected
             block["expected_total_phi"] = total_expected
-            block["absolute_error_vs_pedigree_median"] = round(
+            block["absolute_error_vs_pedigree_median_among_reported_pairs"] = round(
                 statistics.median([abs(v - pedigree_expected) for v in present]), 6
             ) if present else None
-            block["absolute_error_vs_total_median"] = round(
+            block["absolute_error_vs_total_median_among_reported_pairs"] = round(
                 statistics.median([abs(v - total_expected) for v in present]), 6
             ) if present else None
             block["sensitivity"] = block["fraction_retained"]
@@ -269,11 +272,12 @@ def delta_versus_pass0(
 def representation(
     truth_json: dict,
     training: set[str],
-    alternate: set[str],
+    alternate: set[str] | None,
     pca_summary: dict,
     pass0_scores: Path | None = None,
     universe: list[str] | None = None,
     pass0_edges: set[tuple[str, str]] | None = None,
+    training_is_pass0_independent_set: bool = True,
 ) -> dict[str, object]:
     """Whether the fitting set still holds the demes it is supposed to describe."""
     demes = truth_json["demes"]
@@ -281,7 +285,9 @@ def representation(
         deme: {
             "n_members": len(members),
             "n_in_training_set": len(set(members) & training),
-            "n_in_alternate_set": len(set(members) & alternate),
+            "n_in_alternate_set": (
+                len(set(members) & alternate) if alternate is not None else None
+            ),
         }
         for deme, members in demes.items()
     }
@@ -295,11 +301,11 @@ def representation(
     # Size stability is not identity stability, and the exact ceiling separates what the
     # tie-break costs from what the graph makes impossible.
     algorithmic = None
-    if universe is not None and pass0_edges is not None:
+    if universe is not None and pass0_edges is not None and training_is_pass0_independent_set:
         exact = maximum_independent_set_size(universe, pass0_edges, max_component_nodes=60)
         algorithmic = {
             "n_greedy_primary": len(training),
-            "n_greedy_alternate": len(alternate),
+            "n_greedy_alternate": len(alternate) if alternate is not None else None,
             "alpha_exact": exact["size"],
             "alpha_is_exact": exact["exact"],
             "greedy_shortfall_vs_exact": exact["size"] - len(training),
@@ -308,6 +314,7 @@ def representation(
         "by_deme": per_deme,
         "axis_mass_retained_by_training_set": axis_mass,
         "algorithmic_control": algorithmic,
+        "algorithmic_control_applicable": training_is_pass0_independent_set,
         "n_demes_absent_from_training_set": sum(
             1 for row in per_deme.values() if row["n_in_training_set"] == 0
         ),
@@ -325,8 +332,8 @@ def representation(
         # and disagree on who, which is the thing that changes who becomes a donor.
         "training_set_identity_jaccard_vs_alternate": round(
             len(training & alternate) / len(training | alternate), 6
-        ) if (training | alternate) else None,
+        ) if alternate is not None and (training | alternate) else None,
         "n_training_primary": len(training),
-        "n_training_alternate": len(alternate),
-        "n_shared": len(training & alternate),
+        "n_training_alternate": len(alternate) if alternate is not None else None,
+        "n_shared": len(training & alternate) if alternate is not None else None,
     }

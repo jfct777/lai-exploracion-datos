@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "stage": "M27D_SYNTHETIC_REPRESENTATION_CONTROL",
+  "status": "PREREGISTERED_BEFORE_EXECUTION",
+  "base_preregistration": {
+    "path": "conf/m27d_donor_kinship_preregistration.json",
+    "sha256": "a7f3ded6fdf9002fce682515aa4060283a15ab2acdb52af247a745b8f556126b"
+  },
+  "scope": {
+    "synthetic_only": true,
+    "scientific_result": false,
+    "cloud_allowed": false,
+    "real_panel_allowed": false,
+    "king_allowed": false,
+    "pcair_allowed": false,
+    "gnomix_allowed": false,
+    "public_push_allowed": false,
+    "erratum_upload_allowed": false
+  },
+  "estimand": {
+    "target": "recent-pedigree false-positive fraction among pedigree-unrelated pairs within a pure-coancestry deme",
+    "primary_threshold": 0.0442,
+    "independent_replicate": "independently_generated_seed",
+    "repeated_subunit": "deme_within_seed",
+    "pair_counts_are_replicates": false,
+    "primary_demes": ["DEME_A", "DEME_B"]
+  },
+  "fixture": {
+    "scenario": "isolate",
+    "markers_per_chromosome": 700,
+    "pilot_seeds": [11, 23, 37],
+    "confirmation_seed_count": 7,
+    "confirmation_seed_rule": "first unique nonzero uint32-derived values from sha256(run_id|confirmation-seed|index), modulo 2147483647, excluding pilot seeds"
+  },
+  "arms": {
+    "strict_strict": {
+      "pca_training": "pass0_strict",
+      "pcrelate_training": "pass0_strict",
+      "role": "control"
+    },
+    "represented_strict": {
+      "pca_training": "size_matched_deme_represented_without_complete_known_pedigree_pairs",
+      "pcrelate_training": "pass0_strict",
+      "role": "isolates_pca_representation"
+    },
+    "represented_represented": {
+      "pca_training": "size_matched_deme_represented_without_complete_known_pedigree_pairs",
+      "pcrelate_training": "same_represented_set",
+      "role": "adaptive_diagnostic_only_not_a_panel_policy"
+    }
+  },
+  "analysis": {
+    "configuration_id": "anchor_pc8_r2_020",
+    "primary_gate": {
+      "maximum_false_positives_per_15_pair_deme_subunit": 1,
+      "require_no_worsening_in_every_deme_subunit": true,
+      "require_improvement_when_control_is_above_zero": true,
+      "require_all_seed_replicates": true
+    },
+    "adaptive_rule": "Run represented_represented only if represented_strict fails the pilot gate. Confirm seven deterministic seeds only when an intervention passes its pilot gate."
+  },
+  "resources": {
+    "threads": 2,
+    "point_timeout_seconds": 600,
+    "max_wall_seconds": 1800,
+    "batch_cost_usd_ceiling": 0.0
+  },
+  "forbidden_primary_metrics": [
+    "global_edge_count",
+    "specificity_diluted_by_trivial_negatives",
+    "phi_median_from_left_truncated_pair_table",
+    "pc_count_comparison_4_8_12",
+    "strict_ld_arm_without_physical_linkage"
+  ],
+  "stop_rules": [
+    "abort_on_dirty_worktree",
+    "abort_on_base_preregistration_hash_mismatch",
+    "abort_if_training_sets_differ_in_size",
+    "abort_if_any_known_recent_pair_has_both_members_in_represented_set",
+    "abort_on_point_timeout_or_wall_budget",
+    "stop_after_adaptive_control_and_post_review"
+  ]
+}

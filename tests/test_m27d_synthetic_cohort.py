@@ -274,8 +274,12 @@ class TestScoringKnownAnswers(unittest.TestCase):
         block = scored["first_degree_in_deme"]
         self.assertAlmostEqual(block["expected_pedigree_phi"], 0.25, places=6)
         self.assertAlmostEqual(block["expected_total_phi"], 0.325, places=6)
-        self.assertAlmostEqual(block["absolute_error_vs_pedigree_median"], 0.0, places=6)
-        self.assertAlmostEqual(block["absolute_error_vs_total_median"], 0.075, places=6)
+        self.assertAlmostEqual(
+            block["absolute_error_vs_pedigree_median_among_reported_pairs"], 0.0, places=6
+        )
+        self.assertAlmostEqual(
+            block["absolute_error_vs_total_median_among_reported_pairs"], 0.075, places=6
+        )
 
     def test_a_retained_coancestry_pair_is_a_false_positive_with_its_denominator(self):
         scored = score_pass(
@@ -332,6 +336,42 @@ class TestPipelineChainSafety(unittest.TestCase):
             self.TRIMMED.index("m27d_pca_projection.R"),
             self.TRIMMED.index("m27d_pcrelate_configuration.R"),
         )
+
+    def test_pca_and_pcrelate_training_sets_can_be_separated_without_changing_defaults(self):
+        default = chain(THROUGH_CONFIGURATIONS)
+        separated = chain(
+            THROUGH_CONFIGURATIONS,
+            pca_training_set="pca_represented.txt",
+            pcrelate_training_set="training_set.txt",
+        )
+        self.assertIn("PCA_TRAINING_SET_FILE=training_set.txt", default)
+        self.assertIn("PCRELATE_TRAINING_SET_FILE=training_set.txt", default)
+        self.assertIn("PCA_TRAINING_SET_FILE=pca_represented.txt", separated)
+        self.assertIn("PCRELATE_TRAINING_SET_FILE=training_set.txt", separated)
+        self.assertIn('--training-set "$PCA_TRAINING_SET_FILE"', separated)
+        self.assertIn('--training-set "$PCRELATE_TRAINING_SET_FILE"', separated)
+
+    def test_training_set_filenames_cannot_inject_shell_or_escape_the_workdir(self):
+        for unsafe in ("../set.txt", "/tmp/set.txt", "set file.txt", "x;touch-y"):
+            with self.assertRaises(ValueError, msg=unsafe):
+                chain(THROUGH_CONFIGURATIONS, pca_training_set=unsafe)
+
+    def test_a_diagnostic_run_can_select_one_configuration_without_changing_production(self):
+        default = chain(THROUGH_CONFIGURATIONS)
+        anchor_only = chain(
+            THROUGH_CONFIGURATIONS,
+            configuration_ids=("anchor_pc8_r2_020",),
+        )
+        self.assertIn("export M27D_CONFIGURATION_IDS=\n", default)
+        self.assertIn(
+            "export M27D_CONFIGURATION_IDS=anchor_pc8_r2_020\n", anchor_only
+        )
+        self.assertIn('if selected and c["id"] not in selected:', anchor_only)
+
+    def test_the_full_chain_has_no_legacy_thread_placeholder(self):
+        rendered = chain()
+        self.assertNotIn("--threads THREADS", rendered)
+        self.assertNotIn("__M27D_", rendered)
 
     def test_no_stage_reaches_object_storage_or_a_frozen_holdout(self):
         for text in (self.FULL, self.TRIMMED) + self.SOURCES:

@@ -118,7 +118,13 @@ def members(path: Path) -> set[str]:
     return {line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()}
 
 
-def score_run(outdir: Path, fixture_dir: Path, contract: dict) -> dict[str, object]:
+def score_run(
+    outdir: Path,
+    fixture_dir: Path,
+    contract: dict,
+    pca_training_set_path: Path | None = None,
+    pcrelate_training_set_path: Path | None = None,
+) -> dict[str, object]:
     truth_rows = read_truth(fixture_dir / "truth_pairs.tsv")
     truth_json = load(fixture_dir / "truth.json")
     threshold = float(contract["pcrelate"]["primary_phi_threshold"])
@@ -127,8 +133,12 @@ def score_run(outdir: Path, fixture_dir: Path, contract: dict) -> dict[str, obje
     pass0_path = outdir / "m27d_pass0_related_pairs.private.tsv.gz"
     pass0_pairs = read_pairs(pass0_path)
     pass0_counts = read_marker_counts(pass0_path)
-    training = members(outdir / "training_set.txt")
+    strict_training = members(outdir / "training_set.txt")
+    pca_training = members(pca_training_set_path or outdir / "training_set.txt")
+    pcrelate_training = members(pcrelate_training_set_path or outdir / "training_set.txt")
     alternate = members(outdir / "training_set_alt.txt")
+    pca_is_strict = pca_training == strict_training
+    pca_alternate = alternate if pca_is_strict else None
     universe = [
         line.strip()
         for line in (outdir / "m27d_pass0_sample_universe.private.txt")
@@ -151,9 +161,9 @@ def score_run(outdir: Path, fixture_dir: Path, contract: dict) -> dict[str, obje
             "n_internal_edges_pass0": len(internal),
             "possible_pairs": possible,
             "is_complete_clique_in_pass0": bool(possible) and len(internal) == possible,
-            "n_in_training_set": len(inside & training),
+            "n_in_training_set": len(inside & strict_training),
             "survivor_is_a_pedigree_member": sorted(
-                sample for sample in inside & training
+                sample for sample in inside & strict_training
                 if any(sample in (u["child"], u["half_sibling"], u["father"], u["mother"],
                                   u["second_mother"])
                        for u in truth_json["pedigree_units"])
@@ -175,25 +185,34 @@ def score_run(outdir: Path, fixture_dir: Path, contract: dict) -> dict[str, obje
             "marker_set": marker_set,
             "scored": score_pass(
                 pairs, truth_rows, threshold, report_threshold,
-                read_marker_counts(pairs_path), training,
+                read_marker_counts(pairs_path), pcrelate_training,
             ),
             "delta_vs_pass0": delta_versus_pass0(pass0_pairs, pairs, truth_rows, threshold),
             "representation": representation(
-                truth_json, training, alternate,
+                truth_json, pca_training, pca_alternate,
                 load(outdir / f"m27d_pca_{marker_set}.json"),
                 pass0_scores, universe, pass0_edges,
+                training_is_pass0_independent_set=pca_is_strict,
             ),
         }
     return {
         "truth": truth_json,
         "pass0": {
             "scored": score_pass(
-                pass0_pairs, truth_rows, threshold, report_threshold, pass0_counts, training
+                pass0_pairs, truth_rows, threshold, report_threshold, pass0_counts, strict_training
             ),
             "summary": load(outdir / "m27d_pass0_pcrelate.json"),
             "deme_structure": deme_structure,
         },
         "training_set": load(outdir / "training_set.json"),
+        "training_sets": {
+            "n_strict": len(strict_training),
+            "n_pca": len(pca_training),
+            "n_pcrelate": len(pcrelate_training),
+            "pca_equals_strict": pca_training == strict_training,
+            "pcrelate_equals_strict": pcrelate_training == strict_training,
+            "pca_equals_pcrelate": pca_training == pcrelate_training,
+        },
         "configurations": configurations,
     }
 

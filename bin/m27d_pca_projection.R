@@ -282,6 +282,7 @@ summary <- list(
   n_pcs = max_pcs,
   random_seed = seed,
   pca_fitted_only_on_training_set = TRUE,
+  training_set_input_basename = basename(training_set_path),
   variance_explained = as.numeric(fit$varprop[seq_len(max_pcs)]),
   axis_variance_fraction_by_group = association,
   elapsed_seconds = elapsed_seconds(started),
