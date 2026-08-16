@@ -123,7 +123,8 @@ def pair_false_positive_units(
             absent += value is None
             positives += value is not None and value >= threshold
         result[deme] = {
-            "experimental_unit": f"deme={deme}",
+            "repeated_subunit": f"deme={deme}",
+            "independent_replicate_declared_by_caller": "seed",
             "n_pairs_descriptive_only": len(rows),
             "n_recent_pedigree_false_positives": positives,
             "false_positive_fraction": round(positives / len(rows), 6),
@@ -154,21 +155,27 @@ def intervention_supported(
         control = point["arms"][ARM_STRICT]["primary_units"]
         intervention = point["arms"][intervention_arm]["primary_units"]
         for deme in PRIMARY_DEMES:
-            before = control[deme]["false_positive_fraction"]
-            after = intervention[deme]["false_positive_fraction"]
+            before_fraction = control[deme]["false_positive_fraction"]
+            after_fraction = intervention[deme]["false_positive_fraction"]
+            before_count = control[deme]["n_recent_pedigree_false_positives"]
+            after_count = intervention[deme]["n_recent_pedigree_false_positives"]
             units.append(
                 {
                     "seed": point["seed"],
                     "deme": deme,
-                    "strict_strict": before,
-                    intervention_arm: after,
-                    "paired_delta": round(after - before, 6),
+                    "control_arm": ARM_STRICT,
+                    "intervention_arm": intervention_arm,
+                    "control_false_positive_count": before_count,
+                    "intervention_false_positive_count": after_count,
+                    "n_pairs_descriptive_only": control[deme]["n_pairs_descriptive_only"],
+                    "control_false_positive_fraction": before_fraction,
+                    "intervention_false_positive_fraction": after_fraction,
+                    "paired_delta_fraction": round(after_fraction - before_fraction, 6),
                     "near_floor": (
-                        intervention[deme]["n_recent_pedigree_false_positives"]
-                        <= MAX_FALSE_POSITIVES_PER_SUBUNIT
+                        after_count <= MAX_FALSE_POSITIVES_PER_SUBUNIT
                     ),
-                    "not_worse": after <= before,
-                    "improved_when_possible": before == 0 or after < before,
+                    "not_worse": after_count <= before_count,
+                    "improved_when_possible": before_count == 0 or after_count < before_count,
                 }
             )
     supported = bool(units) and all(

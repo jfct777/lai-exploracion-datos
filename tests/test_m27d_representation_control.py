@@ -40,6 +40,7 @@ def unit(value):
     return {
         "false_positive_fraction": value,
         "n_recent_pedigree_false_positives": round(value * 15),
+        "n_pairs_descriptive_only": 15,
     }
 
 
@@ -109,6 +110,17 @@ class TestPairScoringByExperimentalUnit(unittest.TestCase):
             self.assertEqual(scored["DEME_A"]["false_positive_fraction"], 1.0)
             self.assertEqual(scored["DEME_B"]["false_positive_fraction"], 0.0)
             self.assertEqual(scored["DEME_B"]["n_below_reporting_threshold"], 15)
+            self.assertEqual(scored["DEME_A"]["repeated_subunit"], "deme=DEME_A")
+            self.assertNotIn("experimental_unit", scored["DEME_A"])
+
+    def test_decision_receipt_names_counts_and_fractions_explicitly(self):
+        checked = intervention_supported([point(11, 1.0, 0.0)])
+        row = checked["deme_subunits"][0]
+        self.assertEqual(row["control_false_positive_count"], 15)
+        self.assertEqual(row["intervention_false_positive_count"], 0)
+        self.assertEqual(row["control_false_positive_fraction"], 1.0)
+        self.assertEqual(row["intervention_false_positive_fraction"], 0.0)
+        self.assertNotIn(ARM_STRICT, row)
 
 
 @unittest.skipUnless(image_available(), "pinned M27D analysis container is not available")
