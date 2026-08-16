@@ -14,6 +14,14 @@ import audit_m27f_blind_split as m27f  # noqa: E402
 
 
 class TestM27FBlindSplit(unittest.TestCase):
+    def test_preregistration_records_pre_genotype_amendment(self):
+        preregistration = json.loads(
+            (REPO / "conf/m27f_split_preregistration.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(preregistration["version"], 3)
+        self.assertEqual(preregistration["amendments"][-1]["version"], 3)
+        self.assertIn("before any M27F genotype access", preregistration["amendments"][-1]["timing"])
+
     def test_balanced_quotas_protect_validation_then_test(self):
         self.assertEqual(
             m27f.balanced_quotas(19),

@@ -199,7 +199,7 @@ def deterministic_assignment(
 
 def run(args: argparse.Namespace) -> dict[str, object]:
     prereg = json.loads(args.preregistration.read_text(encoding="utf-8"))
-    if prereg.get("stage") != "M27F_BLIND_ROLE_SPLIT" or prereg.get("version") != 2:
+    if prereg.get("stage") != "M27F_BLIND_ROLE_SPLIT" or prereg.get("version") != 3:
         raise ValueError("Invalid M27F preregistration")
     upstream = prereg["upstream_contract"]
     ibd_files = m27e.indexed_by_chromosome(args.ibd_file, "IBD")

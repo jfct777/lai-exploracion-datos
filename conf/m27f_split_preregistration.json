@@ -1,6 +1,6 @@
 {
   "stage": "M27F_BLIND_ROLE_SPLIT",
-  "version": 2,
+  "version": 3,
   "scope": "frozen_metadata_and_ibd_only_no_vcf_or_genotype_access",
   "upstream_contract": {
     "expected_panel_samples": 3685,
@@ -83,5 +83,19 @@
     "public_receipt_contains_ids_or_population_labels": false,
     "source_test_is_sealed_after_manifest_hash": true
   },
-  "next_gate": "Extract REF_TRAIN only with a positive sample allow-list; verify that DISCOVERY, SOURCE_VALID and SOURCE_TEST contribute zero columns; derive the candidate catalog from the 954 discovery-frozen sites in REF_TRAIN before opening SOURCE_VALID once."
+  "next_gate": "Extract REF_TRAIN only with a positive sample allow-list; verify that DISCOVERY, SOURCE_VALID and SOURCE_TEST contribute zero columns; derive the candidate catalog from the 954 discovery-frozen sites in REF_TRAIN before opening SOURCE_VALID once.",
+  "amendments": [
+    {
+      "version": 2,
+      "timing": "before the final split and before any M27F genotype access",
+      "reason": "Authenticate the exact M27E metadata and IBD inputs and remove VCF headers from the role-assignment interface.",
+      "delta": "Derive the discovery identities from the frozen strata, authenticate 46 upstream inputs through the M27E manifest, and prohibit VCF or genotype access during assignment."
+    },
+    {
+      "version": 3,
+      "timing": "after the first metadata-only balanced split and its Council POST review, before any M27F genotype access",
+      "reason": "Only eight Native-American atomic units remain after discovery quarantine, so an undeclared greedy tie break could materially change the effective replication.",
+      "delta": "Retain the original balanced-thirds objective, enumerate all 3^8 Native-American assignments, protect validation and test when thirds are not exact, and use a canonical hash only for otherwise identical assignments. No genotype, rare support, position, baseline or LAI result was available."
+    }
+  ]
 }
