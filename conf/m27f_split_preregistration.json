@@ -1,0 +1,56 @@
+{
+  "stage": "M27F_BLIND_ROLE_SPLIT",
+  "version": 1,
+  "scope": "metadata_and_frozen_ibd_only_no_genotype_access",
+  "upstream_contract": {
+    "expected_panel_samples": 3685,
+    "expected_discovery_samples": 128,
+    "expected_population_interpretable_samples": 3675,
+    "expected_population_unresolved_samples": 10,
+    "resolved_strata_sha256": "1b41c4d1b02e84ebd3b7715d2b5c399238d04e7754a1a0520433f4e3595671e1",
+    "resolved_strata_manifest_sha256": "b4e97140e5af3cb28131002b3b52f909a3496ddb6095b4fb117700fcb048faa3"
+  },
+  "target_ancestries": ["African", "European", "Native_American"],
+  "roles": ["REF_TRAIN", "SOURCE_VALID", "SOURCE_TEST"],
+  "discovery": {
+    "source": "NatWGS",
+    "ancestry": "Native_American",
+    "expected_samples": 128,
+    "role": "DISCOVERY",
+    "quarantine_entire_population_ibd_closure": true
+  },
+  "block_policy": {
+    "union_canonical_population": true,
+    "source_is_not_a_boundary": true,
+    "max_segment_floor_cm": 10.0,
+    "kinship_floor": 0.04419417382415922,
+    "kinship_definition": "sum_reported_ibd_cm/(4*observed_autosomal_map_span_cm)"
+  },
+  "assignment_algorithm": {
+    "name": "deterministic_largest_block_first_balanced_counts",
+    "input_features": ["canonical_ancestry", "canonical_population", "frozen_ibd_block", "block_sample_count"],
+    "forbidden_features": ["genotype", "rare_carrier", "rare_burden", "variant_position", "baseline_overlap", "LAI_result"],
+    "order_blocks": "descending sample count, then ascending sha256 of sorted private member IDs",
+    "assign_role": "minimum current block count, then minimum current sample count, then fixed role order REF_TRAIN,SOURCE_VALID,SOURCE_TEST",
+    "random_seed": null,
+    "post_result_rebalancing": false
+  },
+  "gates": {
+    "F0": "Panel, discovery, metadata, IBD and map identities and counts satisfy the frozen M27E contract.",
+    "F1": "Every sample receives exactly one role or explicit out-of-scope status; all 128 NatWGS samples and their complete population/IBD closure are DISCOVERY.",
+    "F2": "No population or frozen primary IBD block crosses roles.",
+    "F3": "AFR, EUR and NAM each retain at least two blocks in REF_TRAIN, SOURCE_VALID and SOURCE_TEST.",
+    "F4": "The splitter reads VCF headers only and does not inspect any genotype, rare support, position or LAI result."
+  },
+  "allowed_decisions": [
+    "STOP_INPUT_OR_IDENTITY_CONTRACT",
+    "STOP_ROLE_LEAKAGE",
+    "STOP_SPLIT_NOT_IDENTIFIABLE",
+    "GO_OPEN_ROLE_EXTRACTION_ONLY"
+  ],
+  "privacy": {
+    "private_manifest_contains_ids": true,
+    "public_receipt_contains_ids_or_population_labels": false
+  },
+  "next_gate": "Mechanically extract DISCOVERY+REF_TRAIN+SOURCE_VALID columns, verify zero SOURCE_TEST IDs, then derive support from the 954 discovery-frozen sites using REF_TRAIN and evaluate it once in SOURCE_VALID."
+}
