@@ -177,6 +177,87 @@ class TestM27EContracts(unittest.TestCase):
         self.assertEqual(concentration["n_contributing_external_populations"], 3)
         self.assertEqual(concentration["effective_external_populations_by_site_support"], 3.0)
 
+    def test_transferable_site_already_in_baseline_is_not_channel_separation(self):
+        samples = ["D1", "D2", "E1", "E2", "E3"]
+        metadata = {
+            sample: {
+                "Ancestry": "Native_American",
+                "Source": "NatWGS" if sample.startswith("D") else "External",
+                "Population": sample,
+                "_population_interpretable": "True",
+            }
+            for sample in samples
+        }
+        roots = {sample: sample for sample in samples}
+        key = ("22", 100, "A", "G")
+        with tempfile.TemporaryDirectory() as tmp:
+            panel = Path(tmp) / "panel.vcf"
+            panel.write_text(
+                "##fileformat=VCFv4.2\n"
+                + "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t"
+                + "\t".join(samples)
+                + "\n22\t100\t.\tA\tG\t.\tPASS\t.\tGT\t"
+                + "\t".join(["0|1"] * len(samples))
+                + "\n",
+                encoding="utf-8",
+            )
+            summary = m27e.summarize_panel_bridge(
+                panel,
+                samples,
+                samples,
+                ["D1", "D2"],
+                {key: m27e.RawRareSite(True, bytes([1, 1]))},
+                metadata,
+                {"primary": roots},
+                {key},
+                "primary",
+            )
+        self.assertEqual(summary["primary_native_american_transferable_sites"], 1)
+        self.assertEqual(
+            summary["primary_native_american_transferable_sites_outside_frozen_baseline"], 0
+        )
+        self.assertEqual(summary["primary_native_american_baseline_disjoint_lopo_robust_sites"], 0)
+
+    def test_leave_one_population_out_rejects_single_population_support(self):
+        samples = ["D1", "D2", "E1", "E2"]
+        metadata = {
+            sample: {
+                "Ancestry": "Native_American",
+                "Source": "NatWGS" if sample.startswith("D") else "External",
+                "Population": sample if sample.startswith("D") else "ONLY_EXTERNAL_POP",
+                "_population_interpretable": "True",
+            }
+            for sample in samples
+        }
+        roots = {sample: sample for sample in samples}
+        key = ("22", 100, "A", "G")
+        with tempfile.TemporaryDirectory() as tmp:
+            panel = Path(tmp) / "panel.vcf"
+            panel.write_text(
+                "##fileformat=VCFv4.2\n"
+                + "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t"
+                + "\t".join(samples)
+                + "\n22\t100\t.\tA\tG\t.\tPASS\t.\tGT\t"
+                + "\t".join(["0|1"] * len(samples))
+                + "\n",
+                encoding="utf-8",
+            )
+            summary = m27e.summarize_panel_bridge(
+                panel,
+                samples,
+                samples,
+                ["D1", "D2"],
+                {key: m27e.RawRareSite(True, bytes([1, 1]))},
+                metadata,
+                {"primary": roots},
+                set(),
+                "primary",
+            )
+        self.assertEqual(
+            summary["primary_native_american_transferable_sites_outside_frozen_baseline"], 1
+        )
+        self.assertEqual(summary["primary_native_american_baseline_disjoint_lopo_robust_sites"], 0)
+
     def test_recent_kinship_requires_anchor_segment_and_total_ibd(self):
         metadata = {
             sample: {
