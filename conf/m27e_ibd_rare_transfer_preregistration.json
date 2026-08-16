@@ -1,0 +1,113 @@
+{
+  "stage": "M27E_IBD_RARE_TRANSFER_FEASIBILITY",
+  "version": 1,
+  "scope": "read_only_autosomal_ibd_and_chr22_rare_transfer_feasibility",
+  "question": "Can the official phased panel provide population- and recent-kinship-disjoint source blocks with rare-allele support outside the NatWGS-128 ascertainment panel?",
+  "upstream_contract": {
+    "path": "conf/m27b_rare_scaffold_bridge_preregistration.json",
+    "sha256": "a4a043910e086c19b202538215770bd30387d5deb0a266c1465036736a760d04",
+    "expected_direct_phase_bridge_sites": 954,
+    "expected_discovery_samples": 128,
+    "expected_panel_samples": 3685,
+    "expected_autosomes": 22
+  },
+  "ibd_contract": {
+    "software": "refined-ibd.17Jan20.102.jar",
+    "reported_segment_min_cm": 2.0,
+    "reported_segment_min_lod": 3.0,
+    "output_fields": [
+      "sample_1",
+      "haplotype_1",
+      "sample_2",
+      "haplotype_2",
+      "chromosome",
+      "start_bp",
+      "end_bp",
+      "lod",
+      "length_cm"
+    ],
+    "kinship_definition": "sum_reported_ibd_cm/(4*observed_autosomal_map_span_cm)",
+    "recent_relative_max_segment_cm": {
+      "primary": 10.0,
+      "diagnostic": [0.0, 5.0]
+    },
+    "kinship_thresholds": {
+      "inclusive_fourth_degree_expectation": 0.03125,
+      "primary_third_fourth_midpoint": 0.04419417382415922,
+      "strict_third_degree_expectation": 0.0625
+    },
+    "threshold_source": "IBD_relatedness relatedness_v1.py uses total IBD divided by four genome lengths for kinship and names 0 or 10 cM as typical max-segment filters; pedigree expectations define the three kinship thresholds.",
+    "primary_block_policy": "max_segment_cm>=10 and kinship>=0.04419417382415922, unioned with exact Ancestry x Source x Population strata"
+  },
+  "rare_contract": {
+    "chromosome": "22",
+    "build": "hg38",
+    "orientation": "minor_allele_recomputed_from_GT_in_NatWGS_128_and_frozen",
+    "minimum_mac": 2,
+    "maf_operator": "<",
+    "maf_threshold": 0.01,
+    "discovery_role": "ASCERTAINMENT_ONLY_REF_TRAIN",
+    "validation_and_test_must_exclude_discovery_samples": true,
+    "primary_ancestry": "Native_American",
+    "afr_eur_support_is_descriptive_only": true,
+    "minimum_fit_blocks": 2,
+    "minimum_external_source_blocks": 2,
+    "feature_keys_or_sample_ids_may_be_published": false
+  },
+  "gates": [
+    {
+      "id": "E0",
+      "name": "input_and_provenance_contract",
+      "pass_rule": "Exactly 22 autosomes have matching Refined-IBD files, logs and genetic maps; every log reports the frozen version, 3,685 samples, length=2 and LOD=3; every segment has nine valid fields and satisfies those floors."
+    },
+    {
+      "id": "E1",
+      "name": "identity_and_universe_contract",
+      "pass_rule": "The phased panel has exactly 3,685 unique metadata-resolved samples, all IBD IDs belong to it, all 3,685 occur in the union of IBD calls, and all 128 discovery samples resolve uniquely inside it."
+    },
+    {
+      "id": "E2",
+      "name": "rare_bridge_reproduction",
+      "pass_rule": "The frozen M27B definition reproduces exactly 954 direct phase-bridge sites; their sorted private key-plus-orientation list receives a SHA-256 digest but is not published."
+    },
+    {
+      "id": "E3",
+      "name": "three_role_block_feasibility",
+      "pass_rule": "Under the primary recent-kinship policy, AFR, EUR and NAM each retain at least three Source x Population x kinship blocks; raw >=2 cM connected components are reported only as a percolation diagnostic and are not interpreted as pedigrees."
+    },
+    {
+      "id": "E4",
+      "name": "external_native_american_rare_support",
+      "pass_rule": "At least one of the 954 frozen alleles is carried in at least two discovery blocks and at least two non-NatWGS Native-American blocks under the primary policy. This proves structural transfer only, not adequate power."
+    },
+    {
+      "id": "E5",
+      "name": "baseline_channel_separation",
+      "pass_rule": "The exact overlap between the 954 keys and the frozen Gnomix baseline is measured. Any compatible future baseline must exclude all overlapping keys before simulation; this audit does not construct that baseline."
+    }
+  ],
+  "allowed_decisions": [
+    "STOP_INPUT_OR_IDENTITY_CONTRACT",
+    "STOP_RARE_BRIDGE_NOT_REPRODUCED",
+    "STOP_NO_THREE_ROLE_BLOCK_FEASIBILITY",
+    "STOP_NO_TRANSFERABLE_NAM_SUPPORT",
+    "GO_BASELINE_REDESIGN_AND_POWER_ONLY",
+    "GO_POWER_DESIGN_ONLY"
+  ],
+  "stop_rules": [
+    "Never use a raw any-segment >=2 cM connected component as a pedigree certificate.",
+    "Never place NatWGS-128 discovery samples in SOURCE_VALID or SOURCE_TEST for this frozen 954-site list.",
+    "Never choose a kinship or segment threshold after observing rare-site support.",
+    "Never orient or select rare alleles using SOURCE_VALID or SOURCE_TEST.",
+    "Never treat sites, segments, individuals or demes as independent replicates.",
+    "Do not simulate, run LAI, train a model, inspect a future SOURCE_TEST genotype partition or execute KING in M27E.",
+    "If E4 fails under the primary policy, do not rescue it by selecting a diagnostic sensitivity.",
+    "If a future common baseline contains any target rare key, exclude it or preregister a separate shared-marker ablation before comparing incremental value."
+  ],
+  "privacy": {
+    "emit_sample_ids": false,
+    "emit_variant_keys": false,
+    "small_cell_suppression_n": 5,
+    "private_key_digest_only": true
+  }
+}
