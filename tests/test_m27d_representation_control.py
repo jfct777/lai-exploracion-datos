@@ -31,6 +31,9 @@ LAYOUT = CohortLayout(
     n_chromosomes=1,
 )
 SCENARIO = Scenario("isolate", 0.05, 0.04, 0.12)
+INTEGRATION_SCENARIO = Scenario(
+    "representation_integration", 0.0, 0.04, 0.12
+)
 
 
 def unit(value):
@@ -113,7 +116,7 @@ class TestSeparatedTrainingSetsIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.context = prepare_context(
-            SCENARIO,
+            INTEGRATION_SCENARIO,
             11,
             CohortLayout(
                 n_background_per_group=20,

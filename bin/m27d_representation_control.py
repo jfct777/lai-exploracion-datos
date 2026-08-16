@@ -198,29 +198,35 @@ def prepare_context(
     point_timeout: int,
 ) -> PointContext:
     workspace = Path(tempfile.mkdtemp(prefix=f"m27d-representation-{scenario.name}-{seed}-"))
-    fixture_dir = workspace / "fixture"
-    base_out = workspace / "base"
-    build(fixture_dir, preregistration, scenario, layout, seed)
-    completed = run_chain(
-        fixture_dir,
-        base_out,
-        repo,
-        THROUGH_TRAINING_SET,
-        threads=threads,
-        timeout=point_timeout,
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(
-            f"Base chain failed for {scenario.name} seed={seed}:\n{completed.stderr[-4000:]}"
+    try:
+        fixture_dir = workspace / "fixture"
+        base_out = workspace / "base"
+        build(fixture_dir, preregistration, scenario, layout, seed)
+        completed = run_chain(
+            fixture_dir,
+            base_out,
+            repo,
+            THROUGH_TRAINING_SET,
+            threads=threads,
+            timeout=point_timeout,
         )
-    represented, summary = represented_training_set(
-        read_ids(base_out / "training_set.txt"),
-        load(fixture_dir / "truth.json"),
-        read_truth_pairs(fixture_dir / "truth_pairs.tsv"),
-        read_population(fixture_dir / "metadata.tsv"),
-        seed,
-    )
-    return PointContext(workspace, fixture_dir, base_out, represented, summary, scenario, seed)
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"Base chain failed for {scenario.name} seed={seed}:\n{completed.stderr[-4000:]}"
+            )
+        represented, summary = represented_training_set(
+            read_ids(base_out / "training_set.txt"),
+            load(fixture_dir / "truth.json"),
+            read_truth_pairs(fixture_dir / "truth_pairs.tsv"),
+            read_population(fixture_dir / "metadata.tsv"),
+            seed,
+        )
+        return PointContext(
+            workspace, fixture_dir, base_out, represented, summary, scenario, seed
+        )
+    except Exception:
+        shutil.rmtree(workspace, ignore_errors=True)
+        raise
 
 
 def run_arm(
