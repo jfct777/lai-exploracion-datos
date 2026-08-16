@@ -121,7 +121,11 @@ class TestSeparatedTrainingSetsIntegration(unittest.TestCase):
             CohortLayout(
                 n_background_per_group=20,
                 n_pedigree_units_in_background=2,
-                n_markers_per_chromosome=20,
+                # At 440 markers, estimator noise alone creates many pass0 edges and
+                # collapses the independent set.  Four thousand four hundred markers
+                # keep this integration test below the production fixture (15,400)
+                # while making the phi=0.0442 boundary technically resolvable.
+                n_markers_per_chromosome=200,
             ),
             ROOT,
             ROOT / "conf" / "m27d_donor_kinship_preregistration.json",
