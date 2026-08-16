@@ -47,6 +47,7 @@ workflow {
     def provenance = [
         git_commit       : gitCommit,
         nextflow_version : workflow.nextflow.version.toString(),
+        syntax_parser    : System.getenv('NXF_SYNTAX_PARSER') ?: 'default',
         container_path   : params.ibd_rare_transfer_container_image,
         container_sha256 : params.ibd_rare_transfer_container_digest,
         run_id           : params.cloud_run_id,
