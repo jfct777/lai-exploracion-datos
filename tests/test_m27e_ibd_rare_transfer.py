@@ -168,6 +168,7 @@ class TestM27EContracts(unittest.TestCase):
         cloud = (REPO / "conf/google_batch.config").read_text()
         self.assertIn("AUDIT_IBD_RARE_TRANSFER_FEASIBILITY", workflow)
         self.assertIn("--resolved-strata ${resolved_strata}", module)
+        self.assertIn("(?:[._]|$)", workflow)
         self.assertIn("resourceLabels = [team: 'frank']", cloud)
         self.assertNotIn("sbatch", workflow + module)
 

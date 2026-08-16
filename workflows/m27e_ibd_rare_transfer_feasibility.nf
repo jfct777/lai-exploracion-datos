@@ -11,7 +11,7 @@ def sortedAutosomes(pattern, description) {
         .collect()
         .map { paths ->
             def numbered = paths.collect { path ->
-                def matcher = (path.getName() =~ /(?:^|[._])(?:chr_?)(\d{1,2})[._]/)
+                def matcher = (path.getName() =~ /(?:^|[._])(?:chr_?)(\d{1,2})(?:[._]|$)/)
                 if( !matcher.find() ) {
                     throw new IllegalStateException("M27E could not parse a chromosome from ${description}: ${path.getName()}")
                 }
