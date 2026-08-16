@@ -1,0 +1,72 @@
+{
+  "stage": "M27F_VALID_LOCAL_TRANSFER",
+  "version": 1,
+  "recorded_after_ref_before_valid": true,
+  "scope": "one_shot_source_valid_transfer_of_frozen_ref_catalog",
+  "upstream_contract": {
+    "m27f_split_manifest_sha256": "fcb372ff03f644db2184dc3c5c97f2d3d123b462774639a8a2e7194012769e37",
+    "m27f_split_private_sha256": "39bc061ba0a2660fed84bade9d658fb28fadc6813af097e89e0ad28949f1ed3f",
+    "m27f_split_public_sha256": "b8fb6e465053cb2b2ff8033e7d62bed1e96095a497f34e60c0692f11cbb6d905",
+    "m27f_ref_support_manifest_sha256": "7b575ad0d4ca9263e01c89349068e3cab18708ce09c502ed533951192563f784",
+    "m27f_ref_support_public_sha256": "45dd38fa3959261e1547ff4c0a6fe1a542a87212d632689e6a1b1d10ed69e9cd",
+    "m27f_ref_eligible_catalog_sha256": "ed281e763ee0d49e7c94a8f9b01b4f05200e6823f7e0f579bb134b9e1147e7c9",
+    "phased_panel_vcf_sha256": "71161973b2e233963321feb03db63eff04f14bc5c7a561a2f0dbce623fc05395",
+    "historical_baseline_vcf_sha256": "1b9e7b23a6e046185056271513589d03c24406e5100606d078973a58d36e6afd",
+    "genetic_map_chr22_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+    "expected_panel_samples": 3685,
+    "expected_valid_samples": 437,
+    "expected_valid_samples_by_ancestry": {
+      "African": 223,
+      "European": 197,
+      "Native_American": 17
+    },
+    "expected_valid_native_american_atomic_units": 3,
+    "expected_panel_variant_records": 43026,
+    "expected_frozen_sites": 6,
+    "expected_frozen_key_orientation_sha256": "b7112e26d00d4122e0c4c97ff9d45e3006e261b40654b4cad221f02c579031ab",
+    "expected_historical_baseline_overlap_sites": 3,
+    "expected_primary_historical_baseline_disjoint_sites": 3,
+    "expected_primary_ref_patterns": 3,
+    "expected_primary_key_orientation_sha256": "e7b5b7ab22f97febd14a696f9b0ba892a386d8a10bcc44068f6f7656393ab641",
+    "expected_primary_key_ref_pattern_sha256": "e84173b5f4ade831a3f07aca4f7cb5d9950efd4d80e5b1ec9e7d38269a4df125"
+  },
+  "projection_contract": {
+    "tool": "bcftools",
+    "version": "1.16",
+    "container": "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/dnabr-qc@sha256:3baca87521291075c1ea5c7b17a3706a5030adda65174313fbc203c1a1324b35",
+    "sample_selection": "positive SOURCE_VALID allow-list only",
+    "variant_filters": [],
+    "genotype_filters": [],
+    "update_info_ac_an": false,
+    "suppress_tool_timestamp_header": true,
+    "source_test_opened": false
+  },
+  "transfer_contract": {
+    "primary_sites": "exact CHROM:POS:REF:ALT keys absent from the frozen historical baseline",
+    "overlap_sites": "descriptive controls only and unable to rescue the primary gate",
+    "rare_orientation": "frozen minor allele from NatWGS-128",
+    "heterozygous_carrier_requires_phase": true,
+    "unit_of_transfer": "canonical_population_plus_primary_IBD_atomic_unit",
+    "primary_pattern_definition": "REF carrier-vector class",
+    "transferred_pattern": "usable carrier in each of the three Native-American SOURCE_VALID atomic units",
+    "pass_rule": "at least two primary patterns transfer and retain at least two distinct SOURCE_VALID carrier vectors",
+    "direction_or_enrichment_used_as_gate": false,
+    "valid_used_for_selection": false,
+    "source_test_opened": false
+  },
+  "allowed_decisions": [
+    "STOP_PROVENANCE",
+    "STOP_ALLOWLIST",
+    "STOP_OUTPUT_MEMBERSHIP",
+    "STOP_VARIANT_PROJECTION",
+    "STOP_FROZEN_CATALOG",
+    "INCONCLUSIVE_TECHNICAL",
+    "STOP_M27_LOCAL_TRANSFER",
+    "PASS_LOCAL_TRANSFER"
+  ],
+  "interpretation_limits": {
+    "pass": "authorizes only design of a local three-arm comparison; not simulation, LAI, training or a genome-wide claim",
+    "fail": "closes this frozen chr22 catalog, panel and transfer definition; not all rare-variant representations",
+    "historical_baseline_disjoint": "does not prove incremental information against a future compatible common-variant baseline"
+  }
+}
