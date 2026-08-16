@@ -6,8 +6,8 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
-import itertools
 import json
+import math
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Iterable
@@ -16,7 +16,7 @@ import audit_m27e_ibd_rare_transfer as m27e
 
 
 ROLES = ("REF_TRAIN", "SOURCE_VALID", "SOURCE_TEST")
-REMAINDER_ORDER = ("SOURCE_VALID", "SOURCE_TEST", "REF_TRAIN")
+HAMILTON_TIE_ORDER = ("SOURCE_VALID", "SOURCE_TEST", "REF_TRAIN")
 
 
 def parse_args() -> argparse.Namespace:
@@ -84,90 +84,43 @@ def validate_upstream_manifest(
     }
 
 
-def balanced_quotas(n_units: int, roles: tuple[str, ...] = ROLES) -> dict[str, int]:
-    """Maximize the weakest role; allocate remainders to validation, test, then reference."""
-    if n_units < 0 or set(roles) != set(REMAINDER_ORDER):
-        raise ValueError("Invalid role contract")
-    base, remaining = divmod(n_units, len(roles))
-    quotas = {role: base for role in roles}
-    for role in REMAINDER_ORDER[:remaining]:
+def hamilton_quotas(
+    n_units: int,
+    fractions: dict[str, float],
+    roles: tuple[str, ...] = ROLES,
+) -> dict[str, int]:
+    """Apportion an integer number of units using a fixed Hamilton tie rule."""
+    if n_units < 0 or set(fractions) != set(roles):
+        raise ValueError("Invalid role fractions")
+    if not math.isclose(sum(fractions.values()), 1.0, rel_tol=0.0, abs_tol=1e-12):
+        raise ValueError("Role fractions must sum to one")
+    raw = {role: n_units * float(fractions[role]) for role in roles}
+    quotas = {role: math.floor(raw[role]) for role in roles}
+    remaining = n_units - sum(quotas.values())
+    tie_rank = {role: index for index, role in enumerate(HAMILTON_TIE_ORDER)}
+    order = sorted(roles, key=lambda role: (-(raw[role] - quotas[role]), tie_rank[role]))
+    for role in order[:remaining]:
         quotas[role] += 1
     return quotas
 
 
-def assignment_totals(
-    units: list[tuple[str, int, int]], assignment: dict[str, str], roles: tuple[str, ...]
-) -> dict[str, dict[str, int]]:
-    totals = {role: {"units": 0, "samples": 0, "populations": 0} for role in roles}
-    for digest, samples, populations in units:
-        role = assignment[digest]
-        totals[role]["units"] += 1
-        totals[role]["samples"] += samples
-        totals[role]["populations"] += populations
-    return totals
-
-
-def exact_assignment_score(
-    units: list[tuple[str, int, int]], assignment: dict[str, str], roles: tuple[str, ...]
-) -> tuple[object, ...]:
-    """Score one complete assignment using only frozen unit, population and sample counts."""
-    totals = assignment_totals(units, assignment, roles)
-    unit_counts = [totals[role]["units"] for role in roles]
-    population_counts = [totals[role]["populations"] for role in roles]
-    sample_counts = [totals[role]["samples"] for role in roles]
-    sample_total = sum(sample_counts)
-    assignment_text = "\n".join(f"{digest}\t{assignment[digest]}" for digest, *_ in sorted(units))
-    return (
-        max(unit_counts) - min(unit_counts),
-        -min(unit_counts),
-        totals["REF_TRAIN"]["units"],
-        abs(totals["SOURCE_VALID"]["units"] - totals["SOURCE_TEST"]["units"]),
-        max(population_counts) - min(population_counts),
-        max(sample_counts) - min(sample_counts),
-        sum((len(roles) * count - sample_total) ** 2 for count in sample_counts),
-        hashlib.sha256((assignment_text + "\n").encode("utf-8")).hexdigest(),
-    )
-
-
-def exhaustive_assignment(
-    units: list[tuple[str, int, int]], roles: tuple[str, ...] = ROLES
-) -> tuple[dict[str, str], dict[str, object]]:
-    """Enumerate every assignment for a small stratum and select the frozen optimum."""
-    ordered = sorted(units)
-    if len({digest for digest, _size, _populations in ordered}) != len(ordered):
-        raise ValueError("Atomic-unit digests are not unique")
-    best_assignment: dict[str, str] | None = None
-    best_score: tuple[object, ...] | None = None
-    evaluated = 0
-    for role_vector in itertools.product(roles, repeat=len(ordered)):
-        candidate = {unit[0]: role for unit, role in zip(ordered, role_vector)}
-        score = exact_assignment_score(ordered, candidate, roles)
-        evaluated += 1
-        if best_score is None or score < best_score:
-            best_assignment = candidate
-            best_score = score
-    if best_assignment is None or best_score is None:
-        raise ValueError("No role assignment was evaluated")
-    totals = assignment_totals(ordered, best_assignment, roles)
-    return best_assignment, {
-        "method": "exhaustive",
-        "n_assignments_evaluated": evaluated,
-        "observed": totals,
-        "objective_without_private_tiebreak": list(best_score[:-1]),
-        "selected_assignment_sha256": best_score[-1],
-    }
-
-
 def deterministic_assignment(
     units: list[tuple[str, int, int]],
+    fractions: dict[str, float],
     roles: tuple[str, ...] = ROLES,
 ) -> tuple[dict[str, str], dict[str, object]]:
-    """Assign a large stratum to balanced quotas using only population and sample counts."""
+    """Assign atomic units to exact quotas using only population and sample counts."""
     if len({digest for digest, _size, _populations in units}) != len(units):
         raise ValueError("Atomic-unit digests are not unique")
-    quotas = balanced_quotas(len(units), roles)
-    target_samples = sum(size for _digest, size, _populations in units) / len(roles)
-    target_populations = sum(populations for _digest, _size, populations in units) / len(roles)
+    quotas = hamilton_quotas(len(units), fractions, roles)
+    target_samples = {
+        role: sum(size for _digest, size, _populations in units) * fractions[role]
+        for role in roles
+    }
+    target_populations = {
+        role: sum(populations for _digest, _size, populations in units) * fractions[role]
+        for role in roles
+    }
     totals = {role: {"units": 0, "samples": 0, "populations": 0} for role in roles}
     assignment: dict[str, str] = {}
     ordered = sorted(units, key=lambda row: (-row[2], -row[1], row[0]))
@@ -178,12 +131,12 @@ def deterministic_assignment(
 
         def score(role: str) -> tuple[float, float, int]:
             population_fill = (
-                (totals[role]["populations"] + populations) / target_populations
-                if target_populations else float("inf")
+                (totals[role]["populations"] + populations) / target_populations[role]
+                if target_populations[role] else math.inf
             )
             sample_fill = (
-                (totals[role]["samples"] + size) / target_samples
-                if target_samples else float("inf")
+                (totals[role]["samples"] + size) / target_samples[role]
+                if target_samples[role] else math.inf
             )
             return population_fill, sample_fill, roles.index(role)
 
@@ -193,13 +146,13 @@ def deterministic_assignment(
         totals[role]["samples"] += size
         totals[role]["populations"] += populations
     if any(totals[role]["units"] != quotas[role] for role in roles):
-        raise ValueError("Final atomic-unit counts differ from balanced quotas")
-    return assignment, {"method": "balanced_quota_greedy", "quotas": quotas, "observed": totals}
+        raise ValueError("Final atomic-unit counts differ from Hamilton quotas")
+    return assignment, {"quotas": quotas, "observed": totals}
 
 
 def run(args: argparse.Namespace) -> dict[str, object]:
     prereg = json.loads(args.preregistration.read_text(encoding="utf-8"))
-    if prereg.get("stage") != "M27F_BLIND_ROLE_SPLIT" or prereg.get("version") != 3:
+    if prereg.get("stage") != "M27F_BLIND_ROLE_SPLIT" or prereg.get("version") != 4:
         raise ValueError("Invalid M27F preregistration")
     upstream = prereg["upstream_contract"]
     ibd_files = m27e.indexed_by_chromosome(args.ibd_file, "IBD")
@@ -270,7 +223,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     mixed_ancestry_roots = {
         root for root, ancestries in ancestries_by_root.items() if len(ancestries) > 1
     }
-    exact_limit = int(prereg["assignment_algorithm"]["small_stratum_exact_limit"])
+    fractions = {role: float(prereg["role_fractions"][role]) for role in ROLES}
     allocation_by_ancestry: dict[str, dict[str, object]] = {}
     order_invariant = True
     for ancestry in target_ancestries:
@@ -285,9 +238,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             (digest_by_root[root], len(members_by_root[root]), len(populations_by_root[root]))
             for root in candidate_roots
         ]
-        allocator = exhaustive_assignment if len(units) <= exact_limit else deterministic_assignment
-        assignment, receipt = allocator(units)
-        reversed_assignment, _ = allocator(list(reversed(units)))
+        assignment, receipt = deterministic_assignment(units, fractions)
+        reversed_assignment, _ = deterministic_assignment(list(reversed(units)), fractions)
         order_invariant = order_invariant and assignment == reversed_assignment
         digest_to_root = {digest_by_root[root]: root for root in candidate_roots}
         for digest, role in assignment.items():
@@ -375,17 +327,10 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     )
     f4 = True
     f5 = all(
-        max(counts[ancestry][role]["n_atomic_units"] for role in ROLES)
-        - min(counts[ancestry][role]["n_atomic_units"] for role in ROLES)
-        <= 1
-        and (
-            allocation_by_ancestry[ancestry]["method"] != "exhaustive"
-            or allocation_by_ancestry[ancestry]["n_assignments_evaluated"]
-            == len(ROLES) ** sum(
-                counts[ancestry][role]["n_atomic_units"] for role in ROLES
-            )
-        )
+        counts[ancestry][role]["n_atomic_units"]
+        == allocation_by_ancestry[ancestry]["quotas"][role]
         for ancestry in target_ancestries
+        for role in ROLES
     )
     f6 = order_invariant
     gates = {"F0": f0, "F1": f1, "F2": f2, "F3": f3, "F4": f4, "F5": f5, "F6": f6}
@@ -398,7 +343,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     elif not f5 or not f6:
         decision = "STOP_ALLOCATION_CONTRACT"
     else:
-        decision = "GO_REF_EXTRACTION_ONLY"
+        decision = "GO_OPEN_TRAIN_VALID_SUPPORT_AUDIT"
 
     args.outdir.mkdir(parents=True, exist_ok=True)
     private_path = args.outdir / "m27f_split.private.tsv"
