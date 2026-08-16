@@ -49,6 +49,7 @@ class TestM27FRefSupport(unittest.TestCase):
         module = (REPO / "modules/27F_REF_SUPPORT_AUDIT.nf").read_text(encoding="utf-8")
         workflow = (REPO / "workflows/m27f_ref_support_audit.nf").read_text(encoding="utf-8")
         self.assertIn("pattern: 'm27f_ref*'", module)
+        self.assertEqual(module.count("container params.m27f_ref_container_image"), 3)
         self.assertIn("chmod 600 m27f_ref_site_support.private.tsv.gz", module)
         self.assertIn("source_valid_opened: false", workflow)
         self.assertIn("source_test_opened: false", workflow)

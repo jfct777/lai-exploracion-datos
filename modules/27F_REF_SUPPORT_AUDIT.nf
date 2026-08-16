@@ -3,6 +3,7 @@ nextflow.enable.dsl=2
 process WRITE_M27F_REF_RUN_PROVENANCE {
     tag "m27f_ref_run_provenance"
     publishDir "${params.m27f_ref_results_dir}", mode: 'copy', overwrite: false
+    container params.m27f_ref_container_image
     cpus 1
     memory '1 GB'
     time '5m'
