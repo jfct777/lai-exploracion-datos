@@ -413,6 +413,15 @@ class TestM27EContracts(unittest.TestCase):
         self.assertNotIn("\\n+", module)
         self.assertNotIn("sbatch", workflow + module)
 
+    def test_positive_decision_does_not_authorize_baseline_redesign(self):
+        audit = (REPO / "bin/audit_m27e_ibd_rare_transfer.py").read_text()
+        prereg = json.loads(
+            (REPO / "conf/m27e_ibd_rare_transfer_preregistration.json").read_text()
+        )
+        self.assertIn('decision = "GO_POWER_DESIGN_ONLY"', audit)
+        self.assertNotIn("GO_BASELINE_REDESIGN_AND_POWER_ONLY", prereg["allowed_decisions"])
+        self.assertEqual(prereg["version"], 5)
+
 
 if __name__ == "__main__":
     unittest.main()

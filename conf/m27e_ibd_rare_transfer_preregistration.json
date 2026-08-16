@@ -1,6 +1,6 @@
 {
   "stage": "M27E_IBD_RARE_TRANSFER_FEASIBILITY",
-  "version": 4,
+  "version": 5,
   "scope": "read_only_autosomal_ibd_and_chr22_rare_transfer_feasibility",
   "question": "Can the official phased panel provide population- and recent-kinship-disjoint source blocks with rare-allele support outside the NatWGS-128 ascertainment panel?",
   "upstream_contract": {
@@ -103,7 +103,6 @@
     "STOP_NO_THREE_ROLE_BLOCK_FEASIBILITY",
     "STOP_NO_TRANSFERABLE_NAM_SUPPORT",
     "STOP_EXTERNAL_POPULATION_CONCENTRATION",
-    "GO_BASELINE_REDESIGN_AND_POWER_ONLY",
     "GO_POWER_DESIGN_ONLY"
   ],
   "stop_rules": [
@@ -134,6 +133,12 @@
       "reason": "The second PRE review found that an IBD block or canonical Population containing both NatWGS discovery and external samples could be counted on both sides, and that exact-key absence from the unusable frozen baseline is not the separation rule for the future redesigned baseline.",
       "timing": "after_v3_code_review_and_before_any_v3_or_v4_recomputation",
       "delta": "Define external-role-eligible carriers by excluding every external sample whose IBD block or canonical Population contains any discovery sample; use only the remaining blocks for transferability, leave-one-population-out and concentration. Keep exact-key and same-position baseline overlap as an audited diagnostic, but require the future common baseline to exclude all 954 target positions. Sites, orientation, IBD calls, thresholds and inputs remain frozen."
+    },
+    {
+      "version": 5,
+      "reason": "The POST review found that passing structural transferability does not yet authorize redesigning or training a baseline. A single joint role assignment, spatial concentration and an identifiable power design remain unverified.",
+      "timing": "after_the_v4_result_and_before_canonical_closure_or_any_split_simulation_or_modeling",
+      "delta": "Narrow the positive decision label from GO_BASELINE_REDESIGN_AND_POWER_ONLY to GO_POWER_DESIGN_ONLY. No data, site, allele orientation, IBD definition, threshold, gate or numerical result changed."
     }
   ],
   "privacy": {

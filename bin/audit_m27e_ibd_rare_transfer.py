@@ -915,7 +915,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     elif not e6:
         decision = "STOP_EXTERNAL_POPULATION_CONCENTRATION"
     else:
-        decision = "GO_BASELINE_REDESIGN_AND_POWER_ONLY"
+        decision = "GO_POWER_DESIGN_ONLY"
 
     input_contract = {
         "stage": prereg["stage"],
@@ -958,7 +958,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "source_test_opened": False,
         "sample_ids_emitted": False,
         "variant_keys_emitted": False,
-        "interpretation": "M27E establishes structural transfer feasibility using external role-eligible blocks. Baseline overlap is diagnostic only; it cannot certify pedigree, power, a final split, a compatible common baseline, or rare-channel improvement of LAI.",
+        "interpretation": "M27E establishes structural transfer feasibility using external role-eligible blocks. It authorizes only a joint split and spatial/power audit. Baseline overlap is diagnostic only; it cannot certify pedigree, power, a final split, a compatible common baseline, or rare-channel improvement of LAI.",
     }
     args.outdir.mkdir(parents=True, exist_ok=True)
     write_json(args.outdir / "m27e_input_contract.json", input_contract)
