@@ -75,6 +75,7 @@ def project(
             str(allowlist),
             "--force-samples",
             "--no-update",
+            "--no-version",
             "--output-type",
             "b",
             "--output",

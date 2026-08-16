@@ -86,7 +86,8 @@ process AUDIT_M27F_REF_SUPPORT {
     val provenance_b64
 
     output:
-    path "m27f_ref_site_support.private.tsv.gz", emit: private_support
+    path "m27f_ref_site_support.private.tsv", emit: private_support
+    path "m27f_ref_eligible_sites.private.tsv", emit: private_eligible_catalog
     path "m27f_ref_support.public.json", emit: public_support
     path "m27f_ref_support.manifest.json", emit: manifest
 
@@ -107,7 +108,7 @@ process AUDIT_M27F_REF_SUPPORT {
       --preregistration ${preregistration} \
       --outdir .
 
-    chmod 600 m27f_ref_site_support.private.tsv.gz
+    chmod 600 m27f_ref_site_support.private.tsv m27f_ref_eligible_sites.private.tsv
 
     python3 ${manifest_py} \
       --stage M27F_REF_SUPPORT_AUDIT \
@@ -124,7 +125,8 @@ process AUDIT_M27F_REF_SUPPORT {
       --input ${audit_py} \
       --input ${m27e_py} \
       --input ${bridge_py} \
-      --output m27f_ref_site_support.private.tsv.gz \
+      --output m27f_ref_site_support.private.tsv \
+      --output m27f_ref_eligible_sites.private.tsv \
       --output m27f_ref_support.public.json \
       --provenance-b64 ${provenance_b64} \
       --params-json '{"scope":"discovery_catalog_reproduction_and_ref_only_support","source_valid_opened":false,"source_test_opened":false,"simulation":false,"lai":false,"training":false}' \

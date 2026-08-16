@@ -147,6 +147,19 @@ def maximum_gap(positions: list[int]) -> int | None:
     return max((right - left for left, right in zip(ordered, ordered[1:])), default=None)
 
 
+def write_private_tsv(
+    path: Path,
+    rows: list[dict[str, object]],
+    fieldnames: list[str],
+) -> None:
+    """Write a small private table deterministically (no gzip timestamp)."""
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+    os.chmod(path, 0o600)
+
+
 def run(args: argparse.Namespace) -> dict[str, object]:
     prereg = json.loads(args.preregistration.read_text(encoding="utf-8"))
     if prereg.get("stage") != "M27F_REF_SUPPORT_AUDIT" or prereg.get("version") != 1:
@@ -258,14 +271,17 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         raise ValueError("STOP_TARGET_REPRODUCTION: REF does not contain all 954 exact keys")
     site_rows.sort(key=lambda row: (int(str(row["chrom"]).removeprefix("chr")), int(row["pos"]), str(row["ref"]), str(row["alt"])))
     args.outdir.mkdir(parents=True, exist_ok=True)
-    private_path = args.outdir / "m27f_ref_site_support.private.tsv.gz"
-    with gzip.open(private_path, "wt", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(site_rows[0]), delimiter="\t")
-        writer.writeheader()
-        writer.writerows(site_rows)
-    os.chmod(private_path, 0o600)
-
     supported = [row for row in site_rows if row["nam_supports_both_ref_atomic_units"]]
+    private_path = args.outdir / "m27f_ref_site_support.private.tsv"
+    eligible_path = args.outdir / "m27f_ref_eligible_sites.private.tsv"
+    private_fields = list(site_rows[0])
+    write_private_tsv(private_path, site_rows, private_fields)
+    write_private_tsv(eligible_path, supported, private_fields)
+    eligible_catalog = {
+        (str(row["chrom"]), int(row["pos"]), str(row["ref"]), str(row["alt"])):
+        bool(row["minor_is_alt"])
+        for row in supported
+    }
     supported_positions = [int(row["pos"]) for row in supported]
     r5 = bool(supported)
     decision = "GO_VALID_FEASIBILITY_ONLY" if r5 else "STOP_REF_NO_SUPPORT"
@@ -288,6 +304,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         },
         "unphased_heterozygous_carriers_excluded_by_ancestry": dict(unphased_het_excluded),
         "private_site_support_sha256": sha256_file(private_path),
+        "private_eligible_catalog_sha256": sha256_file(eligible_path),
+        "eligible_key_orientation_sha256": catalog_digest(eligible_catalog),
         "source_valid_opened": False,
         "source_test_opened": False,
         "lai_performed": False,

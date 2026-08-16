@@ -3,6 +3,7 @@
 
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,6 +13,19 @@ import audit_m27f_ref_support as support  # noqa: E402
 
 
 class TestM27FRefSupport(unittest.TestCase):
+    def test_private_tsv_is_deterministic_and_can_freeze_empty_catalog(self):
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            fields = ["chrom", "pos"]
+            rows = [{"chrom": "22", "pos": 10}]
+            first_path = Path(first) / "support.tsv"
+            second_path = Path(second) / "support.tsv"
+            support.write_private_tsv(first_path, rows, fields)
+            support.write_private_tsv(second_path, rows, fields)
+            self.assertEqual(first_path.read_bytes(), second_path.read_bytes())
+            empty_path = Path(first) / "eligible.tsv"
+            support.write_private_tsv(empty_path, [], fields)
+            self.assertEqual(empty_path.read_text(encoding="utf-8"), "chrom\tpos\n")
+
     def test_frozen_orientation_carrier_logic(self):
         self.assertTrue(support.usable_carrier(1, True, True, True))
         self.assertFalse(support.usable_carrier(1, False, True, True))
@@ -41,6 +55,7 @@ class TestM27FRefSupport(unittest.TestCase):
         source = (REPO / "bin/project_m27f_ref_panel.py").read_text(encoding="utf-8")
         self.assertIn('"--samples-file"', source)
         self.assertIn('"--no-update"', source)
+        self.assertIn('"--no-version"', source)
         self.assertNotIn('"--include"', source)
         self.assertNotIn('"--exclude"', source)
         self.assertNotIn("KING", source)
@@ -51,7 +66,8 @@ class TestM27FRefSupport(unittest.TestCase):
         self.assertIn("pattern: 'm27f_ref*'", module)
         self.assertEqual(module.count("container params.m27f_ref_container_image"), 3)
         self.assertEqual(module.count("containerOptions params.m27f_ref_container_options"), 3)
-        self.assertIn("chmod 600 m27f_ref_site_support.private.tsv.gz", module)
+        self.assertIn("chmod 600 m27f_ref_site_support.private.tsv m27f_ref_eligible_sites.private.tsv", module)
+        self.assertIn('path "m27f_ref_eligible_sites.private.tsv"', module)
         self.assertIn("source_valid_opened: false", workflow)
         self.assertIn("source_test_opened: false", workflow)
         self.assertNotIn("KING", module + workflow)

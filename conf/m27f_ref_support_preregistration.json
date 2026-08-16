@@ -35,7 +35,8 @@
     "genotype_filters": [],
     "preserve_variant_keys_and_order": true,
     "publish_discovery_projection": false,
-    "publish_ref_projection_privately": true
+    "publish_ref_projection_privately": true,
+    "suppress_tool_timestamp_header": true
   },
   "support_contract": {
     "rare_orientation": "frozen minor allele from NatWGS-128",
@@ -45,6 +46,10 @@
     "ref_native_american_pass_rule": "at least one of the 954 frozen sites has a usable carrier in both of the two Native-American REF atomic units",
     "reorient_in_ref": false,
     "select_using_validation": false
+  },
+  "operational_controls": {
+    "deterministic_private_tables": "plain UTF-8 TSV with LF line endings and no embedded timestamp",
+    "freeze_ref_eligible_catalog": "write the exact R5-passing subset and record both its file SHA-256 and key-plus-orientation SHA-256 before VALID is opened"
   },
   "gates": {
     "R0": "All split, M27E and VCF hashes and counts match the frozen upstream contract.",
