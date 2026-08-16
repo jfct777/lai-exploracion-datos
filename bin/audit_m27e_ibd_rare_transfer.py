@@ -441,6 +441,13 @@ def summarize_panel_bridge(
     panel_index = {sample: index for index, sample in enumerate(panel_ids)}
     raw_indices = [panel_index[sample] for sample in raw_ids]
     discovery = set(raw_ids)
+    discovery_populations = {
+        population_stratum(metadata[sample]) for sample in discovery
+    }
+    discovery_blocks_by_policy = {
+        policy: {roots[sample] for sample in discovery}
+        for policy, roots in block_roots.items()
+    }
     direct_rows: list[dict[str, object]] = []
     n_exact = 0
     called_by_ancestry = Counter()
@@ -504,14 +511,22 @@ def summarize_panel_bridge(
                 for policy, roots in block_roots.items():
                     discovery_blocks = {roots[sample] for sample in discovered}
                     external_blocks_raw = {roots[sample] for sample in external}
-                    external_role_eligible_blocks = external_blocks_raw - discovery_blocks
+                    external_role_eligible_samples = [
+                        sample
+                        for sample in external
+                        if roots[sample] not in discovery_blocks_by_policy[policy]
+                        and population_stratum(metadata[sample])
+                        not in discovery_populations
+                    ]
+                    external_role_eligible_blocks = {
+                        roots[sample] for sample in external_role_eligible_samples
+                    }
                     external_blocks_by_population: dict[str, set[str]] = defaultdict(set)
-                    for sample in external:
+                    for sample in external_role_eligible_samples:
                         root = roots[sample]
-                        if root in external_role_eligible_blocks:
-                            external_blocks_by_population[
-                                population_stratum(metadata[sample])
-                            ].add(root)
+                        external_blocks_by_population[
+                            population_stratum(metadata[sample])
+                        ].add(root)
                     minimum_after_leave_one_population_out = min(
                         (
                             len(external_role_eligible_blocks - population_blocks)
@@ -522,6 +537,9 @@ def summarize_panel_bridge(
                     policy_counts[policy] = {
                         "discovery_blocks": len(discovery_blocks),
                         "external_blocks_raw": len(external_blocks_raw),
+                        "external_role_eligible_samples": len(
+                            external_role_eligible_samples
+                        ),
                         "external_role_eligible_blocks": len(
                             external_role_eligible_blocks
                         ),

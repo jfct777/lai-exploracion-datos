@@ -295,6 +295,52 @@ class TestM27EContracts(unittest.TestCase):
                 + "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t"
                 + "\t".join(samples)
                 + "\n22\t100\t.\tA\tG\t.\tPASS\t.\tGT\t"
+                + "\t".join(["0|0", "0|1", "0|1", "0|1", "0|1"])
+                + "\n",
+                encoding="utf-8",
+            )
+            summary = m27e.summarize_panel_bridge(
+                panel,
+                samples,
+                samples,
+                ["D1", "D2"],
+                {key: m27e.RawRareSite(True, bytes([0, 1]))},
+                metadata,
+                {"primary": roots},
+                set(),
+                "primary",
+            )
+        support = summary["support_by_policy"]["primary"]["Native_American"]
+        self.assertEqual(support["n_sites_with_two_fit_and_two_external_blocks"], 0)
+        self.assertEqual(summary["primary_native_american_lopo_robust_sites"], 0)
+
+    def test_external_population_shared_with_discovery_is_not_role_eligible(self):
+        samples = ["D1", "D2", "E1", "E2", "E3"]
+        populations = {
+            "D1": "SHARED",
+            "D2": "DISCOVERY_2",
+            "E1": "SHARED",
+            "E2": "EXTERNAL_2",
+            "E3": "EXTERNAL_3",
+        }
+        metadata = {
+            sample: {
+                "Ancestry": "Native_American",
+                "Source": "NatWGS" if sample.startswith("D") else "External",
+                "Population": populations[sample],
+                "_population_interpretable": "True",
+            }
+            for sample in samples
+        }
+        roots = {sample: sample for sample in samples}
+        key = ("22", 100, "A", "G")
+        with tempfile.TemporaryDirectory() as tmp:
+            panel = Path(tmp) / "panel.vcf"
+            panel.write_text(
+                "##fileformat=VCFv4.2\n"
+                + "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t"
+                + "\t".join(samples)
+                + "\n22\t100\t.\tA\tG\t.\tPASS\t.\tGT\t"
                 + "\t".join(["0|1"] * len(samples))
                 + "\n",
                 encoding="utf-8",
@@ -311,8 +357,9 @@ class TestM27EContracts(unittest.TestCase):
                 "primary",
             )
         support = summary["support_by_policy"]["primary"]["Native_American"]
-        self.assertEqual(support["n_sites_with_two_fit_and_two_external_blocks"], 0)
-        self.assertEqual(summary["primary_native_american_lopo_robust_sites"], 0)
+        self.assertEqual(support["n_sites_with_two_fit_and_two_external_blocks"], 1)
+        concentration = summary["primary_native_american_transferable_concentration"]
+        self.assertEqual(concentration["n_contributing_external_populations"], 2)
 
     def test_recent_kinship_requires_anchor_segment_and_total_ibd(self):
         metadata = {

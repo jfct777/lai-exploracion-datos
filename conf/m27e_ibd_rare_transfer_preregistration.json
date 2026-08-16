@@ -84,7 +84,7 @@
     {
       "id": "E4",
       "name": "external_native_american_rare_support",
-      "pass_rule": "At least one of the 954 frozen alleles is carried in at least two discovery blocks and at least two non-NatWGS Native-American blocks under the primary policy. This proves structural transfer only, not adequate power."
+      "pass_rule": "At least one of the 954 frozen alleles is carried in at least two discovery blocks and at least two external-role-eligible Native-American blocks under the primary policy. An external block is eligible only if neither that block nor its canonical Population contains a NatWGS discovery sample. This proves structural transfer only, not adequate power."
     },
     {
       "id": "E5",
@@ -94,7 +94,7 @@
     {
       "id": "E6",
       "name": "external_population_concentration",
-      "pass_rule": "At least one primary transferable Native-American site still has two external role-eligible blocks after removing each carrier canonical Population stratum in turn. Blocks that also contain NatWGS discovery samples are never external-role eligible. This is a concentration diagnostic, not a claim of biological replication."
+      "pass_rule": "At least one primary transferable Native-American site still has two external role-eligible blocks after removing each carrier canonical Population stratum in turn. Blocks and canonical Populations that also contain NatWGS discovery samples are never external-role eligible. This is a concentration diagnostic, not a claim of biological replication."
     }
   ],
   "allowed_decisions": [
@@ -131,9 +131,9 @@
     },
     {
       "version": 4,
-      "reason": "The second PRE review found that an IBD/population block containing both NatWGS discovery and external samples could be counted on both sides, and that exact-key absence from the unusable frozen baseline is not the separation rule for the future redesigned baseline.",
+      "reason": "The second PRE review found that an IBD block or canonical Population containing both NatWGS discovery and external samples could be counted on both sides, and that exact-key absence from the unusable frozen baseline is not the separation rule for the future redesigned baseline.",
       "timing": "after_v3_code_review_and_before_any_v3_or_v4_recomputation",
-      "delta": "Define external-role-eligible blocks as external blocks minus all discovery blocks; use only those blocks for transferability, leave-one-population-out and concentration. Keep exact-key and same-position baseline overlap as an audited diagnostic, but require the future common baseline to exclude all 954 target positions. Sites, orientation, IBD calls, thresholds and inputs remain frozen."
+      "delta": "Define external-role-eligible carriers by excluding every external sample whose IBD block or canonical Population contains any discovery sample; use only the remaining blocks for transferability, leave-one-population-out and concentration. Keep exact-key and same-position baseline overlap as an audited diagnostic, but require the future common baseline to exclude all 954 target positions. Sites, orientation, IBD calls, thresholds and inputs remain frozen."
     }
   ],
   "privacy": {
