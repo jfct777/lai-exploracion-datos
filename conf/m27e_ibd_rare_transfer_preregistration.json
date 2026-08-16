@@ -1,6 +1,6 @@
 {
   "stage": "M27E_IBD_RARE_TRANSFER_FEASIBILITY",
-  "version": 1,
+  "version": 2,
   "scope": "read_only_autosomal_ibd_and_chr22_rare_transfer_feasibility",
   "question": "Can the official phased panel provide population- and recent-kinship-disjoint source blocks with rare-allele support outside the NatWGS-128 ascertainment panel?",
   "upstream_contract": {
@@ -9,6 +9,10 @@
     "expected_direct_phase_bridge_sites": 954,
     "expected_discovery_samples": 128,
     "expected_panel_samples": 3685,
+    "expected_population_interpretable_samples": 3675,
+    "expected_population_unresolved_samples": 10,
+    "resolved_strata_sha256": "1b41c4d1b02e84ebd3b7715d2b5c399238d04e7754a1a0520433f4e3595671e1",
+    "resolved_strata_manifest_sha256": "b4e97140e5af3cb28131002b3b52f909a3496ddb6095b4fb117700fcb048faa3",
     "expected_autosomes": 22
   },
   "ibd_contract": {
@@ -62,8 +66,8 @@
     },
     {
       "id": "E1",
-      "name": "identity_and_universe_contract",
-      "pass_rule": "The phased panel has exactly 3,685 unique metadata-resolved samples, all IBD IDs belong to it, all 3,685 occur in the union of IBD calls, and all 128 discovery samples resolve uniquely inside it."
+      "name": "identity_and_population_coverage_contract",
+      "pass_rule": "The phased panel, resolved-strata table and IBD universe contain the same 3,685 unique identifiers; all 128 NatWGS discovery samples are population-interpretable Native-American samples; 3,675 panel samples have population metadata and the 10 documented unmatched samples are retained for identity and IBD accounting but excluded from ancestry-specific interpretation."
     },
     {
       "id": "E2",
@@ -103,6 +107,14 @@
     "Do not simulate, run LAI, train a model, inspect a future SOURCE_TEST genotype partition or execute KING in M27E.",
     "If E4 fails under the primary policy, do not rescue it by selecting a diagnostic sensitivity.",
     "If a future common baseline contains any target rare key, exclude it or preregister a separate shared-marker ablation before comparing incremental value."
+  ],
+  "amendments": [
+    {
+      "version": 2,
+      "reason": "The frozen M27D strata artifact resolves all 3,685 panel identities but documents population metadata for 3,675; ten samples are unmatched. Requiring invented population labels would violate the fail-closed identity policy.",
+      "timing": "before_implementation_commit_and_before_any_m27e_result",
+      "delta": "Use the hash-pinned M27D resolved-strata artifact; keep all samples in identity/IBD accounting and exclude only the ten documented unmatched samples from ancestry-specific summaries. No IBD, rare-allele or gate threshold changed."
+    }
   ],
   "privacy": {
     "emit_sample_ids": false,
