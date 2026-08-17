@@ -83,5 +83,26 @@ class TestContract(unittest.TestCase):
         self.assertIn("no_truth", contract["scope"])
 
 
+class TestSoftwareProvenance(unittest.TestCase):
+    def test_reads_valid_build_revision_stamp(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            expected = "e758f2c8108b660c6321c6a1b168b3a79e85a02d"
+            (root / "GNOMIX_COMMIT").write_text(expected + "\n", encoding="utf-8")
+            self.assertEqual(MODULE.read_gnomix_commit(root), expected)
+
+    def test_rejects_missing_build_revision_stamp(self):
+        with tempfile.TemporaryDirectory() as name:
+            with self.assertRaisesRegex(ValueError, "Missing Gnomix"):
+                MODULE.read_gnomix_commit(Path(name))
+
+    def test_rejects_malformed_build_revision_stamp(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            (root / "GNOMIX_COMMIT").write_text("not-a-commit\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Invalid Gnomix"):
+                MODULE.read_gnomix_commit(root)
+
+
 if __name__ == "__main__":
     unittest.main()

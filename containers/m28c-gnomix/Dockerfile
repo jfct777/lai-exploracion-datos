@@ -8,7 +8,9 @@ RUN apt-get update \
 
 RUN git clone https://github.com/AI-sandbox/gnomix.git /opt/gnomix \
     && git -C /opt/gnomix checkout --detach "${GNOMIX_COMMIT}" \
-    && test "$(git -C /opt/gnomix rev-parse HEAD)" = "${GNOMIX_COMMIT}"
+    && test "$(git -C /opt/gnomix rev-parse HEAD)" = "${GNOMIX_COMMIT}" \
+    && git -C /opt/gnomix rev-parse HEAD > /opt/gnomix/GNOMIX_COMMIT \
+    && chmod 0444 /opt/gnomix/GNOMIX_COMMIT
 
 COPY containers/m28c-gnomix/requirements.lock /tmp/requirements.lock
 RUN python -m pip install --no-cache-dir --upgrade pip \

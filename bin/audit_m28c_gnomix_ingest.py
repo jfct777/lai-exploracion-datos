@@ -20,8 +20,31 @@ def sha256(path: Path) -> str:
 
 
 def run_command(command: list[str]) -> str:
-    result = subprocess.run(command, check=True, text=True, capture_output=True)
+    try:
+        result = subprocess.run(command, check=True, text=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        raise RuntimeError(
+            f"Command failed with exit code {exc.returncode}: {command!r}; stderr={stderr!r}"
+        ) from exc
     return result.stdout.strip()
+
+
+def read_gnomix_commit(gnomix_root: Path) -> str:
+    """Read the source revision stamped at image build time.
+
+    Nextflow runs containers as the host user. Reading Git metadata directly would
+    trigger Git's safe-directory ownership check because the image is built as
+    root. The build-time stamp preserves the exact revision without weakening that
+    security control at runtime.
+    """
+    commit_file = gnomix_root / "GNOMIX_COMMIT"
+    if not commit_file.is_file():
+        raise ValueError(f"Missing Gnomix build revision stamp: {commit_file}")
+    commit = commit_file.read_text(encoding="utf-8").strip()
+    if len(commit) != 40 or any(character not in "0123456789abcdef" for character in commit):
+        raise ValueError(f"Invalid Gnomix build revision stamp: {commit!r}")
+    return commit
 
 
 def load_contract(path: Path) -> dict:
@@ -116,7 +139,7 @@ def audit(args: argparse.Namespace) -> dict:
     if int(contract["root_seed"]) != args.root_seed:
         raise ValueError("Root seed differs from the ingest contract")
     upstream_hashes = authenticate_upstream(args.reference_vcf, args.target_vcf, args.materialization_report)
-    observed_commit = run_command(["git", "-C", str(args.gnomix_root), "rev-parse", "HEAD"])
+    observed_commit = read_gnomix_commit(args.gnomix_root)
     expected_commit = contract["software"]["gnomix_commit"]
     if observed_commit != expected_commit:
         raise ValueError(f"Gnomix commit mismatch: {observed_commit}")
