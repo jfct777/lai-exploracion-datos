@@ -1,0 +1,119 @@
+{
+  "stage": "M28B_LAI_MARKER_CAPACITY_AUDIT",
+  "version": 1,
+  "status": "PRE_FROZEN_BEFORE_IMPLEMENTATION",
+  "scope": "marker_capacity_and_balance_only_no_lai_no_target_no_truth_no_donor_selection",
+  "question": "Can B0, BR and BS be built with exact marker-count parity and comparable genetic-map coverage before any local-ancestry model is run?",
+  "later_estimand": "Paired difference in LAI error between BR and BS, where both arms add the same number of markers to the identical B0 baseline.",
+  "claims_excluded": [
+    "rare_variants_improve_local_ancestry",
+    "utility_in_real_DNABR_samples",
+    "utility_specific_to_Native_American_ancestry",
+    "ASIA_is_Native_American",
+    "biological_novelty_or_age_of_selected_alleles",
+    "independent_validation_of_M14"
+  ],
+  "authenticated_inputs": {
+    "m28_tree_sequence_sha256": "adcdd8aa75a114a26d6629f03d838880abcd279834c69e5cff80087797e11574",
+    "m28_pool_manifest_sha256": "8a6e38b682e429556ffef52d0f6e7086137fda8e3a855ac78cf0983282afe57d",
+    "genetic_map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+    "m28_preflight_contract_sha256": "a7b8937912086bec8aca16083cdd00f3127445ffa533de03ce97b3039b6155cc",
+    "gnomix_chr22_template": {
+      "uri": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/vcf_fixed/dnabr.refpop.fixed.chr22.vcf.gz",
+      "sha256": "1b9e7b23a6e046185056271513589d03c24406e5100606d078973a58d36e6afd",
+      "records": 110074,
+      "unique_positions": 110074,
+      "first_position": 16385840,
+      "last_position": 50784700,
+      "use": "spatial_position_template_only",
+      "forbidden_uses": [
+        "reuse_genotypes",
+        "reuse_INFO_AF_or_AC",
+        "reuse_frozen_model_weights"
+      ]
+    }
+  },
+  "pool_access": {
+    "allowed": ["FREQ", "REF_LAI"],
+    "forbidden": ["DONOR", "TARGET", "mosaic_events", "lai_truth"],
+    "rule": "Marker selection must be recomputed from the tree sequence using only FREQ and REF_LAI nodes. The M28 rare catalog is diagnostic evidence, not a selector input."
+  },
+  "rare_selector": {
+    "frequency_pool": "FREQ",
+    "minimum_mac": 2,
+    "maximum_maf_exclusive": 0.01,
+    "minor_allele_policy": "min(AC, AN-AC) computed from genotypes; never assume ALT is minor",
+    "reference_minor_copy_thresholds": [1, 2, 5],
+    "primary_reference_minor_copy_threshold": 1,
+    "known_answer_rare_sites": 95580,
+    "known_answer_mac_histogram": {"2": 45553, "3": 24168, "4": 15261, "5": 10598},
+    "known_answer_ref_observed_at_primary_threshold": 51163
+  },
+  "nonrare_screens": [
+    {
+      "id": "nonrare_ge_0_01",
+      "minimum_maf_inclusive": 0.01,
+      "interpretation": "Exact non-rare complement of the frozen rare threshold; primary capacity screen."
+    },
+    {
+      "id": "common_ge_0_05",
+      "minimum_maf_inclusive": 0.05,
+      "interpretation": "Strict common-variant sensitivity screen."
+    }
+  ],
+  "primary_nonrare_screen": "nonrare_ge_0_01",
+  "nonrare_reference_rule": "The FREQ-oriented minor allele and its complement must both occur at least once in pooled REF_LAI.",
+  "b0_mapping": {
+    "target_count": 110074,
+    "template_coordinate": "Interpolate template bp through the authenticated genetic map; ignore VCF INFO/CM.",
+    "candidate_order": "Map sorted template positions without replacement to the nearest eligible simulated marker while preserving genomic order; break ties by absolute cM distance, absolute bp distance and site id.",
+    "p95_absolute_delta_cm_max": 0.01,
+    "maximum_absolute_delta_cm_max": 0.05,
+    "rationale": "The maximum is no wider than the finest preregistered BS matching stratum; p95 is five times tighter. Both are checked before LAI."
+  },
+  "bs_matching": {
+    "space": "genetic_cM",
+    "bin_widths_cm": [0.05, 0.1, 0.25, 0.5, 1.0],
+    "selection_rule": "Within each fixed map bin, select without replacement from eligible non-rare markers not used by B0, pairing sorted rare and control markers deterministically.",
+    "primary_width_rule": "Use the narrowest preregistered width that achieves exact global and per-bin cardinality for the primary non-rare screen and primary REF threshold.",
+    "physical_distance": "Report bp distances as a diagnostic; cM remains primary.",
+    "required_statistics": [
+      "median_absolute_delta_cm",
+      "p95_absolute_delta_cm",
+      "maximum_absolute_delta_cm",
+      "median_absolute_delta_bp",
+      "p95_absolute_delta_bp",
+      "wasserstein_distance_cm",
+      "unmatched_rare_count",
+      "bins_without_capacity"
+    ]
+  },
+  "arms": {
+    "B0": "Mapped non-rare baseline only.",
+    "BR": "Identical B0 plus all rare markers passing the primary REF_LAI observability rule.",
+    "BS": "Identical B0 plus exactly the same number of reserved non-rare markers as BR, matched in cM."
+  },
+  "gates": {
+    "C0_INPUT_IDENTITY": "All authenticated input hashes, template counts and map bounds match exactly.",
+    "C1_ACCESS_BOUNDARY": "Only FREQ and REF_LAI nodes are loaded for marker statistics; the command interface has no TARGET, DONOR, mosaic or truth input.",
+    "C2_RARE_DEFINITION": "Rare MAC, MAF and minor orientation exactly reproduce the frozen M28 definition.",
+    "C3_B0_MAPPING": "B0 has 110074 unique markers, preserves order and passes the preregistered cM displacement limits.",
+    "C4_ARM_PARITY": "B0 is identical in all arms and the BR and BS additions have exactly equal global and per-bin cardinality without overlap or replacement.",
+    "C5_ANCESTRY_SUPPORT": "The primary BR additions retain at least one REF_LAI-supported marker in AFR, EUR and ASIA; ASIA remains labelled ASIA.",
+    "C6_REPRODUCIBILITY": "Repeated execution yields byte-identical public summaries and marker manifests.",
+    "C7_SCOPE": "No LAI model, TARGET genotype, truth metric, accuracy or boundary score is computed."
+  },
+  "allowed_decisions": [
+    "STOP_INPUT_IDENTITY",
+    "STOP_LEAKAGE",
+    "STOP_RARE_DEFINITION",
+    "STOP_BASELINE_MAPPING",
+    "STOP_CAPACITY",
+    "STOP_PARITY",
+    "STOP_REPRODUCIBILITY",
+    "AUDIT_COMPLETE_PENDING_REPRODUCIBILITY",
+    "GO_PREREGISTER_LAI_COMPARATOR"
+  ],
+  "stop_rule": "Any failed gate stops before LAI. Do not reduce BR, relax rare thresholds, widen beyond 1.0 cM, replace the baseline template or choose a screen using LAI performance. A design change requires a new preregistration version.",
+  "development_seed_policy": "Seed 20260817 may be used only for this technical capacity audit and remains excluded from later DEV and TEST effect estimation."
+}
