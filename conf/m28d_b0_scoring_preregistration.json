@@ -1,0 +1,166 @@
+{
+  "stage": "M28D_B0_DESCRIPTIVE_SCORING",
+  "version": 2,
+  "status": "PRE_FROZEN_AMENDED_BEFORE_TRUTH_ACCESS",
+  "question": "How much position-level and boundary error remains in the frozen M28C B0 on the protected chr22 validation seed, without using that seed for inference or deciding whether BR/BS should run?",
+  "amendment_history": [
+    {
+      "version": 1,
+      "status": "superseded_before_truth_access",
+      "reason": "The initial draft bound seed 20260817 truth to B0 predictions generated from seed 20260818. The second pre-scoring audit detected the mismatch before the real truth was parsed or scored."
+    },
+    {
+      "version": 2,
+      "status": "frozen_before_truth_access",
+      "reason": "Bind seed 20260818 truth, simulation outputs, materialized target, ingest and both predictions through authenticated manifests; authenticate both replicas before either score; add implementation hashes, coordinate-source checks and explicit undefined-metric handling."
+    }
+  ],
+  "scope": "descriptive_scoring_and_scorer_validation_only",
+  "claims_excluded": [
+    "statistical_ceiling_or_headroom_decision",
+    "rare_variant_incremental_utility",
+    "BR_or_BS_authorization",
+    "confidence_intervals_or_hypothesis_tests",
+    "SESOI_selection",
+    "hyperparameter_selection",
+    "utility_in_real_DNABR_or_NAMBR",
+    "Native_American_interpretation"
+  ],
+  "authenticated_inputs": {
+    "truth_sha256": "e5e2895b8316673afb6796795a2724d167c1bf2e98b2122ef0f7645b985e296a",
+    "b0_marker_table_sha256": "73a8c07deb3dc7fb749ab68f287cb0b77a3af0ec9ef19e1bd412590ff5f29202",
+    "genetic_map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+    "replicate_A_fb_sha256": "dab126b1795bc0b819025cbcde5db724a82a052b77259b339ba1a5ec748d17b1",
+    "replicate_A_msp_sha256": "3ecd592fef0537148aa48fce22fba378a8f668feaf457a28edcef01070dbb6e0",
+    "replicate_B_fb_sha256": "dab126b1795bc0b819025cbcde5db724a82a052b77259b339ba1a5ec748d17b1",
+    "replicate_B_msp_sha256": "3ecd592fef0537148aa48fce22fba378a8f668feaf457a28edcef01070dbb6e0",
+    "m28c_comparison_sha256": "8dce4209d554b01fea8235b188e99c795a31fa96dc0248c5074035554af5615a",
+    "simulation_manifest_sha256": "6d233933f4fe3abbd8fed980990115801f3352d38fa70aeba256575734449538",
+    "b0_preflight_manifest_sha256": "671d52f3cfde19f2004ff0808104edf315705df3cb122ef2415cd529b4d1f97f",
+    "ingest_report_sha256": "a9a234afb3272ff6dcd04dab3691e263ea80c54d149efd2495ea9585e13b2d28",
+    "replicate_A_inference_manifest_sha256": "1f20c94934eff36276d32560250376ba8c327c692c391f8a746590ccdac45c49",
+    "replicate_B_inference_manifest_sha256": "91e6d14affaee1946d92932b709d4819c1628ed8fac1a2c789603377a15846ed",
+    "target_vcf_sha256": "b53feee86c58eca1f5cc2c7cca9863a0a12966d02ff855baab267cfb447ccef3"
+  },
+  "authenticated_implementation": {
+    "scorer_sha256": "bd9dcd82a95987e3de32e9b64c8bb9637356545ce8f16821f59c4c3373513673",
+    "known_answer_runner_sha256": "89967c27b0cd3acb23fd2ddc1ab2e62977fa5e0db297346bd9eecd1e8ebbb6f6",
+    "unit_test_sha256": "477aaa3b11ce9955ae349c9398541a5a9c8aa97e01b3c24ad7745489b2d578c4"
+  },
+  "fixed_domain": {
+    "assembly": "GRCh38",
+    "chromosome_truth": "chr22",
+    "chromosome_gnomix": "22",
+    "first_b0_marker": 16386159,
+    "last_b0_marker": 50784249,
+    "coordinate_convention": "inclusive integer bp domain [first_b0_marker,last_b0_marker] represented internally as half-open overlaps",
+    "expected_bp_weight": 34398091,
+    "markers": 79791,
+    "windows": 371,
+    "target_samples": 30,
+    "haplotypes_per_sample": 2,
+    "ancestry_order": [
+      "AFR",
+      "EUR",
+      "ASIA"
+    ],
+    "interpretation": "ASIA is the generic source in AmericanAdmixture_4B18 and must not be relabelled as NAM."
+  },
+  "prediction_partition": {
+    "policy": "Assign each B0 marker the FB probabilities and MSP hard labels of its internal Gnomix window, using MSP n_snps in order; include the terminal 241-marker window.",
+    "voronoi_policy": "For consecutive marker positions x_i and x_i+1, the left marker ends at floor((x_i+x_i+1)/2) and the right marker starts one bp later. Ties go to the left marker.",
+    "integration_policy": "Split prediction cells at every truth-segment boundary and integrate exact half-open overlaps; never assign truth from only a marker or window centre.",
+    "required_bp_weight_sum": 34398091
+  },
+  "genetic_coordinate_validation": {
+    "scoring_cm_source": "authenticated_genetic_map_only",
+    "b0_marker_tolerance_cm": 1e-8,
+    "msp_endpoint_tolerance_cm": 1e-5,
+    "fb_policy": "FB genetic_position is a finite monotone representative that must lie inside its MSP interval; it is not used as a cM coordinate for scoring.",
+    "rationale": "B0 cM is stored at higher precision. Gnomix MSP endpoints are rounded to five decimal places, so 1e-5 cM is a format-derived tolerance rather than a result-selected threshold."
+  },
+  "primary_estimand": {
+    "name": "bp_weighted_macro_normalized_ancestry_dosage_mae",
+    "predicted_dosage": "For sample i and ancestry a, d_hat_ia=P(h0=a)+P(h1=a).",
+    "truth_dosage": "d_ia=I(h0=a)+I(h1=a).",
+    "local_error": "abs(d_hat_ia-d_ia)/2",
+    "aggregation_order": "Integrate by bp within sample and ancestry; divide by the exact domain length; average samples within ancestry; then give AFR, EUR and ASIA equal weight.",
+    "range": [
+      0.0,
+      0.6666666666666666
+    ],
+    "conditional_diagnostic": "Also report error conditional on truth dosage >0 for each ancestry, with its own bp denominator.",
+    "phase_invariant": true
+  },
+  "secondary_estimands": {
+    "cm_weighted_dosage_mae": "Sensitivity using the same exact overlaps and non-negative interpolated cM weights; never the primary endpoint.",
+    "normalized_dosage_mse": "Squared error of d_hat/2 against d/2, named explicitly and not presented as a calibration guarantee.",
+    "haplotype_brier": "For each haplotype, sum the three squared probability errors and divide by 2; average the two haplotypes, weight by bp and minimize only over the two global haplotype permutations per sample. Range [0,1]; local window-wise swaps are forbidden.",
+    "hard_diploid_state": "Accuracy and fixed-six-class macro-F1 over unordered AA, EE, SS, AE, AS and ES states; probability ties resolve AFR before EUR before ASIA and unsupported classes have F1 zero.",
+    "boundary_error": "Ancestry-label transitions only, excluding silent donor changes. Match the same ordered transition one-to-one, maximize match count then minimize total cM distance, and choose between only the two global haplotype permutations per sample.",
+    "boundary_tolerances_cm": {
+      "primary_descriptive": 0.2,
+      "sensitivities": [
+        0.1,
+        0.5
+      ],
+      "rationale": "0.2 cM is the frozen Gnomix window-size anchor; 0.1 and 0.5 cM are fixed resolution sensitivities and will not be selected by their result."
+    },
+    "boundary_reporting": "For every tolerance and each of the six directed ancestry transitions report truth, predicted, matched, missed and extra boundaries, precision, recall, F1, and median/p95 distance among matched boundaries. A metric is null only when its denominator is absent; when truth and prediction denominators exist but matches are zero, precision, recall and F1 are 0."
+  },
+  "truth_informed_diagnostic": {
+    "name": "truth_informed_global_composition_diagnostic",
+    "definition": "For each sample and ancestry, use constant normalized dosage equal to its true bp-weighted global ancestry proportion inside the fixed B0 domain.",
+    "role": "Descriptive truth-informed global-composition diagnostic only; it is circular, is not an MAE lower bound, and must never enter a gate, select parameters or be described as a deployable baseline."
+  },
+  "known_answer_tests_before_truth": [
+    "perfect_probabilities_and_boundaries",
+    "global_haplotype_swap_invariance",
+    "truth_boundary_inside_a_voronoi_cell",
+    "boundary_shift_at_0.1_0.2_and_0.5_cM",
+    "missing_and_extra_boundaries",
+    "no_boundary_matches",
+    "terminal_window_consumption",
+    "truth_domain_clipping",
+    "genetic_map_plateau",
+    "sample_haplotype_class_coordinate_and_hash_misalignment_fail_closed",
+    "nonfinite_or_non_normalized_probability_fail_closed",
+    "command_level_A_B_exact_score_reproducibility",
+    "invalid_score_scope_or_authorization_fail_closed"
+  ],
+  "seed_policy": {
+    "seed": 20260818,
+    "role": "protected_validation_seed_descriptive_only",
+    "forbidden_uses": [
+      "confidence_interval",
+      "p_value",
+      "SESOI_selection",
+      "number_of_seeds_selection",
+      "hyperparameter_or_metric_selection",
+      "BR_or_BS_go_no_go"
+    ]
+  },
+  "unresolved_before_inference": {
+    "SESOI": "No defensible project value is frozen. The prior 0.005 suggestion remains a hypothesis, not a decision.",
+    "independent_seeds": "No exact number is justified. Technical A/B replicates and mosaics from one simulation seed are not independent scientific replicates.",
+    "policy": "M28D may end only as B0_DESCRIBED. A separate PRE based on a prospective power/precision design is required before any ceiling decision or BR/BS run."
+  },
+  "post_access_seed_policy": "After successful scoring, seed 20260818 is consumed for descriptive inspection and cannot be reused as independent validation or to select SESOI, seed count, metrics, parameters or BR/BS execution.",
+  "gates": {
+    "D0_AUTH": "Before either score parses truth, a pair-level receipt must authenticate contract, truth hash, B0, map, both FB/MSP pairs, M28C comparison, simulation outputs, B0 materialization, ingest and both inference manifests. Root seed, tree sequence/mosaic/pool outputs, target VCF and predictions must form one lineage.",
+    "D1_ALIGNMENT": "Exactly 30 target samples, two haplotypes, three frozen ancestry labels, 371 paired FB/MSP windows and 79791 ordered B0 markers align; MSP n_snps sums exactly to 79791.",
+    "D2_DOMAIN": "Truth and authenticated map cover the complete fixed B0 domain; B0 cM matches the map within 1e-8, rounded MSP endpoints within 1e-5, FB representatives lie inside MSP intervals, Voronoi cells and exact overlaps have no gaps or overlaps, bp weights sum to 34398091 and genetic span is positive.",
+    "D3_PROBABILITY": "Every FB value is finite in [0,1], each haplotype ancestry vector sums to one within 1e-6, each predicted dosage is in [0,2] and ancestry dosages sum to two within 2e-6.",
+    "D4_KNOWN_ANSWER": "Every named synthetic known-answer check, including finite non-normalized probabilities, truth clipping, malformed haplotypes, command-level A/B scoring and invalid-scope comparison, passes before real truth is parsed.",
+    "D5_PHASE": "Primary, unordered hard-state and globally aligned secondary metrics are invariant to a global haplotype swap.",
+    "D6_BOUNDARY": "Matching is ordered one-to-one, label-aware and reports missed/extra transitions at all frozen tolerances.",
+    "D7_REPRODUCIBILITY": "A and B documents first pass frozen stage, decision, scope, seed and authorization guards; their aggregate scientific payloads are then identical after removing only replicate/provenance identifiers.",
+    "D8_SCOPE": "No SESOI, interval, p-value, ceiling decision, BR/BS authorization, NAM label or real-data claim is produced."
+  },
+  "decision_labels": {
+    "successful_single_replica": "B0_DESCRIBED_NO_CEILING_INFERENCE",
+    "successful_A_B_comparison": "PASS_B0_DESCRIPTIVE_SCORER_REPRODUCIBILITY",
+    "failure": "STOP_M28D_SCORING_CONTRACT"
+  },
+  "stop_rule": "Stop before scientific scoring on any hash, schema, coordinate, sample, haplotype, ancestry, window, marker, domain, truth-coverage, map, probability, dosage, weight, phase-invariance or known-answer failure. After scoring, do not interpret positive probabilistic error alone as correctable LAI error, do not use the truth-informed global-composition diagnostic as a gate, do not estimate a SESOI or independent-seed count from this seed, and do not open BR/BS."
+}
