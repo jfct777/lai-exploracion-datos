@@ -38,6 +38,14 @@ workflow {
     def provenanceB64 = groovy.json.JsonOutput.prettyPrint(
         groovy.json.JsonOutput.toJson(provenance)
     ).bytes.encodeBase64().toString()
+    def ingestProvenance = provenance + [
+        container_path: params.m28c_gnomix_container_image,
+        container_sha256: params.m28c_gnomix_container_digest,
+        scientific_scope: 'technical Gnomix ingest audit; no training, truth, or effect estimation',
+    ]
+    def ingestProvenanceB64 = groovy.json.JsonOutput.prettyPrint(
+        groovy.json.JsonOutput.toJson(ingestProvenance)
+    ).bytes.encodeBase64().toString()
 
     def treeSequence = file(params.m28c_b0_tree_sequence, checkIfExists: true)
     def poolManifest = file(params.m28c_b0_pool_manifest, checkIfExists: true)
@@ -69,6 +77,6 @@ workflow {
         channel.value(ingestPy),
         channel.value(manifestPy),
         WRITE_M28C_B0_RUN_PROVENANCE.out,
-        channel.value(provenanceB64),
+        channel.value(ingestProvenanceB64),
     )
 }
