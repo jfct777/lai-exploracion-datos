@@ -1,0 +1,88 @@
+{
+  "stage": "M28B_V3_LAI_GENERIC_COMPARATOR_CAPACITY_AUDIT",
+  "version": 3,
+  "status": "PRE_FROZEN_BEFORE_IMPLEMENTATION",
+  "scope": "generic_simulated_marker_allocation_only_no_lai_no_target_no_truth_no_donor_selection",
+  "reason_for_new_version": "V2 showed that M28 cannot reproduce the real baseline composition: only 3258 simulated nonrare REF-monomorphic sites are available versus 30283 in the authenticated baseline. V3 stops copying the real marker geometry and uses only its independently measured count of 79791 informative REF-polymorphic markers as an external density anchor.",
+  "authenticated_inputs": {
+    "m28_tree_sequence_sha256": "adcdd8aa75a114a26d6629f03d838880abcd279834c69e5cff80087797e11574",
+    "m28_pool_manifest_sha256": "8a6e38b682e429556ffef52d0f6e7086137fda8e3a855ac78cf0983282afe57d",
+    "genetic_map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+    "m28_preflight_contract_sha256": "a7b8937912086bec8aca16083cdd00f3127445ffa533de03ce97b3039b6155cc",
+    "baseline_template": {
+      "uri": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/vcf_fixed/dnabr.refpop.fixed.chr22.vcf.gz",
+      "sha256": "1b9e7b23a6e046185056271513589d03c24406e5100606d078973a58d36e6afd",
+      "records": 110074,
+      "unique_positions": 110074,
+      "first_position": 16385840,
+      "last_position": 50784700,
+      "known_answer_ref_polymorphic": 79791,
+      "known_answer_ref_monomorphic": 30283
+    }
+  },
+  "analysis_interval": {
+    "rule": "Use the exact genomic span of the authenticated baseline, inclusive.",
+    "rationale": "All comparator arms must cover the same chromosome interval; the real baseline positions are not used as a spatial template."
+  },
+  "pool_access": {
+    "allowed": ["FREQ", "REF_LAI"],
+    "forbidden": ["DONOR", "TARGET", "mosaic_events", "lai_truth"]
+  },
+  "marker_definitions": {
+    "rare_universe": "MAC>=2 and MAF<0.01 in FREQ, minor allele oriented from GT, with at least one minor copy in pooled REF_LAI.",
+    "common_universe": "MAF>=0.01 in FREQ, with both the FREQ-oriented minor allele and its complement observed in pooled REF_LAI.",
+    "b0": "Exactly 79791 common-universe sites selected deterministically and proportionally across genetic-distance bins.",
+    "br": "B0 plus K rare-universe sites.",
+    "bs": "B0 plus K common-universe reserve sites selected as spatial controls for BR."
+  },
+  "allocation": {
+    "b0_target_count": 79791,
+    "bin_widths_cm": [0.05, 0.1, 0.25, 0.5, 1.0],
+    "bin_origin": "Interpolate cM at the authenticated baseline first_position and use that value as bin zero for every width.",
+    "primary_width_rule": "Use the narrowest preregistered width passing all capacity, parity, ancestry and common-common geometry gates.",
+    "b0_quota_rule": "Allocate the exact global B0 count proportionally to the common-universe count in each bin by Hamilton largest remainders; rank sites within bin by a fixed SHA-256 salt.",
+    "K_rule": "For each bin, K_bin=min(eligible rare count, common reserve count), and K=sum(K_bin). K is therefore derived from spatial capacity rather than chosen from a performance result.",
+    "rare_selection": "Within each bin, rank eligible rare sites by fixed SHA-256 and keep exactly K_bin. Do not rank by ancestry, FST, DONOR, TARGET, truth or LAI performance.",
+    "control_matching": "Match selected rare sites to unique common-reserve sites within the same cM bin using the same deterministic monotonic nearest rule at every screened width.",
+    "common_common_null": "For each width, generate 32 deterministic common pseudo-query samples from B0 with the same K_bin counts and match them to the same common reserve. Gate the observed rare-common p95 absolute delta and Wasserstein distance against the maximum of the 32 null summaries; report one-sided Monte Carlo ranks.",
+    "null_replicates": 32,
+    "fixed_hash_salt": "M28B_V3_GENERIC_20260817",
+    "required_diagnostics": [
+      "B0_and_K_global_and_per_bin",
+      "BR_BS_exact_cardinality_and_bin_parity",
+      "rare_common_distance_summary",
+      "common_common_null_envelope_and_monte_carlo_rank",
+      "ancestry_support_of_selected_rare",
+      "capacity_for_REF_minor_copies_at_least_2"
+    ]
+  },
+  "gates": {
+    "V3_0_INPUT_IDENTITY": "All input hashes and baseline known-answer counts match exactly.",
+    "V3_1_ACCESS_BOUNDARY": "Only FREQ and REF_LAI genotypes enter allocation.",
+    "V3_2_SHARED_INTERVAL": "Every B0, BR and BS marker lies in the same authenticated interval.",
+    "V3_3_B0_ANCHOR": "B0 contains exactly 79791 unique common REF-polymorphic simulated sites.",
+    "V3_4_ARM_PARITY": "BR and BS add exactly K unique markers with identical per-bin counts and no overlap with B0.",
+    "V3_5_RARE_SCOPE": "Selected rare markers retain nonzero support in AFR, EUR and ASIA; ASIA is never relabelled NAM.",
+    "V3_6_GEOMETRY": "Rare-common p95 absolute delta and Wasserstein distance do not exceed the maxima from 32 deterministic common-common null replicates.",
+    "V3_7_REPRODUCIBILITY": "Two independent executions produce byte-identical scientific outputs.",
+    "V3_8_SCOPE": "No LAI model or truth metric is computed."
+  },
+  "allowed_decisions": [
+    "STOP_INPUT_IDENTITY",
+    "STOP_CAPACITY",
+    "STOP_PARITY",
+    "STOP_ANCESTRY_SCOPE",
+    "STOP_GEOMETRY",
+    "STOP_REPRODUCIBILITY",
+    "AUDIT_COMPLETE_PENDING_REPRODUCIBILITY",
+    "GO_PREREGISTER_GENERIC_LAI_PILOT"
+  ],
+  "stop_rule": "Stop before LAI if no preregistered width passes every gate, K is zero, any ancestry loses reference-supported rare evidence, common-common geometry fails, selection needs forbidden pools or performance, or reproducibility fails. Do not change salts, widths, null count or thresholds after inspecting outputs.",
+  "claims_excluded": [
+    "replication_of_the_real_Gnomix_baseline_geometry_or_LD",
+    "rare_variants_improve_LAI",
+    "utility_in_real_DNABR_samples",
+    "utility_specific_to_Native_American_ancestry",
+    "independent_validation_of_M14"
+  ]
+}

@@ -29,6 +29,22 @@ SCIENTIFIC_FILES_V2 = (
     "m28b_v2_BR_BS_pairs.tsv.gz",
 )
 
+SCIENTIFIC_FILES_V3 = (
+    "m28b_v3_capacity.public.json",
+    "m28b_v3_capacity_screens.tsv",
+    "m28b_v3_B0.tsv.gz",
+    "m28b_v3_BR_additions.tsv.gz",
+    "m28b_v3_BS_additions.tsv.gz",
+    "m28b_v3_BR_BS_pairs.tsv.gz",
+    "m28b_v3_common_common_null.tsv",
+)
+
+PROFILE_FILES = {
+    "v1": SCIENTIFIC_FILES,
+    "v2": SCIENTIFIC_FILES_V2,
+    "v3": SCIENTIFIC_FILES_V3,
+}
+
 
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -39,9 +55,8 @@ def sha256(path: Path) -> str:
 
 
 def locate(root: Path, name: str) -> Path:
-    direct = root / name
-    nested = root / "m28b" / name
-    matches = [path for path in (direct, nested) if path.is_file()]
+    candidates = [root / name] + [root / stage / name for stage in ("m28b", "m28b_v2", "m28b_v3")]
+    matches = [path for path in candidates if path.is_file()]
     if len(matches) != 1:
         raise ValueError(f"Expected exactly one {name} below {root}, found {len(matches)}")
     return matches[0]
@@ -73,13 +88,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run1", required=True, type=Path)
     parser.add_argument("--run2", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
-    parser.add_argument("--profile", choices=("v1", "v2"), default="v1")
+    parser.add_argument("--profile", choices=tuple(PROFILE_FILES), default="v1")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    filenames = SCIENTIFIC_FILES if args.profile == "v1" else SCIENTIFIC_FILES_V2
+    filenames = PROFILE_FILES[args.profile]
     report = verify(args.run1, args.run2, filenames)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
