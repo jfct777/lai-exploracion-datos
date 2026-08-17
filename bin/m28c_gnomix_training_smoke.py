@@ -909,9 +909,19 @@ def comparison(args: argparse.Namespace) -> dict:
     predictions_equal = max_abs <= float(tolerance["probabilities_atol"])
     generated_data_exact = None
     training_report_sha256 = None
+    resource_gate_sha256 = None
+    resources_pass = None
     if contract["stage"] == FULL_STAGE:
-        if args.train_report_a is None or args.train_report_b is None:
-            raise ValueError("Full-B0 comparison requires both training reports")
+        if any(
+            value is None
+            for value in (
+                args.train_report_a,
+                args.train_report_b,
+                args.resource_gate_a,
+                args.resource_gate_b,
+            )
+        ):
+            raise ValueError("Full-B0 comparison requires both training reports and resource gates")
         train_a = json.loads(args.train_report_a.read_text(encoding="utf-8"))
         train_b = json.loads(args.train_report_b.read_text(encoding="utf-8"))
         if train_a.get("replicate") != "A" or train_b.get("replicate") != "B":
@@ -934,6 +944,31 @@ def comparison(args: argparse.Namespace) -> dict:
             "A": sha256(args.train_report_a),
             "B": sha256(args.train_report_b),
         }
+        gate_a = json.loads(args.resource_gate_a.read_text(encoding="utf-8"))
+        gate_b = json.loads(args.resource_gate_b.read_text(encoding="utf-8"))
+        if gate_a.get("replicate") != "A" or gate_b.get("replicate") != "B":
+            raise ValueError("Resource gates are not ordered A then B")
+        if (
+            gate_a.get("decision") != "GO_LAUNCH_FULL_B0_REPLICATE_B"
+            or gate_b.get("decision") != "GO_COMPARE_FULL_B0_REPLICATES"
+        ):
+            raise ValueError("At least one full-B0 resource gate did not pass")
+        if gate_a.get("contract_sha256") != contract_sha256 or gate_b.get("contract_sha256") != contract_sha256:
+            raise ValueError("Resource-gate contract hash differs from the comparison contract")
+        if (
+            gate_a.get("train_report_sha256") != training_report_sha256["A"]
+            or gate_b.get("train_report_sha256") != training_report_sha256["B"]
+            or gate_a.get("inference_report_sha256") != sha256(args.report_a)
+            or gate_b.get("inference_report_sha256") != sha256(args.report_b)
+        ):
+            raise ValueError("Resource gates do not authenticate the compared reports")
+        resources_pass = all(gate_a.get("gates", {}).values()) and all(
+            gate_b.get("gates", {}).values()
+        )
+        resource_gate_sha256 = {
+            "A": sha256(args.resource_gate_a),
+            "B": sha256(args.resource_gate_b),
+        }
     gates = {
         "T5_INFERENCE": True,
         "T6_REPRODUCIBILITY": (
@@ -942,6 +977,7 @@ def comparison(args: argparse.Namespace) -> dict:
             and predictions_equal
             and generated_data_exact is not False
         ),
+        "T7_RESOURCES": resources_pass is not False,
         "T8_SCOPE": True,
     }
     if not all(gates.values()):
@@ -955,6 +991,7 @@ def comparison(args: argparse.Namespace) -> dict:
         "contract_sha256": contract_sha256,
         "replicate_report_sha256": {"A": sha256(args.report_a), "B": sha256(args.report_b)},
         "training_report_sha256": training_report_sha256,
+        "resource_gate_sha256": resource_gate_sha256,
         "generated_training_data_hashes_exact": generated_data_exact,
         "msp_byte_identical": msp_exact,
         "fb_metadata_exact": metadata_exact,
@@ -963,9 +1000,13 @@ def comparison(args: argparse.Namespace) -> dict:
         "model_pickle_hash_equality_required": False,
         "truth_accessed": False,
         "target_truth_accuracy_computed": False,
-        "resource_review_pending_from_nextflow_trace": True,
+        "resource_review_pending_from_nextflow_trace": resources_pass is None,
         "gates": gates,
-        "decision": "PASS_PREDICTIONS_PENDING_RESOURCE_TRACE_REVIEW",
+        "decision": (
+            "PASS_FULL_B0_TECHNICAL_BENCHMARK"
+            if contract["stage"] == FULL_STAGE
+            else "PASS_PREDICTIONS_PENDING_RESOURCE_TRACE_REVIEW"
+        ),
     }
     report_path = args.outdir / f"{report_stem(contract)}_compare.public.json"
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1038,6 +1079,8 @@ def parse_args() -> argparse.Namespace:
     compare_parser.add_argument("--report-b", required=True, type=Path)
     compare_parser.add_argument("--train-report-a", type=Path)
     compare_parser.add_argument("--train-report-b", type=Path)
+    compare_parser.add_argument("--resource-gate-a", type=Path)
+    compare_parser.add_argument("--resource-gate-b", type=Path)
     compare_parser.add_argument("--outdir", required=True, type=Path)
     compare_parser.set_defaults(function=comparison)
     return parser.parse_args()

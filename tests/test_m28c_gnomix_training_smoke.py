@@ -202,14 +202,43 @@ class TestFullComparison(unittest.TestCase):
     def arguments(self, root: Path, hash_b: str = "same") -> SimpleNamespace:
         inference_a, report_a = self.write_inference(root, "A")
         inference_b, report_b = self.write_inference(root, "B")
+        train_a = self.write_training_report(root, "A", "same")
+        train_b = self.write_training_report(root, "B", hash_b)
+        contract_hash = MODULE.sha256(
+            REPO / "conf" / "m28c_gnomix_full_b0_preregistration.json"
+        )
+
+        def write_gate(replicate: str, decision: str, train: Path, infer: Path) -> Path:
+            path = root / f"resource_gate_{replicate}.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "replicate": replicate,
+                        "decision": decision,
+                        "contract_sha256": contract_hash,
+                        "train_report_sha256": MODULE.sha256(train),
+                        "inference_report_sha256": MODULE.sha256(infer),
+                        "gates": {"F0": True, "F6": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return path
+
         return SimpleNamespace(
             preregistration=REPO / "conf" / "m28c_gnomix_full_b0_preregistration.json",
             inference_a=inference_a,
             report_a=report_a,
             inference_b=inference_b,
             report_b=report_b,
-            train_report_a=self.write_training_report(root, "A", "same"),
-            train_report_b=self.write_training_report(root, "B", hash_b),
+            train_report_a=train_a,
+            train_report_b=train_b,
+            resource_gate_a=write_gate(
+                "A", "GO_LAUNCH_FULL_B0_REPLICATE_B", train_a, report_a
+            ),
+            resource_gate_b=write_gate(
+                "B", "GO_COMPARE_FULL_B0_REPLICATES", train_b, report_b
+            ),
             outdir=root / "comparison",
         )
 
@@ -218,6 +247,8 @@ class TestFullComparison(unittest.TestCase):
             report = MODULE.comparison(self.arguments(Path(name)))
         self.assertTrue(report["generated_training_data_hashes_exact"])
         self.assertTrue(report["gates"]["T6_REPRODUCIBILITY"])
+        self.assertTrue(report["gates"]["T7_RESOURCES"])
+        self.assertEqual(report["decision"], "PASS_FULL_B0_TECHNICAL_BENCHMARK")
 
     def test_full_comparison_rejects_different_generated_training_data(self):
         with tempfile.TemporaryDirectory() as name:
