@@ -298,6 +298,12 @@ class TestV5CorrectionContract(unittest.TestCase):
                     args, expected, shared, {}, "development"
                 )
 
+    def test_non_geometry_gates_do_not_fail_only_because_selection_stops(self):
+        source = (BIN / "m28b_optimal_matching_audit.py").read_text(encoding="utf-8")
+        self.assertIn('"V5_3_DISTINCT_CARRIERS": all_distinct_carriers', source)
+        self.assertIn('len(prepared["b0"]) == 79791 and all_parity', source)
+        self.assertIn('"V5_6_ANCESTRY_SCOPE": all_ancestry', source)
+
 
 if __name__ == "__main__":
     unittest.main()

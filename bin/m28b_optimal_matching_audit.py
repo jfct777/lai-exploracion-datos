@@ -523,23 +523,25 @@ def run_development(args: argparse.Namespace, contract: dict) -> dict:
         ]
     write_json(args.outdir / f"{artifact_prefix}_frozen_selection.json", frozen)
     if version == 5:
+        all_distinct_carriers = all(
+            screen["evaluation"]["distinct_carrier_pass"] for screen in screens
+        )
+        all_parity = all(
+            screen["evaluation"]["parity_pass"] for screen in screens
+        )
+        all_ancestry = all(
+            screen["evaluation"]["ancestry_pass"] for screen in screens
+        )
         gates = {
             "V5_0_INPUT_IDENTITY": True,
             "V5_1_INDIVIDUAL_DISJUNCTION": True,
             "V5_2_ACCESS_BOUNDARY": True,
-            "V5_3_DISTINCT_CARRIERS": (
-                selected is not None
-                and selected["evaluation"]["distinct_carrier_pass"]
-            ),
+            "V5_3_DISTINCT_CARRIERS": all_distinct_carriers,
             "V5_4_DEV_SELECTION": selected is not None,
             "V5_5_B0_AND_PARITY": (
-                selected is not None
-                and len(prepared["b0"]) == 79791
-                and selected["evaluation"]["parity_pass"]
+                len(prepared["b0"]) == 79791 and all_parity
             ),
-            "V5_6_ANCESTRY_SCOPE": (
-                selected is not None and selected["evaluation"]["ancestry_pass"]
-            ),
+            "V5_6_ANCESTRY_SCOPE": all_ancestry,
             "V5_8_SCOPE": True,
         }
     else:
