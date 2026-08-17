@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import sys
 import tempfile
@@ -78,6 +79,39 @@ class TestMapAndSelection(unittest.TestCase):
     def test_mapping_fails_when_candidates_are_insufficient(self):
         queries = [MODULE.TemplatePosition(100, 0.1), MODULE.TemplatePosition(200, 0.2)]
         self.assertIsNone(MODULE.nearest_monotonic_pairs(queries, [marker(1, 100, 0.1)]))
+
+    def test_pool_loader_rejects_one_individual_crossing_roles(self):
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "pools.tsv"
+            rows = [
+                ("FREQ", "AFR", 10, 1),
+                ("REF_LAI", "AFR", 10, 2),
+            ]
+            lines = ["role\tancestry\tindividual_id\tnode_id\tnode_identity_sha256"]
+            for role, ancestry, individual, node in rows:
+                identity = hashlib.sha256(f"source-node:{node}".encode()).hexdigest()
+                lines.append(f"{role}\t{ancestry}\t{individual}\t{node}\t{identity}")
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "crosses roles"):
+                MODULE.load_allowed_pools(path, ["AFR"])
+
+    def test_pool_loader_accepts_two_nodes_per_individual_in_one_role(self):
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "pools.tsv"
+            rows = [
+                ("FREQ", "AFR", 10, 1),
+                ("FREQ", "AFR", 10, 2),
+                ("REF_LAI", "AFR", 11, 3),
+                ("REF_LAI", "AFR", 11, 4),
+            ]
+            lines = ["role\tancestry\tindividual_id\tnode_id\tnode_identity_sha256"]
+            for role, ancestry, individual, node in rows:
+                identity = hashlib.sha256(f"source-node:{node}".encode()).hexdigest()
+                lines.append(f"{role}\t{ancestry}\t{individual}\t{node}\t{identity}")
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            pools = MODULE.load_allowed_pools(path, ["AFR"])
+            self.assertEqual(pools["FREQ"]["AFR"], [1, 2])
+            self.assertEqual(pools["REF_LAI"]["AFR"], [3, 4])
 
 
 class TestCapacityMatching(unittest.TestCase):

@@ -1,0 +1,122 @@
+{
+  "stage": "M28_LAI_SIMULATION_PREFLIGHT",
+  "version": 2,
+  "status": "PRE_FROZEN_CORRECTION_BEFORE_REEXECUTION",
+  "amendment": {
+    "supersedes_version": 1,
+    "reason": "Version 1 allocated haplotype nodes independently and therefore split the two homologues of many simulated diploid individuals across FREQ, REF_LAI and DONOR.",
+    "discovery": {
+      "root_20260817_cross_role_individuals": 546,
+      "root_20260818_cross_role_individuals": 571,
+      "source_individuals_per_root": 1158
+    },
+    "impact": "M28-M28D remain technical reproducibility evidence, but their independence claims and scientific performance estimates are superseded. M14-M25 on real DNABR data are unaffected."
+  },
+  "scope": "technical_individual_disjunction_correction_smoke_only_no_lai_no_effect_estimation",
+  "estimand_for_later_stage": "Paired reduction in bp-weighted macro ancestry-dosage MAE for BR relative to BS, with B0 comparisons and boundary metrics secondary.",
+  "claims_excluded": [
+    "utility_in_real_DNABR_samples",
+    "utility_specific_to_Native_American_ancestry",
+    "biological_novelty_or_age_of_rare_alleles",
+    "independent_biological_validation_of_M14",
+    "improvement_of_LAI",
+    "SESOI_or_validation_sample_size"
+  ],
+  "software": {
+    "python": "3.11",
+    "stdpopsim": "0.3.0",
+    "msprime": "1.4.2",
+    "demographic_model": "HomSap/AmericanAdmixture_4B18",
+    "ancestry_engine": "msprime DTWF for 50 generations followed by StandardCoalescent",
+    "mutation_model": "msprime BinaryMutationModel",
+    "mutation_rate_per_bp_per_generation": 2.36e-08,
+    "mutation_rate_source": "AmericanAdmixture_4B18 catalog value from Gravel et al. 2011"
+  },
+  "region": {
+    "assembly": "GRCh38",
+    "chrom": "chr22",
+    "map_uri": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/maps/genetic.map.chr22",
+    "map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+    "start_bp": 15287922,
+    "end_bp": 50791377,
+    "length_bp_inclusive": 35503456,
+    "start_cm": 1.457757,
+    "end_cm": 74.109562,
+    "span_cm": 72.651805,
+    "coordinate_policy": "Rebase bp and cM to zero for simulation and restore the GRCh38 bp offset in exported files. Do not extrapolate outside the authenticated map interval."
+  },
+  "source_populations": {
+    "labels": ["AFR", "EUR", "ASIA"],
+    "interpretation": "Generic source populations in AmericanAdmixture_4B18. ASIA is not NAM and must never be relabelled as NAM.",
+    "pulse_generations": 12,
+    "mixture_proportions": {
+      "AFR": 0.16666666666666666,
+      "EUR": 0.3333333333333333,
+      "ASIA": 0.5
+    },
+    "rationale": "Preserve the published scenario instead of mixing it with DNABR ancestry proportions."
+  },
+  "pools": {
+    "allocation_unit": "diploid_individual",
+    "frequency_diploids": {
+      "AFR": 50,
+      "EUR": 100,
+      "ASIA": 150,
+      "total": 300,
+      "purpose": "Estimate AC, AN, minor allele, MAC and MAF only.",
+      "arithmetic": "AN=600; MAC 2-5 satisfy MAF<0.01 and MAC 6 does not."
+    },
+    "lai_reference_diploids_per_ancestry": 30,
+    "mosaic_donor_haplotypes_per_ancestry": 512,
+    "target_diploids": 30,
+    "target_haplotypes": 60,
+    "disjunction": "Assign complete diploid individuals to exactly one of FREQ, REF_LAI or DONOR; only then expand each individual to its two sample nodes.",
+    "donor_reuse_policy": "At each recombination event choose a new donor haplotype without replacement within the technical smoke. Future M28E splits must additionally keep both homologues of every DONOR individual in one role."
+  },
+  "rare_definition": {
+    "source_pool": "FREQ_only",
+    "minimum_mac": 2,
+    "maximum_maf_exclusive": 0.01,
+    "statistics": "Recompute AC and AN from phased genotypes and orient to the minor allele rather than assuming ALT is minor.",
+    "independent_carrier_policy": "M28E must require at least two independent carrier individuals or family components using TRAIN only; MAC>=2 alone is not sufficient.",
+    "target_independence": "TARGET genotypes and truth cannot filter or rank sites."
+  },
+  "mosaic_generation": {
+    "map_space": "genetic_cM",
+    "event_process": "For each target haplotype, draw recombination events as a Poisson process with mean pulse_generations times map length in Morgans.",
+    "event_action": "At every event redraw ancestry and donor; record an LAI boundary only when ancestry changes.",
+    "truth": "Half-open segments cover both target haplotypes without gaps or overlaps.",
+    "genotype_error": "none_in_correction_smoke",
+    "missingness": "none_in_correction_smoke"
+  },
+  "seeds": {
+    "root_seeds": [20260817, 20260818],
+    "role_seeds": "Derive ancestry, mutation, pool-allocation and mosaic seeds with numpy.random.SeedSequence and record them.",
+    "interpretation": "Re-use is limited to a technical paired correction smoke on already consumed roots. These roots remain permanently excluded from M28E DEV and VALID."
+  },
+  "gates": {
+    "S0_MAP": "Map identity and coordinates are exact.",
+    "S1_REPRODUCIBILITY": "The same root and contract reproduce byte-identical scientific outputs.",
+    "S2_DISJUNCTION": "Every source individual has exactly two nodes in one ancestry and exactly one role; node and individual intersections across roles are empty.",
+    "S3_PHASE_AND_TRUTH": "Genotypes are phased and truth covers both haplotypes completely.",
+    "S4_RARENESS": "Rare alleles reproduce from FREQ only with correct minor orientation.",
+    "S5_EXPOSURE": "Each ancestry has non-zero median observable rare evidence per true tract.",
+    "S6_SCOPE": "No LAI fitting, scoring, effect estimate, parameter selection or TEST opening occurs."
+  },
+  "allowed_decisions": [
+    "STOP_MAP_OR_BUILD",
+    "STOP_REPRODUCIBILITY",
+    "STOP_INDIVIDUAL_LEAKAGE",
+    "STOP_TRUTH_OR_PHASE",
+    "STOP_RARE_DEFINITION",
+    "STOP_NO_EXPOSURE",
+    "GO_REBUILD_M28B_TECHNICAL_SMOKE"
+  ],
+  "stop_rule": "Stop on any failed gate. Do not use these technical roots to select M28E performance parameters, estimate an effect, set SESOI or size DEV/VALID.",
+  "later_comparator_not_yet_authorized": {
+    "arms": ["B0_common_only", "BR_common_plus_rare", "BS_common_plus_spatially_matched_equal_count_control"],
+    "primary_metric": "paired bp-weighted macro ancestry-dosage MAE; BR versus BS is the key rare-specific contrast",
+    "secondary_metrics": ["boundary_F1_0.2_cM", "boundary_F1_0.1_and_0.5_cM_sensitivities", "site_accuracy", "macro_F1_by_ancestry"],
+    "replication_plan": "Not frozen. It must be estimated prospectively after the corrected technical smoke and a separate M28E PRE."
+  }
+}

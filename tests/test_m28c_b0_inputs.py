@@ -35,6 +35,29 @@ class TestReferencePairing(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Expected 4"):
             MODULE.pair_reference_haplotypes({"AFR": [1, 2]}, expected_haplotypes=4)
 
+    def test_pairs_exact_source_individuals_when_ids_are_available(self):
+        nodes = {"AFR": [10, 1, 7, 4]}
+        individuals = {10: 2, 1: 1, 7: 1, 4: 2}
+        pairs = MODULE.pair_reference_haplotypes(
+            nodes, expected_haplotypes=4, node_individuals=individuals
+        )
+        self.assertEqual(pairs, [
+            ("REF_AFR_000", "AFR", 1, 7),
+            ("REF_AFR_001", "AFR", 4, 10),
+        ])
+
+    def test_manifest_rejects_individual_crossing_reference_and_donor(self):
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "pools.tsv"
+            path.write_text(
+                "role\tancestry\tindividual_id\tnode_id\tnode_identity_sha256\n"
+                "REF_LAI\tAFR\t3\t10\ta\n"
+                "DONOR\tAFR\t3\t11\tb\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "crosses roles"):
+                MODULE.read_pool_manifest(path, ["AFR"])
+
 
 class TestMosaicLookup(unittest.TestCase):
     def setUp(self):

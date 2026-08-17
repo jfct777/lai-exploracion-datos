@@ -20,6 +20,57 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 CONTRACT_PATH = REPO / "conf" / "m28_lai_simulation_preflight_preregistration.json"
+CONTRACT_V2_PATH = REPO / "conf" / "m28_lai_simulation_preflight_preregistration.v2.json"
+
+
+class _FakePopulation:
+    def __init__(self, identifier: int, name: str):
+        self.id = identifier
+        self.metadata = {"name": name}
+
+
+class _FakeIndividual:
+    def __init__(self, identifier: int, nodes: tuple[int, int]):
+        self.id = identifier
+        self.nodes = nodes
+
+
+class _FakeNode:
+    def __init__(self, population: int, individual: int):
+        self.population = population
+        self.individual = individual
+        self.time = 0.0
+
+
+class _FakeTreeSequence:
+    def __init__(self):
+        self._populations = [
+            _FakePopulation(0, "AFR"),
+            _FakePopulation(1, "EUR"),
+            _FakePopulation(2, "ASIA"),
+        ]
+        self._individuals = []
+        self._nodes = {}
+        node_orders = ((0, 7), (2, 9), (4, 11), (6, 13))
+        for population in range(3):
+            for offset, nodes in enumerate(node_orders):
+                individual = population * 4 + offset
+                shifted = tuple(node + population * 20 for node in nodes)
+                self._individuals.append(_FakeIndividual(individual, shifted))
+                for node in shifted:
+                    self._nodes[node] = _FakeNode(population, individual)
+
+    def populations(self):
+        return iter(self._populations)
+
+    def individuals(self):
+        return iter(self._individuals)
+
+    def samples(self, population: int):
+        return [node for node, value in self._nodes.items() if value.population == population]
+
+    def node(self, identifier: int):
+        return self._nodes[identifier]
 
 
 class TestRareDefinition(unittest.TestCase):
@@ -107,6 +158,45 @@ class TestMosaics(unittest.TestCase):
             (0, 20, "EUR"),
             (20, 30, "AFR"),
         ])
+
+
+class TestIndividualPoolDisjunction(unittest.TestCase):
+    def setUp(self):
+        self.ts = _FakeTreeSequence()
+        self.contract = copy.deepcopy(MODULE.load_contract(CONTRACT_V2_PATH))
+        self.contract["pools"]["frequency_diploids"].update({
+            "AFR": 1, "EUR": 1, "ASIA": 1, "total": 3,
+        })
+        self.contract["pools"]["lai_reference_diploids_per_ancestry"] = 1
+        self.contract["pools"]["mosaic_donor_haplotypes_per_ancestry"] = 4
+
+    def test_allocation_keeps_both_homologues_in_one_role(self):
+        pools = MODULE.allocate_pools(self.ts, self.contract, 20260817)
+        audit = MODULE.audit_pool_disjunction(self.ts, pools)
+        self.assertEqual(audit["cross_role_individuals"], 0)
+        self.assertEqual(audit["individuals_by_role"], {
+            "DONOR": 6,
+            "FREQ": 3,
+            "REF_LAI": 3,
+        })
+        for individual in self.ts.individuals():
+            roles = {
+                role
+                for role, ancestry_pools in pools.items()
+                for nodes in ancestry_pools.values()
+                if set(individual.nodes) & set(nodes)
+            }
+            self.assertEqual(len(roles), 1)
+
+    def test_audit_detects_distinct_homologues_split_across_roles(self):
+        pools = {
+            "FREQ": {"AFR": [0], "EUR": [], "ASIA": []},
+            "REF_LAI": {"AFR": [7], "EUR": [], "ASIA": []},
+            "DONOR": {"AFR": [], "EUR": [], "ASIA": []},
+        }
+        audit = MODULE.audit_pool_disjunction(self.ts, pools)
+        self.assertEqual(audit["cross_role_individuals"], 1)
+        self.assertEqual(audit["cross_role_examples"][0]["roles"], ["FREQ", "REF_LAI"])
 
 
 class TestTinyIntegration(unittest.TestCase):

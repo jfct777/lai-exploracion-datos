@@ -116,21 +116,53 @@ def deterministic_gzip_text(path: Path) -> Iterator[TextIO]:
 
 def load_allowed_pools(path: Path, labels: Iterable[str]) -> dict[str, dict[str, list[int]]]:
     allowed_roles = {"FREQ", "REF_LAI"}
+    all_roles = allowed_roles | {"DONOR"}
     label_set = set(labels)
     pools = {role: {label: [] for label in label_set} for role in allowed_roles}
+    individual_assignments: dict[int, tuple[str, str, list[int]]] = {}
     with path.open(encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
-        required = {"role", "ancestry", "node_id", "haplotype_sha256"}
-        if set(reader.fieldnames or []) != required:
+        columns = set(reader.fieldnames or [])
+        legacy_columns = {"role", "ancestry", "node_id", "haplotype_sha256"}
+        individual_columns = {
+            "role", "ancestry", "individual_id", "node_id", "node_identity_sha256"
+        }
+        if columns not in (legacy_columns, individual_columns):
             raise ValueError("Unexpected pool-manifest columns")
         for row in reader:
             role = row["role"]
-            if role not in allowed_roles:
-                continue
+            if role not in all_roles:
+                raise ValueError(f"Unexpected pool role: {role}")
             ancestry = row["ancestry"]
             if ancestry not in label_set:
-                raise ValueError(f"Unexpected ancestry in allowed pool: {ancestry}")
-            pools[role][ancestry].append(int(row["node_id"]))
+                raise ValueError(f"Unexpected ancestry in pool manifest: {ancestry}")
+            node = int(row["node_id"])
+            if columns == individual_columns:
+                expected_identity = hashlib.sha256(f"source-node:{node}".encode()).hexdigest()
+                if row["node_identity_sha256"] != expected_identity:
+                    raise ValueError(f"Node identity hash mismatch for node {node}")
+                individual = int(row["individual_id"])
+                assigned = individual_assignments.setdefault(
+                    individual, (role, ancestry, [])
+                )
+                if assigned[:2] != (role, ancestry):
+                    raise ValueError(
+                        f"Individual {individual} crosses roles or ancestries"
+                    )
+                assigned[2].append(node)
+            if role in allowed_roles:
+                pools[role][ancestry].append(node)
+    if individual_assignments:
+        incomplete = {
+            individual: nodes
+            for individual, (_, _, nodes) in individual_assignments.items()
+            if len(nodes) != 2 or len(set(nodes)) != 2
+        }
+        if incomplete:
+            raise ValueError(
+                f"Pool manifest does not keep exactly two unique nodes per individual: "
+                f"{list(incomplete)[:5]}"
+            )
     for role in allowed_roles:
         for ancestry in label_set:
             if not pools[role][ancestry]:

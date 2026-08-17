@@ -223,10 +223,68 @@ def simulate_sources(genetic_map: GeneticMap, contract: dict, seeds: dict[str, i
     return tables.tree_sequence()
 
 
-def allocate_pools(ts, contract: dict, pool_seed: int) -> dict[str, dict[str, list[int]]]:
-    import numpy as np
+def _population_individuals(ts, population_id: int) -> list[tuple[int, tuple[int, int]]]:
+    """Return diploid source individuals and their two sample nodes."""
+    result: list[tuple[int, tuple[int, int]]] = []
+    sample_nodes = set(map(int, ts.samples(population=population_id)))
+    for individual in ts.individuals():
+        nodes = tuple(int(node) for node in individual.nodes if int(node) in sample_nodes)
+        if not nodes:
+            continue
+        if len(nodes) != 2:
+            raise ValueError(
+                f"Source individual {individual.id} has {len(nodes)} sampled haplotypes; expected 2"
+            )
+        if any(ts.node(node).population != population_id for node in nodes):
+            raise ValueError(f"Source individual {individual.id} crosses populations")
+        node_times = {float(ts.node(node).time) for node in nodes}
+        if node_times != {0.0}:
+            raise ValueError(
+                f"Source individual {individual.id} is not a present-day diploid sample"
+            )
+        result.append((int(individual.id), (nodes[0], nodes[1])))
+    observed_nodes = [node for _, nodes in result for node in nodes]
+    if set(observed_nodes) != sample_nodes or len(observed_nodes) != len(sample_nodes):
+        raise ValueError("Could not map every source haplotype to one diploid individual")
+    return result
 
-    rng = np.random.default_rng(pool_seed)
+
+def _allocate_individual_pools(
+    ts, contract: dict, rng
+) -> dict[str, dict[str, list[int]]]:
+    """Allocate complete diploid individuals, never single homologues, to roles."""
+    populations = {population.metadata["name"]: population.id for population in ts.populations()}
+    pools = {name: {} for name in ("FREQ", "REF_LAI", "DONOR")}
+    freq = contract["pools"]["frequency_diploids"]
+    ref_diploids = int(contract["pools"]["lai_reference_diploids_per_ancestry"])
+    donor_haps = int(contract["pools"]["mosaic_donor_haplotypes_per_ancestry"])
+    if donor_haps % 2:
+        raise ValueError("The donor haplotype count must be even")
+    donor_diploids = donor_haps // 2
+
+    for ancestry in contract["source_populations"]["labels"]:
+        individuals = _population_individuals(ts, populations[ancestry])
+        rng.shuffle(individuals)
+        freq_count = int(freq[ancestry])
+        expected = freq_count + ref_diploids + donor_diploids
+        if len(individuals) != expected:
+            raise ValueError(
+                f"Expected {expected} {ancestry} individuals, observed {len(individuals)}"
+            )
+        role_individuals = {
+            "FREQ": individuals[:freq_count],
+            "REF_LAI": individuals[freq_count:freq_count + ref_diploids],
+            "DONOR": individuals[freq_count + ref_diploids:],
+        }
+        for role, rows in role_individuals.items():
+            pools[role][ancestry] = [node for _, nodes in rows for node in nodes]
+    return pools
+
+
+def _allocate_legacy_haplotype_pools(
+    ts, contract: dict, rng
+) -> dict[str, dict[str, list[int]]]:
+    """Reproduce the version-1 technical smoke allocation exactly."""
     populations = {population.metadata["name"]: population.id for population in ts.populations()}
     pools = {name: {} for name in ("FREQ", "REF_LAI", "DONOR")}
     freq = contract["pools"]["frequency_diploids"]
@@ -242,10 +300,59 @@ def allocate_pools(ts, contract: dict, pool_seed: int) -> dict[str, dict[str, li
         pools["FREQ"][ancestry] = nodes[:freq_haps]
         pools["REF_LAI"][ancestry] = nodes[freq_haps:freq_haps + ref_haps]
         pools["DONOR"][ancestry] = nodes[freq_haps + ref_haps:]
+    return pools
+
+
+def allocate_pools(ts, contract: dict, pool_seed: int) -> dict[str, dict[str, list[int]]]:
+    import numpy as np
+
+    rng = np.random.default_rng(pool_seed)
+    allocation_unit = contract["pools"].get("allocation_unit")
+    if allocation_unit is None and int(contract.get("version", 0)) == 1:
+        pools = _allocate_legacy_haplotype_pools(ts, contract, rng)
+    elif allocation_unit == "diploid_individual":
+        pools = _allocate_individual_pools(ts, contract, rng)
+    else:
+        raise ValueError("Unsupported or missing pools.allocation_unit")
     flat = [node for role in pools.values() for nodes in role.values() for node in nodes]
     if len(flat) != len(set(flat)):
         raise ValueError("A source node was assigned to more than one pool")
     return pools
+
+
+def audit_pool_disjunction(ts, pools: dict[str, dict[str, list[int]]]) -> dict:
+    """Audit role overlap at both haplotype-node and diploid-individual levels."""
+    node_roles: dict[int, str] = {}
+    individual_roles: dict[int, set[str]] = {}
+    role_individuals: dict[str, set[int]] = {role: set() for role in pools}
+    for role, ancestry_pools in pools.items():
+        for nodes in ancestry_pools.values():
+            for node in nodes:
+                if node in node_roles:
+                    raise ValueError(f"Source node {node} appears in multiple roles")
+                node_roles[node] = role
+                individual = int(ts.node(node).individual)
+                if individual < 0:
+                    raise ValueError(f"Source node {node} has no individual")
+                individual_roles.setdefault(individual, set()).add(role)
+                role_individuals[role].add(individual)
+    crossing = {
+        individual: sorted(roles)
+        for individual, roles in individual_roles.items()
+        if len(roles) > 1
+    }
+    return {
+        "source_nodes": len(node_roles),
+        "source_individuals": len(individual_roles),
+        "individuals_by_role": {
+            role: len(individuals) for role, individuals in sorted(role_individuals.items())
+        },
+        "cross_role_individuals": len(crossing),
+        "cross_role_examples": [
+            {"individual_id": individual, "roles": roles}
+            for individual, roles in sorted(crossing.items())[:10]
+        ],
+    }
 
 
 def draw_mosaics(
@@ -346,15 +453,16 @@ def write_segments(path: Path, mosaics: list[list[MosaicSegment]], genetic_map: 
                 ))
 
 
-def write_pool_manifest(path: Path, pools: dict[str, dict[str, list[int]]]) -> None:
+def write_pool_manifest(path: Path, pools: dict[str, dict[str, list[int]]], ts) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
-        writer.writerow(("role", "ancestry", "node_id", "haplotype_sha256"))
+        writer.writerow(("role", "ancestry", "individual_id", "node_id", "node_identity_sha256"))
         for role in sorted(pools):
             for ancestry in sorted(pools[role]):
                 for node in pools[role][ancestry]:
-                    fingerprint = hashlib.sha256(f"source-node:{node}".encode()).hexdigest()
-                    writer.writerow((role, ancestry, node, fingerprint))
+                    individual = int(ts.node(node).individual)
+                    node_identity = hashlib.sha256(f"source-node:{node}".encode()).hexdigest()
+                    writer.writerow((role, ancestry, individual, node, node_identity))
 
 
 def segment_at(segments: list[MosaicSegment], offset: int, pointer: int) -> tuple[MosaicSegment, int]:
@@ -468,6 +576,10 @@ def run(args: argparse.Namespace) -> dict:
     args.outdir.mkdir(parents=True, exist_ok=False)
     ts = simulate_sources(genetic_map, contract, seeds)
     pools = allocate_pools(ts, contract, seeds["pool"])
+    disjunction = audit_pool_disjunction(ts, pools)
+    allocation_unit = contract["pools"].get("allocation_unit", "legacy_haplotype_node")
+    if allocation_unit == "diploid_individual" and disjunction["cross_role_individuals"]:
+        raise RuntimeError("INDIVIDUAL_ROLE_OVERLAP")
     mosaics = draw_mosaics(genetic_map, pools["DONOR"], contract, seeds["mosaic"])
     for segments in mosaics:
         validate_segment_cover(segments, genetic_map.length_bp)
@@ -475,7 +587,7 @@ def run(args: argparse.Namespace) -> dict:
     ts_path = args.outdir / "m28_sources.trees"
     ts.dump(ts_path)
     pool_path = args.outdir / "m28_pools.private.tsv"
-    write_pool_manifest(pool_path, pools)
+    write_pool_manifest(pool_path, pools, ts)
     write_segments(args.outdir / "m28_mosaic_events.private.tsv.gz", mosaics, genetic_map)
     truth = [merge_truth(segments) for segments in mosaics]
     write_segments(args.outdir / "m28_lai_truth.tsv.gz", truth, genetic_map)
@@ -483,7 +595,11 @@ def run(args: argparse.Namespace) -> dict:
     gates = {
         "S0_MAP": True,
         "S1_REPRODUCIBILITY": None,
-        "S2_DISJUNCTION": True,
+        "S2_DISJUNCTION": (
+            disjunction["cross_role_individuals"] == 0
+            if allocation_unit == "diploid_individual"
+            else True
+        ),
         "S3_PHASE_AND_TRUTH": True,
         "S4_RARENESS": set(exposure["mac_histogram"]).issubset({"2", "3", "4", "5"}),
         "S5_EXPOSURE": all(value > 0 for value in exposure["median_observable_rare_copies_per_truth_tract"].values()),
@@ -498,6 +614,8 @@ def run(args: argparse.Namespace) -> dict:
         "derived_seeds": seeds,
         "software": contract["software"],
         "source_diploid_counts": source_diploid_counts(contract),
+        "pool_allocation_unit": allocation_unit,
+        "pool_disjunction": disjunction,
         "sequence_length": int(ts.sequence_length),
         "trees": ts.num_trees,
         "sites": ts.num_sites,

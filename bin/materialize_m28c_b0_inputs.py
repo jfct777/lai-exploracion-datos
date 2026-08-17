@@ -80,11 +80,21 @@ def read_b0_markers(path: Path, expected_count: int) -> list[tuple[int, int]]:
 
 def read_pool_manifest(
     path: Path, ancestries: list[str]
-) -> tuple[dict[str, list[int]], dict[int, tuple[str, str]]]:
+) -> tuple[dict[str, list[int]], dict[int, tuple[str, str]], dict[int, int]]:
     nodes = {ancestry: [] for ancestry in ancestries}
     roles: dict[int, tuple[str, str]] = {}
+    node_individuals: dict[int, int] = {}
+    individual_assignments: dict[int, tuple[str, str, list[int]]] = {}
     with path.open("r", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle, delimiter="\t"):
+        reader = csv.DictReader(handle, delimiter="\t")
+        columns = set(reader.fieldnames or [])
+        legacy_columns = {"role", "ancestry", "node_id", "haplotype_sha256"}
+        individual_columns = {
+            "role", "ancestry", "individual_id", "node_id", "node_identity_sha256"
+        }
+        if columns not in (legacy_columns, individual_columns):
+            raise ValueError("Unexpected pool-manifest columns")
+        for row in reader:
             node = int(row["node_id"])
             ancestry = row["ancestry"]
             role = row["role"]
@@ -93,13 +103,36 @@ def read_pool_manifest(
             if node in roles:
                 raise ValueError(f"Source node {node} appears in more than one pool")
             roles[node] = (role, ancestry)
+            if columns == individual_columns:
+                individual = int(row["individual_id"])
+                node_individuals[node] = individual
+                assigned = individual_assignments.setdefault(
+                    individual, (role, ancestry, [])
+                )
+                if assigned[:2] != (role, ancestry):
+                    raise ValueError(
+                        f"Source individual {individual} crosses roles or ancestries"
+                    )
+                assigned[2].append(node)
             if row["role"] == "REF_LAI":
                 nodes[ancestry].append(node)
-    return nodes, roles
+    if individual_assignments:
+        incomplete = {
+            individual: values[2]
+            for individual, values in individual_assignments.items()
+            if len(values[2]) != 2 or len(set(values[2])) != 2
+        }
+        if incomplete:
+            raise ValueError(
+                "Pool manifest does not keep exactly two unique nodes per individual: "
+                f"{list(incomplete)[:5]}"
+            )
+    return nodes, roles, node_individuals
 
 
 def pair_reference_haplotypes(
-    nodes: dict[str, list[int]], expected_haplotypes: int
+    nodes: dict[str, list[int]], expected_haplotypes: int,
+    node_individuals: dict[int, int] | None = None,
 ) -> list[tuple[str, str, int, int]]:
     pairs: list[tuple[str, str, int, int]] = []
     observed: list[int] = []
@@ -110,10 +143,34 @@ def pair_reference_haplotypes(
                 f"Expected {expected_haplotypes} REF_LAI haplotypes for {ancestry}, "
                 f"observed {len(ordered)}"
             )
-        for index in range(0, len(ordered), 2):
-            sample = f"REF_{ancestry}_{index // 2:03d}"
-            pairs.append((sample, ancestry, ordered[index], ordered[index + 1]))
-            observed.extend(ordered[index:index + 2])
+        if node_individuals:
+            by_individual: dict[int, list[int]] = {}
+            for node in ordered:
+                if node not in node_individuals:
+                    raise ValueError(f"REF_LAI node {node} has no source individual")
+                by_individual.setdefault(node_individuals[node], []).append(node)
+            malformed = {
+                individual: values
+                for individual, values in by_individual.items()
+                if len(values) != 2
+            }
+            if malformed:
+                raise ValueError(
+                    f"REF_LAI individuals do not have two homologues: {list(malformed)[:5]}"
+                )
+            ancestry_pairs = [
+                tuple(sorted(values))
+                for _, values in sorted(by_individual.items())
+            ]
+        else:
+            ancestry_pairs = [
+                (ordered[index], ordered[index + 1])
+                for index in range(0, len(ordered), 2)
+            ]
+        for index, (left, right) in enumerate(ancestry_pairs):
+            sample = f"REF_{ancestry}_{index:03d}"
+            pairs.append((sample, ancestry, left, right))
+            observed.extend((left, right))
     if len(observed) != len(set(observed)):
         raise ValueError("A REF_LAI haplotype was reused")
     return pairs
@@ -240,9 +297,13 @@ def materialize(args: argparse.Namespace) -> dict:
     marker_by_site = dict(markers)
     marker_sites = set(marker_by_site)
     ancestries = list(contract["ancestries"])
-    reference_nodes, pool_roles = read_pool_manifest(args.pool_manifest, ancestries)
+    reference_nodes, pool_roles, node_individuals = read_pool_manifest(
+        args.pool_manifest, ancestries
+    )
     reference_pairs = pair_reference_haplotypes(
-        reference_nodes, int(expected["reference_haplotypes_per_ancestry"])
+        reference_nodes,
+        int(expected["reference_haplotypes_per_ancestry"]),
+        node_individuals,
     )
     mosaics = read_mosaics(args.mosaic_events)
     target_pairs = pair_target_haplotypes(mosaics, int(expected["target_haplotypes"]))
