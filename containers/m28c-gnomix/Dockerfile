@@ -18,6 +18,11 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && cd /opt/gnomix \
     && python -c "import allel, sklearn, xgboost; from src.utils import read_vcf"
 
+COPY bin/audit_m28c_gnomix_runtime.py /tmp/audit_m28c_gnomix_runtime.py
+RUN cd /opt/gnomix \
+    && PYTHONPATH=/opt/gnomix python /tmp/audit_m28c_gnomix_runtime.py --output /opt/gnomix/GNOMIX_RUNTIME_AUDIT.json \
+    && chmod 0444 /opt/gnomix/GNOMIX_RUNTIME_AUDIT.json
+
 # Nextflow uses ps from procps to collect task-level CPU and memory metrics.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends procps \
@@ -28,4 +33,5 @@ WORKDIR /opt/gnomix
 
 LABEL org.opencontainers.image.source="https://github.com/AI-sandbox/gnomix" \
       org.opencontainers.image.revision="e758f2c8108b660c6321c6a1b168b3a79e85a02d" \
-      org.opencontainers.image.title="DNABR M28C Gnomix audit environment"
+      org.opencontainers.image.title="DNABR M28C Gnomix audit environment" \
+      org.opencontainers.image.sklearn="1.7.2"

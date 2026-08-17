@@ -102,6 +102,8 @@ class TestContract(unittest.TestCase):
         contract = MODULE.load_contract(
             REPO / "conf" / "m28c_gnomix_training_smoke_preregistration.json"
         )
+        self.assertEqual(contract["version"], 2)
+        self.assertEqual(len(contract["amendment_history"]), 2)
         self.assertEqual(contract["subset"]["markers"], 10000)
         self.assertEqual(contract["subset"]["bins"], 363)
         self.assertEqual(
@@ -111,6 +113,10 @@ class TestContract(unittest.TestCase):
         self.assertIn("target_vcf", contract["execution"]["training_forbidden_inputs"])
         self.assertIn("truth", contract["execution"]["training_forbidden_inputs"])
         self.assertIn("synthetic admixed haplotypes", contract["execution"]["internal_validation_policy"])
+        self.assertEqual(contract["software"]["scikit_learn"], "1.7.2")
+        self.assertEqual(
+            contract["software"]["container_image"], "dnabr-m28c-gnomix:e758f2c-r4"
+        )
 
     def test_config_hash_is_frozen(self):
         contract = json.loads(

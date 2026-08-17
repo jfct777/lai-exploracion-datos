@@ -71,7 +71,7 @@ def load_contract(path: Path) -> dict:
     contract = json.loads(path.read_text(encoding="utf-8"))
     if contract.get("stage") != STAGE:
         raise ValueError(f"Unexpected contract stage: {contract.get('stage')!r}")
-    if contract.get("status") != "PRE_FROZEN_BEFORE_IMPLEMENTATION":
+    if contract.get("status") != "PRE_FROZEN_AMENDED_BEFORE_SUCCESSFUL_TRAINING":
         raise ValueError("Training-smoke contract is not frozen")
     return contract
 
@@ -449,6 +449,17 @@ def training(args: argparse.Namespace) -> dict:
     require_hash(args.sample_map, authenticated["sample_map_sha256"], "sample map")
     require_hash(args.genetic_map, authenticated["genetic_map_sha256"], "genetic map")
     require_hash(args.gnomix_config, authenticated["gnomix_config_sha256"], "Gnomix config")
+    runtime_audit_path = args.gnomix_root / "GNOMIX_RUNTIME_AUDIT.json"
+    require_hash(
+        runtime_audit_path,
+        contract["software"]["runtime_known_answer_sha256"],
+        "Gnomix runtime known-answer audit",
+    )
+    runtime_audit = json.loads(runtime_audit_path.read_text(encoding="utf-8"))
+    if runtime_audit.get("decision") != "PASS_GNOMIX_LIBLINEAR_OVR_RUNTIME":
+        raise ValueError("Gnomix runtime known-answer audit did not pass")
+    if runtime_audit.get("scikit_learn_version") != contract["software"]["scikit_learn"]:
+        raise ValueError("Gnomix runtime scikit-learn version differs from the contract")
     args.outdir.mkdir(parents=True, exist_ok=False)
     stdout_path = args.outdir / "gnomix_train.stdout.log"
     stderr_path = args.outdir / "gnomix_train.stderr.log"
@@ -485,6 +496,8 @@ def training(args: argparse.Namespace) -> dict:
         "prepare_report_sha256": sha256(args.prepare_report),
         "prepared_reference_sha256": prepared["output_sha256"][args.reference_vcf.name],
         "gnomix_config_sha256": sha256(args.gnomix_config),
+        "runtime_known_answer_sha256": sha256(runtime_audit_path),
+        "runtime_known_answer_decision": runtime_audit["decision"],
         "model_relative_path": str(model_path.relative_to(args.outdir)),
         "model_sha256": sha256(model_path),
         "duration_seconds_internal": duration,

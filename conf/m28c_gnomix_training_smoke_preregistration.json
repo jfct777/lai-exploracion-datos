@@ -1,9 +1,23 @@
 {
   "stage": "M28C_GNOMIX_TRAINING_SMOKE",
-  "version": 1,
-  "status": "PRE_FROZEN_BEFORE_IMPLEMENTATION",
+  "version": 2,
+  "status": "PRE_FROZEN_AMENDED_BEFORE_SUCCESSFUL_TRAINING",
   "scope": "technical_training_serialization_reload_and_inference_only_no_target_truth_accuracy_or_effect_estimation",
   "question": "Can the pinned Gnomix implementation train, serialize, reload and infer reproducibly from the simulated B0 interface before full-panel compute is authorized?",
+  "amendment_history": [
+    {
+      "run": "run1",
+      "outcome": "STOP_T1_BEFORE_TRAINING",
+      "cause": "The B0 table used chr22 while the normalized VCF used 22; bcftools correctly returned no records for the mismatched literal contig.",
+      "delta": "Infer and validate the single REF/TARGET VCF contig, then write that literal contig to the region file. Marker selection and scientific parameters are unchanged."
+    },
+    {
+      "run": "run2",
+      "outcome": "STOP_T3_BEFORE_MODEL_SERIALIZATION_OR_TARGET_INFERENCE",
+      "cause": "scikit-learn 1.9.0 removed multiclass liblinear support required by the unchanged Gnomix LogisticRegressionBase.",
+      "delta": "Pin scikit-learn 1.7.2 in image r4 and require an embedded three-class known-answer audit. Gnomix source, estimator, seed, markers, parameters and resources are unchanged."
+    }
+  ],
   "claims_excluded": [
     "B0_local_ancestry_accuracy",
     "B0_ceiling_or_headroom",
@@ -23,13 +37,15 @@
     "gnomix_config_sha256": "374c830181f8e3542c4d4fbbe35770487fc2b651666a1a013a2b7c03a28d767b"
   },
   "software": {
-    "container_image": "dnabr-m28c-gnomix:e758f2c-r3",
-    "container_sha256": "sha256:faae6a8104e451c51fe6055d124b693608f335fc04405e3cc77aff3bfd413e91",
+    "container_image": "dnabr-m28c-gnomix:e758f2c-r4",
+    "container_sha256": "sha256:0691d58732a4deb16125059658618d794997338de7e630255559b1832775a2a4",
     "gnomix_commit": "e758f2c8108b660c6321c6a1b168b3a79e85a02d",
+    "runtime_known_answer_sha256": "b49109e1d1056dbdc640687f908104ae0e4efa12f6ac8c7392c72cc9e9432ba4",
+    "runtime_compatibility_policy": "Gnomix source is unchanged. scikit-learn 1.7.2 is pinned because 1.8+ removed the legacy multiclass liblinear OVR path used by this Gnomix commit. All future B0/BR/BS arms must use this exact image.",
     "python": "3.13.15",
     "bcftools": "1.16",
     "scikit_allel": "1.3.13",
-    "scikit_learn": "1.9.0",
+    "scikit_learn": "1.7.2",
     "xgboost_cpu": "3.4.1"
   },
   "source_panel": {
