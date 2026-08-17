@@ -1,0 +1,19 @@
+{
+  "stage": "M28_LAI_SIMULATION_PREFLIGHT",
+  "amendment": 1,
+  "timing": "after two completed technical runs and before closing gate S1",
+  "original_contract_sha256": "a7b8937912086bec8aca16083cdd00f3127445ffa533de03ce97b3039b6155cc",
+  "reason": "tskit writes a new file_uuid at serialization, so byte equality of .trees files is not a valid test of scientific reproducibility even when every table is identical.",
+  "delta": "For m28_sources.trees require TreeSequence.equals() and record both file UUIDs and hashes. Continue requiring byte-identical SHA-256 for pools, mosaic events, LAI truth, rare catalog, rare haplotypes and the public preflight report.",
+  "unchanged": [
+    "demography",
+    "map",
+    "mutation_rate",
+    "pool_sizes",
+    "rare_definition",
+    "mosaic_process",
+    "root_and_derived_seeds",
+    "all_other_gates"
+  ],
+  "forbidden": "Do not ignore a difference in any tree-sequence table or any derived scientific artifact."
+}

@@ -1,0 +1,119 @@
+{
+  "stage": "M28_LAI_SIMULATION_PREFLIGHT",
+  "version": 1,
+  "status": "PRE_FROZEN_BEFORE_IMPLEMENTATION",
+  "scope": "technical_simulation_preflight_only_no_lai_no_effect_estimation",
+  "estimand_for_later_stage": "Paired change in local-ancestry labels and boundary error when minor alleles with MAC >= 2 and MAF < 0.01, defined only in an independent frequency pool, are added to the same common-marker LAI baseline and compared with a spatially matched equal-count marker control.",
+  "claims_excluded": [
+    "utility_in_real_DNABR_samples",
+    "utility_specific_to_Native_American_ancestry",
+    "biological_novelty_or_age_of_rare_alleles",
+    "independent_biological_validation_of_M14",
+    "improvement_of_LAI_before_the_later_comparator_is_run"
+  ],
+  "software": {
+    "python": "3.11",
+    "stdpopsim": "0.3.0",
+    "msprime": "1.4.2",
+    "demographic_model": "HomSap/AmericanAdmixture_4B18",
+    "ancestry_engine": "msprime DTWF for 50 generations followed by StandardCoalescent",
+    "mutation_model": "msprime BinaryMutationModel",
+    "mutation_rate_per_bp_per_generation": 2.36e-08,
+    "mutation_rate_source": "AmericanAdmixture_4B18 catalog value from Gravel et al. 2011"
+  },
+  "region": {
+    "assembly": "GRCh38",
+    "chrom": "chr22",
+    "map_uri": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/maps/genetic.map.chr22",
+    "map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+    "start_bp": 15287922,
+    "end_bp": 50791377,
+    "length_bp_inclusive": 35503456,
+    "start_cm": 1.457757,
+    "end_cm": 74.109562,
+    "span_cm": 72.651805,
+    "coordinate_policy": "Rebase bp and cM to zero for simulation and restore the GRCh38 bp offset in exported files. Do not extrapolate outside the authenticated map interval."
+  },
+  "source_populations": {
+    "labels": ["AFR", "EUR", "ASIA"],
+    "interpretation": "Generic source populations in the published AmericanAdmixture_4B18 model. ASIA is not NAM and must never be relabelled as NAM.",
+    "pulse_generations": 12,
+    "mixture_proportions": {
+      "AFR": 0.16666666666666666,
+      "EUR": 0.3333333333333333,
+      "ASIA": 0.5
+    },
+    "rationale": "Use the published scenario's own pulse time and proportions instead of combining DNABR proportions with an Asian proxy."
+  },
+  "pools": {
+    "frequency_diploids": {
+      "AFR": 50,
+      "EUR": 100,
+      "ASIA": 150,
+      "total": 300,
+      "purpose": "Estimate AC, AN, minor allele, MAC and MAF only.",
+      "arithmetic": "AN=600; MAC 2-5 satisfy MAF<0.01 and MAC 6 does not. Counts preserve the published 1/6, 1/3, 1/2 mixture exactly."
+    },
+    "lai_reference_diploids_per_ancestry": 30,
+    "mosaic_donor_haplotypes_per_ancestry": 512,
+    "target_diploids": 30,
+    "target_haplotypes": 60,
+    "disjunction": "FREQ, REF_LAI and DONOR are disjoint source nodes and haplotype fingerprints. TARGET is constructed only from DONOR and is never used to estimate frequency or select sites.",
+    "donor_reuse_policy": "At each recombination event choose a new donor haplotype without replacement within the seed. Stop if any ancestry exhausts its donor pool."
+  },
+  "rare_definition": {
+    "source_pool": "FREQ_only",
+    "minimum_mac": 2,
+    "maximum_maf_exclusive": 0.01,
+    "statistics": "Recompute AC and AN from phased genotypes; orient the encoded allele to the minor allele rather than assuming ALT is minor.",
+    "target_independence": "A selected site remains selected even when absent from all targets. Target genotypes and truth cannot filter or rank sites."
+  },
+  "mosaic_generation": {
+    "map_space": "genetic_cM",
+    "event_process": "For each target haplotype, draw recombination events as a Poisson process with mean pulse_generations times the map length in Morgans.",
+    "event_action": "At every event redraw ancestry from the frozen mixture and always change donor haplotype. Record an LAI boundary only when the ancestry label changes; retain silent within-ancestry donor switches in the audit trail.",
+    "truth": "Half-open segments cover each target haplotype from start_bp through end_bp without gaps or overlaps; adjacent segments with the same ancestry are merged only in the exported LAI truth.",
+    "genotype_error": "none_in_preflight",
+    "missingness": "none_in_preflight"
+  },
+  "seeds": {
+    "root_seeds": [20260817, 20260818],
+    "role_seeds": "Derive distinct ancestry, mutation, pool-allocation and mosaic seeds with numpy.random.SeedSequence; write all derived values to provenance.",
+    "interpretation": "Both are technical smoke seeds and are permanently excluded from later DEV and TEST inference."
+  },
+  "gates": {
+    "S0_MAP": "Map hash, chr22 interval, strictly increasing bp, non-decreasing cM and coordinate restoration are exact.",
+    "S1_REPRODUCIBILITY": "Pinned software and the same root seed reproduce byte-identical scientific outputs; changing the seed changes at least the tree sequence or mosaics.",
+    "S2_DISJUNCTION": "No source node or haplotype fingerprint crosses FREQ, REF_LAI and DONOR; donor selection does not reuse a haplotype within one seed.",
+    "S3_PHASE_AND_TRUTH": "All exported genotypes are phased and biallelic; truth covers 100 percent of both haplotypes of every target without gaps or overlaps; silent recombinations are not counted as LAI boundaries.",
+    "S4_RARENESS": "AC, AN, minor orientation, MAC and MAF reproduce exactly from FREQ; every selected site has MAC 2-5 and MAF<0.01; no target or truth value enters selection.",
+    "S5_EXPOSURE": "Report rare-site count, MAC spectrum, carrier ancestry, rare markers represented in REF_LAI and DONOR, markers per true tract and transitions by ancestry. Each ancestry must have non-zero median observable rare evidence per true tract.",
+    "S6_SCOPE": "No LAI program, model fitting, performance comparison, error injection, NAM claim or TEST opening occurs in this stage."
+  },
+  "allowed_decisions": [
+    "STOP_MAP_OR_BUILD",
+    "STOP_REPRODUCIBILITY",
+    "STOP_LEAKAGE",
+    "STOP_DONOR_FINGERPRINT",
+    "STOP_TRUTH_OR_PHASE",
+    "STOP_RARE_DEFINITION",
+    "STOP_NO_EXPOSURE",
+    "GO_DESIGN_LAI_COMPARATOR"
+  ],
+  "stop_rule": "Any failed gate stops before LAI. Do not replace a failing seed, relax rare thresholds or inspect performance. A design correction requires a new preregistration version and a new technical smoke.",
+  "later_comparator_not_yet_authorized": {
+    "arms": [
+      "B0_common_only",
+      "BR_common_plus_rare",
+      "BS_common_plus_spatially_matched_equal_count_control"
+    ],
+    "primary_metric": "paired ancestry-dosage error by seed",
+    "secondary_metrics": [
+      "boundary_distance_cM",
+      "transition_precision_recall",
+      "site_accuracy",
+      "macro_F1_by_ancestry"
+    ],
+    "replication_plan_candidate": "10 DEV seeds and 20 sealed TEST seeds; the seed is the independent unit. This requires a separate PRE after the smoke and resource benchmark."
+  }
+}
