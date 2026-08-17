@@ -34,6 +34,11 @@ class TestM28BV5NextflowContract(unittest.TestCase):
         self.assertGreaterEqual(self.module.count("--preflight-reproducibility"), 2)
         self.assertIn("m28_lai_simulation_preflight_preregistration.v2.json", self.config)
 
+    def test_validation_is_not_submitted_after_dev_stop(self):
+        self.assertIn("frozenForValidation", self.workflow)
+        self.assertIn("selection.frozen_K != null", self.workflow)
+        self.assertIn("channel.value(preregistration), frozenForValidation", self.workflow)
+
     def test_scope_excludes_lai_target_and_truth_inputs(self):
         process_inputs = {
             line.strip().removeprefix("path ")

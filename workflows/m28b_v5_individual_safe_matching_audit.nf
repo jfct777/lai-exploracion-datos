@@ -67,12 +67,16 @@ workflow {
         channel.value(manifestPy), WRITE_M28B_V5_RUN_PROVENANCE.out,
         channel.value(provenanceB64),
     )
+    def frozenForValidation = RUN_M28B_V5_DEVELOPMENT.out.frozen.filter { frozen ->
+        def selection = new groovy.json.JsonSlurper().parse(frozen.toFile())
+        selection.frozen_K != null
+    }
     RUN_M28B_V5_VALIDATION(
         channel.value(validationTree), channel.value(validationPools),
         channel.value(validationReport), channel.value(validationManifest),
         channel.value(reproducibility), channel.value(geneticMap),
         channel.value(baselineTemplate), channel.value(m28Preregistration),
-        channel.value(preregistration), RUN_M28B_V5_DEVELOPMENT.out.frozen,
+        channel.value(preregistration), frozenForValidation,
         channel.value(auditV5Py), channel.value(auditV3Py), channel.value(auditV2Py),
         channel.value(auditV1Py), channel.value(m28Py), channel.value(manifestPy),
         WRITE_M28B_V5_RUN_PROVENANCE.out, channel.value(provenanceB64),

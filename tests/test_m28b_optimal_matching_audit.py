@@ -193,6 +193,26 @@ class TestV5CorrectionContract(unittest.TestCase):
         self.assertEqual(len(files), 14)
         self.assertIn("m28b_v5_frozen_selection.json", files)
         self.assertIn("m28b_v5_validation.public.json", files)
+        dev_files = VERIFY.PROFILE_FILES["v5-dev"]
+        self.assertEqual(len(dev_files), 8)
+        self.assertNotIn("m28b_v5_validation.public.json", dev_files)
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            run_a, run_b = root / "a", root / "b"
+            run_a.mkdir()
+            run_b.mkdir()
+            for filename in dev_files:
+                (run_a / filename).write_text("same", encoding="utf-8")
+                (run_b / filename).write_text("same", encoding="utf-8")
+            report = VERIFY.verify(
+                run_a,
+                run_b,
+                dev_files,
+                "DEV_REPRODUCIBILITY_CONFIRMED",
+            )
+            self.assertEqual(
+                report["decision"], "DEV_REPRODUCIBILITY_CONFIRMED"
+            )
 
     def test_one_homozygous_carrier_is_rejected_but_two_carriers_pass(self):
         m28_contract = {

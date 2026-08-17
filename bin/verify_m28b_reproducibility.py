@@ -73,12 +73,15 @@ SCIENTIFIC_FILES_V5 = (
     "m28b_v5_validation_common_common_null.tsv",
 )
 
+SCIENTIFIC_FILES_V5_DEV = SCIENTIFIC_FILES_V5[:8]
+
 PROFILE_FILES = {
     "v1": SCIENTIFIC_FILES,
     "v2": SCIENTIFIC_FILES_V2,
     "v3": SCIENTIFIC_FILES_V3,
     "v4": SCIENTIFIC_FILES_V4,
     "v5": SCIENTIFIC_FILES_V5,
+    "v5-dev": SCIENTIFIC_FILES_V5_DEV,
 }
 
 
@@ -104,7 +107,12 @@ def locate(root: Path, name: str) -> Path:
     return matches[0]
 
 
-def verify(run1: Path, run2: Path, filenames=SCIENTIFIC_FILES) -> dict:
+def verify(
+    run1: Path,
+    run2: Path,
+    filenames=SCIENTIFIC_FILES,
+    success_decision: str = "GO_PREREGISTER_LAI_COMPARATOR",
+) -> dict:
     files = {}
     for name in filenames:
         left = locate(run1, name)
@@ -121,7 +129,7 @@ def verify(run1: Path, run2: Path, filenames=SCIENTIFIC_FILES) -> dict:
         "stage": "M28B_REPRODUCIBILITY_AUDIT",
         "files": files,
         "gate": "PASS" if passed else "FAIL",
-        "decision": "GO_PREREGISTER_LAI_COMPARATOR" if passed else "STOP_REPRODUCIBILITY",
+        "decision": success_decision if passed else "STOP_REPRODUCIBILITY",
     }
 
 
@@ -137,7 +145,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     filenames = PROFILE_FILES[args.profile]
-    report = verify(args.run1, args.run2, filenames)
+    success_decision = (
+        "DEV_REPRODUCIBILITY_CONFIRMED"
+        if args.profile == "v5-dev"
+        else "GO_PREREGISTER_LAI_COMPARATOR"
+    )
+    report = verify(args.run1, args.run2, filenames, success_decision)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps({"decision": report["decision"], "gate": report["gate"]}, sort_keys=True))
