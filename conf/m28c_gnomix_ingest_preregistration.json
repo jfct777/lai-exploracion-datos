@@ -1,0 +1,34 @@
+{
+  "stage": "M28C_B0_GNOMIX_INGEST_AUDIT",
+  "scope": "technical_ingest_only_no_training_no_truth_no_effect_estimation",
+  "root_seed": 20260818,
+  "seed_role": "technical_smoke_excluded_from_inference",
+  "expected": {
+    "markers": 79791,
+    "reference_samples": 90,
+    "target_samples": 30,
+    "ploidy": 2,
+    "chromosome": "22",
+    "ref": "A",
+    "alt": "C"
+  },
+  "software": {
+    "gnomix_repository": "https://github.com/AI-sandbox/gnomix",
+    "gnomix_commit": "e758f2c8108b660c6321c6a1b168b3a79e85a02d",
+    "loader": "src.utils.read_vcf",
+    "compression": "BGZF",
+    "index": "Tabix TBI"
+  },
+  "gates": {
+    "G0_UPSTREAM": "The M28C materialization report passed and authenticates both input VCF hashes.",
+    "G1_SOFTWARE": "The container contains the exact preregistered Gnomix commit and reports bcftools/scikit-allel versions.",
+    "G2_BGZF_TABIX": "Both VCFs are rewritten as BGZF, pass bcftools validation and have readable TBI indexes.",
+    "G3_EXACT_LOADER": "The exact preregistered Gnomix loader reads all 79791 markers and the expected phased diploid sample shapes.",
+    "G4_EFFECTIVE_PARITY": "Reference and target retain identical ordered POS/REF/ALT arrays after ingestion, without missing or non-binary genotypes.",
+    "G5_SCOPE": "No model training, truth table, BR/BS channel or effect metric is read or produced."
+  },
+  "decision": {
+    "pass": "GO_B0_GNOMIX_TRAINING_PREREGISTRATION",
+    "fail": "STOP_M28C_GNOMIX_INGEST"
+  }
+}

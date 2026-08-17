@@ -1,0 +1,59 @@
+{
+  "stage": "M28C_B0_INPUT_PREFLIGHT",
+  "scope": "technical_smoke_only_no_LAI_no_effect_estimation",
+  "root_seed": 20260818,
+  "seed_role": "technical_smoke_excluded_from_inference",
+  "chromosome": "22",
+  "ancestries": ["AFR", "EUR", "ASIA"],
+  "expected": {
+    "b0_markers": 79791,
+    "reference_haplotypes_per_ancestry": 60,
+    "reference_pseudodiploids_per_ancestry": 30,
+    "target_haplotypes": 60,
+    "target_diploids": 30
+  },
+  "inputs": {
+    "tree_sequence_sha256": "a46e843dd11624c3a1b8436326c6b5cb95df08a16f65825b0f9fe16529c66bae",
+    "pool_manifest_sha256": "ce028465c50385e4de0da87384532e815230dd0dc7e8464133eae4fe3598be3f",
+    "mosaic_events_sha256": "326ae73c8ebe49a4bb57e1fee81629d9a81c5d61ab662ad5411ae45807036e69",
+    "b0_markers_sha256": "73a8c07deb3dc7fb749ab68f287cb0b77a3af0ec9ef19e1bd412590ff5f29202"
+  },
+  "coordinate_contract": {
+    "tree_sequence_start_bp": 15287922,
+    "tree_sequence_end_bp_exclusive": 50791378,
+    "hg38_chr22_length_bp": 50818468,
+    "vcf_contig": "22",
+    "build": "hg38",
+    "ref_allele": "A",
+    "alt_allele": "C",
+    "note": "The simulation is binary. A/C are deterministic VCF encodings of tree-sequence states 0/1, not inferred nucleotide identities."
+  },
+  "reference_pairing": {
+    "rule": "Sort REF_LAI node IDs within ancestry and pair consecutive haplotypes into phased pseudodiploids.",
+    "reason": "M28 allocates independent haplotypes; Gnomix consumes diploid phased VCF samples. Pairing within ancestry preserves every selected haplotype exactly once."
+  },
+  "access_boundary": {
+    "marker_selection_inputs": ["FREQ-derived frozen B0 table", "REF_LAI support already frozen by M28B-v4"],
+    "materialization_inputs": ["m28_sources.trees", "m28_pools.private.tsv", "m28_mosaic_events.private.tsv.gz", "frozen B0 table"],
+    "forbidden_inputs": ["m28_lai_truth.tsv.gz", "M28 TARGET genotypes for marker selection", "LAI predictions", "BR", "BS"],
+    "truth_opening": "The merged m28_lai_truth table remains unopened. The isolated constructor reads generative mosaic events to copy donor haplotypes; ancestry is reconstructible there but is not used for marker selection, model fitting or parameter choice."
+  },
+  "gates": {
+    "I0_HASHES": "All four authenticated inputs match the preregistered SHA-256 values.",
+    "I1_B0_CARDINALITY": "The frozen B0 table contains exactly 79791 unique, ordered sites and every site is materialized.",
+    "I2_ROLE_BOUNDARY": "Reference genotypes use REF_LAI only; every target segment uses a unique DONOR node whose pool ancestry matches the event ancestry.",
+    "I3_REFERENCE": "Exactly 60 phased REF_LAI haplotypes per ancestry become 30 pseudodiploids per ancestry without reuse.",
+    "I4_TARGET": "Exactly 60 target haplotypes become 30 phased diploids; every mosaic covers the full simulated interval without gaps or overlaps.",
+    "I5_INTERNAL_VCF": "A second parser confirms identical ordered positions, no missing calls and valid phased diploid genotypes in reference and target VCFs.",
+    "I6_SCOPE": "The merged truth table, LAI model, BR/BS features and effect metrics are not read or produced; generative events are isolated to genotype reconstruction."
+  },
+  "decision": {
+    "pass": "GO_EXTERNAL_GNOMIX_INGEST_VALIDATION",
+    "fail": "STOP_M28C_INPUT_PREFLIGHT"
+  },
+  "gnomix_source": {
+    "repository": "https://github.com/AI-sandbox/gnomix",
+    "commit": "e758f2c8108b660c6321c6a1b168b3a79e85a02d",
+    "note": "This preflight does not execute Gnomix. A separate gate must validate BGZF, Tabix and the exact Gnomix loader before training."
+  }
+}
