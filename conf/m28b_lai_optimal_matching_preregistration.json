@@ -1,0 +1,89 @@
+{
+  "stage": "M28B_V4_LAI_OPTIMAL_MATCHING_AUDIT",
+  "version": 4,
+  "status": "PRE_FROZEN_BEFORE_IMPLEMENTATION",
+  "scope": "technical_dev_and_single_validation_of_generic_marker_geometry_no_lai",
+  "development_inputs": {
+    "root_seed": 20260817,
+    "tree_sequence_sha256": "adcdd8aa75a114a26d6629f03d838880abcd279834c69e5cff80087797e11574",
+    "pool_manifest_sha256": "8a6e38b682e429556ffef52d0f6e7086137fda8e3a855ac78cf0983282afe57d"
+  },
+  "validation_inputs": {
+    "root_seed": 20260818,
+    "tree_sequence_sha256": "a46e843dd11624c3a1b8436326c6b5cb95df08a16f65825b0f9fe16529c66bae",
+    "pool_manifest_sha256": "ce028465c50385e4de0da87384532e815230dd0dc7e8464133eae4fe3598be3f",
+    "preflight_manifest_sha256": "6d233933f4fe3abbd8fed980990115801f3352d38fa70aeba256575734449538"
+  },
+  "shared_inputs": {
+    "genetic_map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+    "m28_preflight_contract_sha256": "a7b8937912086bec8aca16083cdd00f3127445ffa533de03ce97b3039b6155cc",
+    "baseline_template": {
+      "uri": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/vcf_fixed/dnabr.refpop.fixed.chr22.vcf.gz",
+      "sha256": "1b9e7b23a6e046185056271513589d03c24406e5100606d078973a58d36e6afd",
+      "records": 110074,
+      "unique_positions": 110074,
+      "first_position": 16385840,
+      "last_position": 50784700,
+      "known_answer_ref_polymorphic": 79791,
+      "known_answer_ref_monomorphic": 30283
+    }
+  },
+  "pool_access": {
+    "allowed": ["FREQ", "REF_LAI"],
+    "forbidden": ["DONOR", "TARGET", "mosaic_events", "lai_truth"]
+  },
+  "marker_definitions": {
+    "rare_universe": "MAC>=2 and MAF<0.01 in FREQ, minor allele oriented from GT, with at least one minor copy in pooled REF_LAI.",
+    "common_universe": "MAF>=0.01 in FREQ, with both the FREQ-oriented minor allele and its complement observed in pooled REF_LAI.",
+    "b0": "Exactly 79791 common-universe sites, allocated by Hamilton across 0.05 cM bins and selected by fixed hash before any matching.",
+    "br": "B0 plus K rare sites selected by fixed hash within each bin before matching.",
+    "bs": "B0 plus K unique common-reserve controls selected by exact one-dimensional minimum-cost matching."
+  },
+  "development": {
+    "bin_width_cm": 0.05,
+    "bin_origin": "cM interpolated at baseline first_position",
+    "b0_target_count": 79791,
+    "capacity_fractions": [0.25, 0.5, 0.75, 1.0],
+    "fraction_denominator": "C=sum_b min(rare_b, common_reserve_b, B0_b); target K=floor(f*C); distribute exact K across bin capacities with Hamilton largest remainders.",
+    "selection_rule": "Evaluate all four nested fractions only in seed 20260817 and freeze the largest fraction passing both geometry gates. Freeze its exact global K for validation.",
+    "rare_selection": "Rank rare sites by fixed SHA-256 within bin and retain the bin quota before viewing common-marker distances.",
+    "matching_objective": "Among common-reserve sites in the same bin, select the ordered unique subsequence minimizing sum(abs(rare_cm-control_cm)). Dynamic-programming ties retain the earlier candidate ordered by cM, bp and site_id.",
+    "null_rule": "For each of 32 fixed hash replicates, select common pseudo-queries from B0 with the same per-bin K and run the identical exact matching algorithm against the common reserve.",
+    "null_replicates": 32,
+    "fixed_hash_salt": "M28B_V4_OPTIMAL_20260817"
+  },
+  "validation": {
+    "configuration": "Run exactly once on seed 20260818 using width 0.05 cM, the frozen exact global K and the same salts, algorithms and 32 nulls.",
+    "K_allocation": "If validation total capacity is at least frozen K, distribute that exact K across validation bins by Hamilton using their preregistered capacity weights. Otherwise STOP_CAPACITY.",
+    "prohibited_after_validation": [
+      "reduce_K",
+      "change_fraction",
+      "change_bin_width",
+      "change_null_count_or_salts",
+      "change_geometry_gate",
+      "try_another_seed"
+    ]
+  },
+  "geometry_gate": {
+    "p95": "Observed rare-common p95 absolute delta cM must not exceed the maximum p95 among 32 common-common null replicates.",
+    "wasserstein": "Observed rare-common Wasserstein distance cM must not exceed the maximum among the same 32 common-common null replicates.",
+    "pass": "Both conditions must pass."
+  },
+  "gates": {
+    "V4_0_INPUT_IDENTITY": "All shared, DEV and validation hashes match exactly.",
+    "V4_1_ACCESS_BOUNDARY": "Only FREQ and REF_LAI enter selection.",
+    "V4_2_DEV_SELECTION": "At least one frozen fraction passes both geometry gates in DEV.",
+    "V4_3_B0_AND_PARITY": "B0 is exactly 79791; BR and BS add the same K with identical bin quotas and no overlaps.",
+    "V4_4_ANCESTRY_SCOPE": "Selected rare sites retain nonzero AFR, EUR and ASIA support without relabelling ASIA as NAM.",
+    "V4_5_VALIDATION_GEOMETRY": "The single untouched validation passes both geometry gates with frozen K.",
+    "V4_6_REPRODUCIBILITY": "Two independent workflow executions are byte-identical for scientific outputs.",
+    "V4_7_SCOPE": "No LAI or truth metric is computed."
+  },
+  "stop_rule": "STOP BS without further iteration if no fraction passes DEV, validation capacity is below frozen K, validation fails either geometry metric, any forbidden pool is read, or reproducibility fails.",
+  "claims_excluded": [
+    "rare_variants_improve_LAI",
+    "replication_of_real_Gnomix_geometry_or_LD",
+    "utility_in_DNABR_or_Native_American_ancestry",
+    "independent_validation_of_M14"
+  ]
+}
