@@ -2,8 +2,10 @@
 .nextflow
 .codegraph
 graphify-out
+results
 work
 nxf_work*
+.claude
 *.log
 __pycache__
 *.pyc

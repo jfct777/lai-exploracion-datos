@@ -39,7 +39,7 @@ class TestFullResourceGate(unittest.TestCase):
             json.dumps(
                 {
                     "stage": "M28C_GNOMIX_FULL_B0_RESOURCE_BENCHMARK",
-                    "status": "PRE_FROZEN_BEFORE_FULL_B0",
+                    "status": "PRE_FROZEN_AMENDED_BEFORE_SUCCESSFUL_FULL_B0",
                     "gnomix_parameters": {"derived_expected": dimensions},
                     "source_panel": {"target_samples": 30},
                 }

@@ -1,0 +1,36 @@
+diff --git a/src/laidataset.py b/src/laidataset.py
+--- a/src/laidataset.py
++++ b/src/laidataset.py
+@@ -8,0 +9,29 @@
++BREAKPOINT_PROBABILITY_TOLERANCE = 1e-12
++
++
++def normalize_breakpoint_probability(lengths):
++    """Normalize interpolated interval lengths while rejecting material negatives."""
++    lengths = np.asarray(lengths, dtype=np.float64)
++    if lengths.ndim != 1 or lengths.size == 0 or not np.isfinite(lengths).all():
++        raise ValueError("Breakpoint interval lengths must be a finite nonempty vector")
++    total = float(lengths.sum())
++    if not np.isfinite(total) or total <= 0.0:
++        raise ValueError("Breakpoint interval lengths must have a positive finite sum")
++    raw = lengths / total
++    negative = raw[raw < 0.0]
++    minimum = float(raw.min())
++    negative_mass = float(-negative.sum()) if negative.size else 0.0
++    if minimum < -BREAKPOINT_PROBABILITY_TOLERANCE:
++        raise ValueError(f"Materially negative breakpoint probability: {minimum}")
++    if negative_mass > BREAKPOINT_PROBABILITY_TOLERANCE:
++        raise ValueError(f"Material negative breakpoint mass: {negative_mass}")
++    corrected = np.clip(raw, 0.0, None)
++    corrected_total = float(corrected.sum())
++    if not np.isfinite(corrected_total) or corrected_total <= 0.0:
++        raise ValueError("Corrected breakpoint probabilities have an invalid sum")
++    corrected /= corrected_total
++    if not np.isfinite(corrected).all() or np.any(corrected < 0.0):
++        raise ValueError("Corrected breakpoint probabilities are invalid")
++    return corrected
++
++
+@@ -40 +69 @@
+-    bp = lengths / lengths.sum()
++    bp = normalize_breakpoint_probability(lengths)

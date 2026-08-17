@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from src.Base.models import LogisticRegressionBase
+from src.laidataset import BREAKPOINT_PROBABILITY_TOLERANCE, normalize_breakpoint_probability
 
 
 def array_sha256(value: np.ndarray) -> str:
@@ -63,8 +64,46 @@ def fit_once(features: np.ndarray, labels: np.ndarray) -> LogisticRegressionBase
     return model
 
 
+def audit_breakpoint_guard() -> dict:
+    valid = np.asarray([0.25, 0.25, 0.5], dtype=np.float64)
+    valid_corrected = normalize_breakpoint_probability(valid)
+    if not np.array_equal(valid, valid_corrected):
+        raise ValueError("Breakpoint guard changed an exactly valid distribution")
+
+    epsilon = np.finfo(np.float64).eps
+    roundoff = np.asarray([0.5, -epsilon, 0.5], dtype=np.float64)
+    roundoff_corrected = normalize_breakpoint_probability(roundoff)
+    if np.any(roundoff_corrected < 0.0) or abs(float(roundoff_corrected.sum()) - 1.0) > 1e-15:
+        raise ValueError("Breakpoint guard did not normalize floating-point roundoff")
+
+    material_rejected = False
+    try:
+        normalize_breakpoint_probability(np.asarray([0.5, -1e-6, 0.5], dtype=np.float64))
+    except ValueError:
+        material_rejected = True
+    if not material_rejected:
+        raise ValueError("Breakpoint guard accepted a materially negative probability")
+
+    patch_path = Path("/opt/gnomix/GNOMIX_PATCH_SHA256")
+    if not patch_path.is_file():
+        raise ValueError("Gnomix numerical patch receipt is missing")
+    patch_sha256 = patch_path.read_text(encoding="ascii").strip()
+    if len(patch_sha256) != 64:
+        raise ValueError("Gnomix numerical patch receipt is malformed")
+    return {
+        "tolerance": BREAKPOINT_PROBABILITY_TOLERANCE,
+        "valid_distribution_exact": True,
+        "roundoff_negative_count": int((roundoff < 0.0).sum()),
+        "roundoff_corrected_nonnegative": True,
+        "roundoff_corrected_sum": float(roundoff_corrected.sum()),
+        "material_negative_rejected": material_rejected,
+        "patch_sha256": patch_sha256,
+    }
+
+
 def audit() -> dict:
     features, labels = known_answer_data()
+    breakpoint_guard = audit_breakpoint_guard()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         first = fit_once(features, labels)
@@ -111,8 +150,9 @@ def audit() -> dict:
         "coefficients_sha256": array_sequence_sha256(coefficients),
         "intercepts_sha256": array_sequence_sha256(intercepts),
         "parent_process_warnings": sorted({str(item.message) for item in caught}),
+        "breakpoint_probability_guard": breakpoint_guard,
         "expected_worker_warning": "scikit-learn 1.7.2 deprecates multiclass liblinear OVR and announces removal in 1.8; version 1.7.2 is intentionally pinned.",
-        "decision": "PASS_GNOMIX_LIBLINEAR_OVR_RUNTIME",
+        "decision": "PASS_GNOMIX_RUNTIME_WITH_NUMERIC_GUARD",
     }
 
 

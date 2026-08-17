@@ -21,7 +21,7 @@ def audit(trace: Path, train_report: Path, infer_report: Path, contract_path: Pa
     contract_hash = sha256(contract_path)
     if (
         contract.get("stage") != "M28C_GNOMIX_FULL_B0_RESOURCE_BENCHMARK"
-        or contract.get("status") != "PRE_FROZEN_BEFORE_FULL_B0"
+        or contract.get("status") != "PRE_FROZEN_AMENDED_BEFORE_SUCCESSFUL_FULL_B0"
     ):
         raise ValueError("Unexpected or unfrozen full-B0 contract")
     if train.get("replicate") != replicate or infer.get("replicate") != replicate:

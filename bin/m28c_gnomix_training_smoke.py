@@ -23,7 +23,7 @@ STAGE = "M28C_GNOMIX_TRAINING_SMOKE"
 FULL_STAGE = "M28C_GNOMIX_FULL_B0_RESOURCE_BENCHMARK"
 VALID_CONTRACTS = {
     STAGE: "PRE_FROZEN_AMENDED_BEFORE_SUCCESSFUL_TRAINING",
-    FULL_STAGE: "PRE_FROZEN_BEFORE_FULL_B0",
+    FULL_STAGE: "PRE_FROZEN_AMENDED_BEFORE_SUCCESSFUL_FULL_B0",
 }
 
 
@@ -250,6 +250,80 @@ def calculate_dimensions(marker_count: int, genetic_map: Path, contract: dict) -
     }
 
 
+def audit_breakpoint_probability_map(
+    genetic_map: Path,
+    variant_positions: list[int],
+    chromosome: str,
+    probability_tolerance: float,
+    negative_mass_tolerance: float,
+) -> dict:
+    import numpy as np
+    import scipy.interpolate
+
+    map_positions = []
+    map_cm = []
+    with genetic_map.open("r", encoding="utf-8", newline="") as handle:
+        for row_number, row in enumerate(csv.reader(handle, delimiter="\t"), start=1):
+            if len(row) != 3 or canonical_autosome(row[0]) != canonical_autosome(chromosome):
+                raise ValueError(f"Invalid genetic-map row {row_number}")
+            map_positions.append(int(row[1]))
+            map_cm.append(float(row[2]))
+    positions = np.asarray(map_positions, dtype=np.int64)
+    cm = np.asarray(map_cm, dtype=np.float64)
+    variants = np.asarray(variant_positions, dtype=np.int64)
+    if len(positions) < 2 or not np.isfinite(cm).all():
+        raise ValueError("Genetic map must contain at least two finite rows")
+    if np.any(np.diff(positions) <= 0):
+        raise ValueError("Genetic-map physical positions are not strictly increasing")
+    if np.any(np.diff(cm) < 0.0):
+        raise ValueError("Genetic-map cM positions are decreasing")
+    if variants[0] < positions[0] or variants[-1] > positions[-1]:
+        raise ValueError("B0 markers fall outside the genetic-map domain")
+
+    interpolator = scipy.interpolate.interp1d(positions, cm, fill_value="extrapolate")
+    interpolated = interpolator(variants)
+    lengths = np.diff(interpolated)
+    total = float(lengths.sum())
+    if not np.isfinite(lengths).all() or not np.isfinite(total) or total <= 0.0:
+        raise ValueError("Interpolated genetic intervals are invalid")
+    raw = lengths / total
+    negative = raw[raw < 0.0]
+    negative_mass = float(-negative.sum()) if negative.size else 0.0
+    minimum = float(raw.min())
+    if minimum < -probability_tolerance or negative_mass > negative_mass_tolerance:
+        raise ValueError(
+            f"Material negative breakpoint probability: minimum={minimum}, mass={negative_mass}"
+        )
+    clipped = np.clip(raw, 0.0, None)
+    normalization_factor = float(clipped.sum())
+    corrected = clipped / normalization_factor
+    if not np.isfinite(corrected).all() or np.any(corrected < 0.0):
+        raise ValueError("Corrected breakpoint probabilities are invalid")
+
+    from src.laidataset import get_chm_info
+
+    _, production = get_chm_info(genetic_map, variants, int(canonical_autosome(chromosome)))
+    if not np.array_equal(production, corrected):
+        raise ValueError("Gnomix breakpoint guard differs from the audited correction")
+    return {
+        "map_rows": len(positions),
+        "map_cm_ties": int((np.diff(cm) == 0.0).sum()),
+        "markers_within_map_domain": True,
+        "intervals": len(raw),
+        "raw_minimum_probability": minimum,
+        "raw_probability_sum": float(raw.sum()),
+        "negative_probability_count": int(negative.size),
+        "negative_probability_mass": negative_mass,
+        "probability_tolerance": probability_tolerance,
+        "negative_mass_tolerance": negative_mass_tolerance,
+        "clipped_probability_mass": negative_mass,
+        "normalization_factor": normalization_factor,
+        "corrected_probability_sum": float(corrected.sum()),
+        "l1_change": float(np.abs(corrected - raw).sum()),
+        "production_guard_exact": True,
+    }
+
+
 def write_subset_inputs(
     source: Path,
     destination: Path,
@@ -435,6 +509,19 @@ def validate_full(args: argparse.Namespace) -> dict:
     assert_phased_complete(args.reference_vcf, len(markers), len(reference_samples))
     assert_phased_complete(args.target_vcf, len(markers), len(target_samples))
 
+    guard_contract = contract["numerical_guard"]
+    breakpoint_audit = audit_breakpoint_probability_map(
+        args.genetic_map,
+        expected_positions,
+        reference_contigs[0],
+        float(guard_contract["probability_tolerance"]),
+        float(guard_contract["negative_mass_tolerance"]),
+    )
+    if breakpoint_audit["negative_probability_count"] != int(
+        guard_contract["expected_negative_probability_count"]
+    ):
+        raise ValueError("Observed breakpoint roundoff count differs from the frozen expectation")
+
     calculated = calculate_dimensions(len(markers), args.genetic_map, contract)
     expected_dimensions = contract["gnomix_parameters"]["derived_expected"]
     if calculated != expected_dimensions:
@@ -462,6 +549,7 @@ def validate_full(args: argparse.Namespace) -> dict:
             "terminal_window_markers": calculated["terminal_window_markers"],
             "modeled_markers": calculated["modeled_markers"],
         },
+        "breakpoint_probability_audit": breakpoint_audit,
         "target_used_for_training": False,
         "truth_accessed": False,
         "model_training_performed": False,
@@ -561,10 +649,18 @@ def training(args: argparse.Namespace) -> dict:
         "Gnomix runtime known-answer audit",
     )
     runtime_audit = json.loads(runtime_audit_path.read_text(encoding="utf-8"))
-    if runtime_audit.get("decision") != "PASS_GNOMIX_LIBLINEAR_OVR_RUNTIME":
+    expected_runtime_decision = contract["software"].get(
+        "runtime_known_answer_decision", "PASS_GNOMIX_LIBLINEAR_OVR_RUNTIME"
+    )
+    if runtime_audit.get("decision") != expected_runtime_decision:
         raise ValueError("Gnomix runtime known-answer audit did not pass")
     if runtime_audit.get("scikit_learn_version") != contract["software"]["scikit_learn"]:
         raise ValueError("Gnomix runtime scikit-learn version differs from the contract")
+    expected_patch = contract["software"].get("gnomix_patch_sha256")
+    if expected_patch is not None and runtime_audit.get("breakpoint_probability_guard", {}).get(
+        "patch_sha256"
+    ) != expected_patch:
+        raise ValueError("Gnomix numerical patch differs from the contract")
     args.outdir.mkdir(parents=True, exist_ok=False)
     stdout_path = args.outdir / "gnomix_train.stdout.log"
     stderr_path = args.outdir / "gnomix_train.stderr.log"
