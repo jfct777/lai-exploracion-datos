@@ -94,6 +94,10 @@ class TestPredictionParsers(unittest.TestCase):
 
 
 class TestContract(unittest.TestCase):
+    def test_canonical_contig_equivalence(self):
+        self.assertEqual(MODULE.canonical_autosome("chr22"), "22")
+        self.assertEqual(MODULE.canonical_autosome("22"), "22")
+
     def test_frozen_scope_and_dimensions(self):
         contract = MODULE.load_contract(
             REPO / "conf" / "m28c_gnomix_training_smoke_preregistration.json"

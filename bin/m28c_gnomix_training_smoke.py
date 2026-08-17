@@ -179,6 +179,15 @@ def bcftools_positions(path: Path) -> list[int]:
     return [int(value) for value in output.splitlines()]
 
 
+def bcftools_contigs(path: Path) -> list[str]:
+    output = run_command(["bcftools", "query", "-f", "%CHROM\n", str(path)])
+    return sorted(set(output.splitlines()))
+
+
+def canonical_autosome(value: str) -> str:
+    return value.removeprefix("chr")
+
+
 def bcftools_samples(path: Path) -> list[str]:
     output = run_command(["bcftools", "query", "-l", str(path)])
     return output.splitlines()
@@ -248,6 +257,16 @@ def prepare(args: argparse.Namespace) -> dict:
         raise ValueError("Reference VCF positions differ from the authenticated B0 table")
     if bcftools_positions(args.target_vcf) != full_positions:
         raise ValueError("Target VCF positions differ from the authenticated B0 table")
+    reference_contigs = bcftools_contigs(args.reference_vcf)
+    target_contigs = bcftools_contigs(args.target_vcf)
+    if len(reference_contigs) != 1 or target_contigs != reference_contigs:
+        raise ValueError(
+            f"REF/TARGET must share exactly one contig; REF={reference_contigs}, TARGET={target_contigs}"
+        )
+    vcf_contig = reference_contigs[0]
+    table_contigs = sorted({marker["chrom"] for marker in markers})
+    if len(table_contigs) != 1 or canonical_autosome(table_contigs[0]) != canonical_autosome(vcf_contig):
+        raise ValueError(f"B0 table and VCF contigs differ: table={table_contigs}, VCF={vcf_contig}")
 
     sample_map = read_sample_map(args.sample_map)
     reference_samples = bcftools_samples(args.reference_vcf)
@@ -278,7 +297,7 @@ def prepare(args: argparse.Namespace) -> dict:
     regions_path = args.outdir / "m28c_b0_smoke_regions.tsv"
     with regions_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
-        writer.writerows((marker["chrom"], marker["position"], marker["position"]) for marker in selected)
+        writer.writerows((vcf_contig, marker["position"], marker["position"]) for marker in selected)
 
     reference_subset = args.outdir / "m28c_b0_smoke_reference.vcf.gz"
     target_subset = args.outdir / "m28c_b0_smoke_target.vcf.gz"
@@ -328,6 +347,8 @@ def prepare(args: argparse.Namespace) -> dict:
             "selected_per_bin_max": max(item["selected"] for item in bin_audit),
             "first_position": selected[0]["position"],
             "last_position": selected[-1]["position"],
+            "b0_table_contig": table_contigs[0],
+            "vcf_contig": vcf_contig,
         },
         "reference_samples": len(reference_samples),
         "target_samples": len(target_samples),
