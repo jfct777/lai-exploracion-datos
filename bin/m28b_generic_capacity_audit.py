@@ -232,6 +232,14 @@ def public_screen(result: dict) -> dict:
     return {key: value for key, value in result.items() if key not in excluded}
 
 
+def aggregate_gate(screens: list[dict], primary: dict | None, key: str) -> bool:
+    """Report a passed construction gate even when a later gate blocks primary selection."""
+
+    if primary is not None:
+        return bool(primary[key])
+    return any(bool(screen[key]) for screen in screens)
+
+
 def write_screen_table(path: Path, screens: list[dict]) -> None:
     columns = [
         "bin_width_cm", "pass", "B0", "K", "sensitivity_REF2_K_capacity",
@@ -351,16 +359,22 @@ def run(args: argparse.Namespace) -> dict:
     br_ids = {marker.site_id for marker in br}
     bs_ids = {marker.site_id for marker in bs}
     interval_pass = all(first_bp <= marker.bp <= last_bp for marker in b0 + br + bs)
-    b0_pass = bool(primary) and len(b0) == target_b0 and len(b0_ids) == target_b0
-    parity_pass = (
+    selected_b0_pass = bool(primary) and len(b0) == target_b0 and len(b0_ids) == target_b0
+    selected_parity_pass = (
         bool(primary)
         and len(br) == len(bs) > 0
         and len(br_ids) == len(br)
         and len(bs_ids) == len(bs)
         and not (b0_ids & br_ids or b0_ids & bs_ids or br_ids & bs_ids)
     )
-    ancestry_pass = bool(primary) and primary["ancestry_pass"]
-    geometry_pass = bool(primary) and primary["geometry_pass"]
+    b0_pass = aggregate_gate(screens, primary, "b0_pass") and (
+        selected_b0_pass if primary is not None else True
+    )
+    parity_pass = aggregate_gate(screens, primary, "parity_pass") and (
+        selected_parity_pass if primary is not None else True
+    )
+    ancestry_pass = aggregate_gate(screens, primary, "ancestry_pass")
+    geometry_pass = aggregate_gate(screens, primary, "geometry_pass")
     gates = {
         "V3_0_INPUT_IDENTITY": True,
         "V3_1_ACCESS_BOUNDARY": True,

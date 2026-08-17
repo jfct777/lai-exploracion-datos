@@ -97,6 +97,11 @@ class TestGenericAllocation(unittest.TestCase):
     def test_monte_carlo_rank_has_finite_sample_correction(self):
         self.assertEqual(MODULE.monte_carlo_rank(5.0, [1.0, 2.0, 6.0]), 0.5)
 
+    def test_later_failure_does_not_erase_earlier_gate(self):
+        screens = [{"b0_pass": True, "geometry_pass": False}]
+        self.assertTrue(MODULE.aggregate_gate(screens, None, "b0_pass"))
+        self.assertFalse(MODULE.aggregate_gate(screens, None, "geometry_pass"))
+
 
 class TestV3Contract(unittest.TestCase):
     def test_scope_and_anchor_are_frozen(self):
