@@ -6,8 +6,10 @@ import importlib.util
 import itertools
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -26,7 +28,13 @@ VERIFY = importlib.util.module_from_spec(VERIFY_SPEC)
 VERIFY_SPEC.loader.exec_module(VERIFY)
 
 
-def marker(site_id: int, cm: float, maf: float = 0.1, ancestry: str = "AFR"):
+def marker(
+    site_id: int,
+    cm: float,
+    maf: float = 0.1,
+    ancestry: str = "AFR",
+    carriers: int = 2,
+):
     kwargs = {"ref_minor_afr": 0, "ref_minor_eur": 0, "ref_minor_asia": 0}
     kwargs[f"ref_minor_{ancestry.lower()}"] = 1
     return MODULE.Marker(
@@ -38,6 +46,7 @@ def marker(site_id: int, cm: float, maf: float = 0.1, ancestry: str = "AFR"):
         an=600,
         maf=maf,
         ref_minor_total=3,
+        freq_minor_carrier_individuals=carriers,
         **kwargs,
     )
 
@@ -98,7 +107,11 @@ class TestFrozenCapacity(unittest.TestCase):
             "reserve_bins": {0: reserve},
             "b0": b0,
         }
-        contract = {"development": {"fixed_hash_salt": "fixed", "null_replicates": 4}}
+        contract = {
+            "version": 4,
+            "stage": "M28B_V4_LAI_OPTIMAL_MATCHING_AUDIT",
+            "development": {"fixed_hash_salt": "fixed", "null_replicates": 4},
+        }
         result = MODULE.evaluate_configuration(prepared, {0: 3}, contract)
         self.assertEqual(result["K"], 3)
         self.assertTrue(result["parity_pass"])
@@ -138,6 +151,132 @@ class TestV4Contract(unittest.TestCase):
         self.assertEqual(len(files), 14)
         self.assertIn("m28b_v4_frozen_selection.json", files)
         self.assertIn("m28b_v4_validation.public.json", files)
+
+
+class TestV5CorrectionContract(unittest.TestCase):
+    def setUp(self):
+        self.contract = json.loads(
+            (
+                REPO
+                / "conf"
+                / "m28b_lai_optimal_matching_preregistration.v5.json"
+            ).read_text()
+        )
+
+    def test_individual_carrier_rule_is_load_bearing(self):
+        self.assertEqual(self.contract["version"], 5)
+        self.assertEqual(
+            self.contract["marker_definitions"][
+                "minimum_freq_minor_carrier_individuals"
+            ],
+            2,
+        )
+        self.assertIn(
+            "change_carrier_rule",
+            self.contract["validation"]["prohibited_after_validation"],
+        )
+
+    def test_historical_k_is_not_inherited(self):
+        self.assertEqual(self.contract["amendment"]["historical_k"], 8694)
+        self.assertIn(
+            "not inherited",
+            self.contract["amendment"]["historical_k_policy"],
+        )
+        self.assertEqual(
+            self.contract["development"]["capacity_fractions"],
+            [0.25, 0.5, 0.75, 1.0],
+        )
+        self.assertNotIn("nested", self.contract["development"]["selection_rule"])
+
+    def test_reproducibility_profile_covers_v5_dev_and_validation(self):
+        files = VERIFY.PROFILE_FILES["v5"]
+        self.assertEqual(len(files), 14)
+        self.assertIn("m28b_v5_frozen_selection.json", files)
+        self.assertIn("m28b_v5_validation.public.json", files)
+
+    def test_one_homozygous_carrier_is_rejected_but_two_carriers_pass(self):
+        m28_contract = {
+            "rare_definition": {
+                "minimum_mac": 2,
+                "maximum_maf_exclusive": 0.01,
+            }
+        }
+        one_carrier = marker(1, 0.1, 2 / 600, carriers=1)
+        two_carriers = marker(2, 0.2, 2 / 600, carriers=2)
+        self.assertFalse(MODULE.eligible_rare_marker(one_carrier, m28_contract, 2))
+        self.assertTrue(MODULE.eligible_rare_marker(two_carriers, m28_contract, 2))
+
+    def test_preflight_auth_requires_passing_reproducibility_receipt(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            report = {
+                "stage": "M28_LAI_SIMULATION_PREFLIGHT",
+                "root_seed": 17,
+                "pool_allocation_unit": "diploid_individual",
+                "pool_disjunction": {"cross_role_individuals": 0},
+                "decision": "GO_REPRODUCIBILITY_CHECK",
+                "contract_sha256": "contract",
+                "gates": {
+                    "S0_MAP": True,
+                    "S1_REPRODUCIBILITY": None,
+                    "S2_DISJUNCTION": True,
+                    "S3_PHASE_AND_TRUTH": True,
+                    "S4_RARENESS": True,
+                    "S5_EXPOSURE": True,
+                    "S6_SCOPE": True,
+                },
+            }
+            report_path = root / "report.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            manifest = {
+                "stage": "M28_LAI_SIMULATION_PREFLIGHT",
+                "params": {"root_seed": 17},
+                "inputs": {
+                    "m28_lai_simulation_preflight_preregistration.v2.json": "contract"
+                },
+                "sha256": {
+                    "m28_sources.trees": "tree",
+                    "m28_pools.private.tsv": "pools",
+                    "m28_preflight.public.json": MODULE.sha256(report_path),
+                },
+            }
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            receipt = {
+                "stage": "M28_LAI_SIMULATION_PREFLIGHT",
+                "gate": "S1_REPRODUCIBILITY",
+                "decision": "GO_PREFLIGHT_COMPLETE",
+                "passed": True,
+                "amendment_sha256": "contract",
+                "tree_sequence_check": {"semantic_equality": True},
+                "byte_checks": {"one": {"identical": True}},
+            }
+            receipt_path = root / "receipt.json"
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+            args = SimpleNamespace(
+                preflight_report=report_path,
+                preflight_manifest=manifest_path,
+                preflight_reproducibility=receipt_path,
+            )
+            expected = {
+                "root_seed": 17,
+                "tree_sequence_sha256": "tree",
+                "pool_manifest_sha256": "pools",
+                "preflight_report_sha256": MODULE.sha256(report_path),
+                "preflight_manifest_sha256": MODULE.sha256(manifest_path),
+            }
+            shared = {
+                "m28_preflight_contract_sha256": "contract",
+                "m28_reproducibility_receipt_sha256": MODULE.sha256(receipt_path),
+            }
+            MODULE.authenticate_v5_preflight(args, expected, shared, {}, "development")
+            receipt["passed"] = False
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+            shared["m28_reproducibility_receipt_sha256"] = MODULE.sha256(receipt_path)
+            with self.assertRaisesRegex(ValueError, "incomplete or failed"):
+                MODULE.authenticate_v5_preflight(
+                    args, expected, shared, {}, "development"
+                )
 
 
 if __name__ == "__main__":

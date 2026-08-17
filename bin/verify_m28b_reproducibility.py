@@ -56,11 +56,29 @@ SCIENTIFIC_FILES_V4 = (
     "m28b_v4_validation_common_common_null.tsv",
 )
 
+SCIENTIFIC_FILES_V5 = (
+    "m28b_v5_dev.public.json",
+    "m28b_v5_dev_screens.tsv",
+    "m28b_v5_frozen_selection.json",
+    "m28b_v5_dev_B0.tsv.gz",
+    "m28b_v5_dev_BR_additions.tsv.gz",
+    "m28b_v5_dev_BS_additions.tsv.gz",
+    "m28b_v5_dev_BR_BS_pairs.tsv.gz",
+    "m28b_v5_dev_common_common_null.tsv",
+    "m28b_v5_validation.public.json",
+    "m28b_v5_validation_B0.tsv.gz",
+    "m28b_v5_validation_BR_additions.tsv.gz",
+    "m28b_v5_validation_BS_additions.tsv.gz",
+    "m28b_v5_validation_BR_BS_pairs.tsv.gz",
+    "m28b_v5_validation_common_common_null.tsv",
+)
+
 PROFILE_FILES = {
     "v1": SCIENTIFIC_FILES,
     "v2": SCIENTIFIC_FILES_V2,
     "v3": SCIENTIFIC_FILES_V3,
     "v4": SCIENTIFIC_FILES_V4,
+    "v5": SCIENTIFIC_FILES_V5,
 }
 
 
@@ -75,7 +93,10 @@ def sha256(path: Path) -> str:
 def locate(root: Path, name: str) -> Path:
     candidates = [root / name] + [
         root / stage / name
-        for stage in ("m28b", "m28b_v2", "m28b_v3", "m28b_v4_dev", "m28b_v4_validation")
+        for stage in (
+            "m28b", "m28b_v2", "m28b_v3", "m28b_v4_dev",
+            "m28b_v4_validation", "m28b_v5_dev", "m28b_v5_validation",
+        )
     ]
     matches = [path for path in candidates if path.is_file()]
     if len(matches) != 1:

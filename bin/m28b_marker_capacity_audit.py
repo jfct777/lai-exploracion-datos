@@ -50,6 +50,7 @@ class Marker:
     ref_minor_afr: int
     ref_minor_eur: int
     ref_minor_asia: int
+    freq_minor_carrier_individuals: int = 0
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,24 @@ def verify_hash(path: Path, expected: str, label: str) -> str:
     return observed
 
 
+def count_minor_carrier_individuals(
+    tree_sequence,
+    nodes: Iterable[int],
+    genotype_by_node: dict[int, int],
+    minor_code: int,
+) -> int:
+    """Count distinct diploid individuals carrying the FREQ minor allele."""
+
+    carriers = {
+        int(tree_sequence.node(node).individual)
+        for node in nodes
+        if int(genotype_by_node[node]) == minor_code
+    }
+    if -1 in carriers:
+        raise ValueError("A FREQ minor-allele carrier has no source individual")
+    return len(carriers)
+
+
 def bp_to_cm(genetic_map: GeneticMap, bp: int) -> float:
     if bp < genetic_map.bp[0] or bp > genetic_map.bp[-1]:
         raise ValueError(f"Position {bp} is outside the authenticated genetic map")
@@ -114,7 +133,13 @@ def deterministic_gzip_text(path: Path) -> Iterator[TextIO]:
                 yield text
 
 
-def load_allowed_pools(path: Path, labels: Iterable[str]) -> dict[str, dict[str, list[int]]]:
+def load_allowed_pools(
+    path: Path,
+    labels: Iterable[str],
+    *,
+    tree_sequence=None,
+    require_individual_schema: bool = False,
+) -> dict[str, dict[str, list[int]]]:
     allowed_roles = {"FREQ", "REF_LAI"}
     all_roles = allowed_roles | {"DONOR"}
     label_set = set(labels)
@@ -129,6 +154,8 @@ def load_allowed_pools(path: Path, labels: Iterable[str]) -> dict[str, dict[str,
         }
         if columns not in (legacy_columns, individual_columns):
             raise ValueError("Unexpected pool-manifest columns")
+        if require_individual_schema and columns != individual_columns:
+            raise ValueError("Individual-safe audit requires the v2 pool-manifest schema")
         for row in reader:
             role = row["role"]
             if role not in all_roles:
@@ -142,6 +169,13 @@ def load_allowed_pools(path: Path, labels: Iterable[str]) -> dict[str, dict[str,
                 if row["node_identity_sha256"] != expected_identity:
                     raise ValueError(f"Node identity hash mismatch for node {node}")
                 individual = int(row["individual_id"])
+                if tree_sequence is not None:
+                    observed_individual = int(tree_sequence.node(node).individual)
+                    if observed_individual != individual:
+                        raise ValueError(
+                            f"Manifest individual {individual} does not match tree individual "
+                            f"{observed_individual} for node {node}"
+                        )
                 assigned = individual_assignments.setdefault(
                     individual, (role, ancestry, [])
                 )
@@ -200,6 +234,28 @@ def read_template(path: Path, genetic_map: GeneticMap, expected: dict) -> list[T
 def inventory_markers(ts, pools, genetic_map: GeneticMap, m28_contract: dict) -> tuple[list[Marker], dict]:
     sample_index = {int(node): index for index, node in enumerate(ts.samples())}
     labels = tuple(m28_contract["source_populations"]["labels"])
+    if int(m28_contract.get("version", 0)) >= 2:
+        by_individual: dict[int, tuple[str, str, list[int]]] = {}
+        for role in ("FREQ", "REF_LAI"):
+            for label in labels:
+                for node in pools[role][label]:
+                    individual = int(ts.node(node).individual)
+                    assigned = by_individual.setdefault(individual, (role, label, []))
+                    if assigned[:2] != (role, label):
+                        raise ValueError(
+                            f"Tree individual {individual} crosses allowed roles or ancestries"
+                        )
+                    assigned[2].append(node)
+        malformed = {
+            individual: values[2]
+            for individual, values in by_individual.items()
+            if len(values[2]) != 2 or len(set(values[2])) != 2
+        }
+        if malformed:
+            raise ValueError(
+                "Tree and pool manifest do not preserve complete diploid individuals: "
+                f"{list(malformed)[:5]}"
+            )
     freq_nodes = [node for label in labels for node in pools["FREQ"][label]]
     ref_nodes = {label: pools["REF_LAI"][label] for label in labels}
     ref_total_haplotypes = sum(len(nodes) for nodes in ref_nodes.values())
@@ -215,6 +271,12 @@ def inventory_markers(ts, pools, genetic_map: GeneticMap, m28_contract: dict) ->
             label: sum(int(variant.genotypes[sample_index[node]]) == minor for node in ref_nodes[label])
             for label in labels
         }
+        carrier_individual_count = count_minor_carrier_individuals(
+            ts,
+            freq_nodes,
+            {node: int(variant.genotypes[sample_index[node]]) for node in freq_nodes},
+            minor,
+        )
         marker = Marker(
             site_id=int(variant.site.id),
             bp=genetic_map.start_bp + int(variant.site.position),
@@ -227,6 +289,7 @@ def inventory_markers(ts, pools, genetic_map: GeneticMap, m28_contract: dict) ->
             ref_minor_afr=ref_counts["AFR"],
             ref_minor_eur=ref_counts["EUR"],
             ref_minor_asia=ref_counts["ASIA"],
+            freq_minor_carrier_individuals=carrier_individual_count,
         )
         markers.append(marker)
         if rare_under_contract(stats, m28_contract):
@@ -402,21 +465,33 @@ def write_screen_table(path: Path, screens: list[dict]) -> None:
             writer.writerow({key: row.get(key, "") for key in columns})
 
 
-def write_marker_manifest(path: Path, arm_component: str, markers: list[Marker]) -> None:
+def write_marker_manifest(
+    path: Path,
+    arm_component: str,
+    markers: list[Marker],
+    *,
+    include_carrier_individuals: bool = False,
+) -> None:
     with deterministic_gzip_text(path) as handle:
         writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
-        writer.writerow((
+        columns = [
             "arm_component", "site_id", "chrom", "position", "cm", "minor_code",
             "mac_freq", "an_freq", "maf_freq", "ref_minor_total", "ref_minor_AFR",
             "ref_minor_EUR", "ref_minor_ASIA",
-        ))
+        ]
+        if include_carrier_individuals:
+            columns.append("freq_minor_carrier_individuals")
+        writer.writerow(columns)
         for marker in sorted(markers, key=lambda value: (value.bp, value.site_id)):
-            writer.writerow((
+            row = [
                 arm_component, marker.site_id, "chr22", marker.bp, f"{marker.cm:.12g}",
                 marker.minor_code, marker.mac, marker.an, f"{marker.maf:.12g}",
                 marker.ref_minor_total, marker.ref_minor_afr, marker.ref_minor_eur,
                 marker.ref_minor_asia,
-            ))
+            ]
+            if include_carrier_individuals:
+                row.append(marker.freq_minor_carrier_individuals)
+            writer.writerow(row)
 
 
 def write_b0_mapping(path: Path, pairs: list[MarkerPair]) -> None:

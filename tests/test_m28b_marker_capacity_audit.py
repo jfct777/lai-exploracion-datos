@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import gzip
 import hashlib
 import json
 import sys
@@ -113,6 +114,94 @@ class TestMapAndSelection(unittest.TestCase):
             self.assertEqual(pools["FREQ"]["AFR"], [1, 2])
             self.assertEqual(pools["REF_LAI"]["AFR"], [3, 4])
 
+    def test_individual_safe_loader_rejects_legacy_manifest(self):
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "pools.tsv"
+            identity = hashlib.sha256(b"source-haplotype:1").hexdigest()
+            path.write_text(
+                "role\tancestry\tnode_id\thaplotype_sha256\n"
+                f"FREQ\tAFR\t1\t{identity}\n"
+                f"REF_LAI\tAFR\t2\t{identity}\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "v2 pool-manifest schema"):
+                MODULE.load_allowed_pools(
+                    path, ["AFR"], require_individual_schema=True
+                )
+
+    def test_pool_loader_rejects_manifest_tree_individual_mismatch(self):
+        class Node:
+            def __init__(self, individual):
+                self.individual = individual
+
+        class Tree:
+            def node(self, node):
+                return Node(99 if node == 2 else 10)
+
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "pools.tsv"
+            lines = ["role\tancestry\tindividual_id\tnode_id\tnode_identity_sha256"]
+            for node in (1, 2):
+                identity = hashlib.sha256(f"source-node:{node}".encode()).hexdigest()
+                lines.append(f"FREQ\tAFR\t10\t{node}\t{identity}")
+            for node in (3, 4):
+                identity = hashlib.sha256(f"source-node:{node}".encode()).hexdigest()
+                lines.append(f"REF_LAI\tAFR\t11\t{node}\t{identity}")
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "does not match tree individual"):
+                MODULE.load_allowed_pools(
+                    path,
+                    ["AFR"],
+                    tree_sequence=Tree(),
+                    require_individual_schema=True,
+                )
+
+    def test_inventory_checks_manifest_individuals_against_tree(self):
+        class Node:
+            def __init__(self, individual):
+                self.individual = individual
+
+        class Tree:
+            def samples(self):
+                return [1, 2]
+
+            def node(self, node):
+                return Node(10)
+
+        pools = {
+            "FREQ": {"AFR": [1]},
+            "REF_LAI": {"AFR": [2]},
+        }
+        contract = {
+            "version": 2,
+            "source_populations": {"labels": ["AFR"]},
+        }
+        genetic_map = MODULE.GeneticMap("chr22", (100, 200), (0.0, 1.0))
+        with self.assertRaisesRegex(ValueError, "crosses allowed roles"):
+            MODULE.inventory_markers(Tree(), pools, genetic_map, contract)
+
+    def test_homozygous_minor_is_one_carrier_not_two(self):
+        class Node:
+            def __init__(self, individual):
+                self.individual = individual
+
+        class Tree:
+            def node(self, node):
+                return Node(10 if node in (1, 2) else 11)
+
+        self.assertEqual(
+            MODULE.count_minor_carrier_individuals(
+                Tree(), [1, 2, 3, 4], {1: 1, 2: 1, 3: 0, 4: 0}, 1
+            ),
+            1,
+        )
+        self.assertEqual(
+            MODULE.count_minor_carrier_individuals(
+                Tree(), [1, 2, 3, 4], {1: 1, 2: 0, 3: 1, 4: 0}, 1
+            ),
+            2,
+        )
+
 
 class TestCapacityMatching(unittest.TestCase):
     def test_exact_per_bin_matching_passes(self):
@@ -143,9 +232,16 @@ class TestDeterministicOutput(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             left = Path(name) / "left.tsv.gz"
             right = Path(name) / "right.tsv.gz"
-            MODULE.write_marker_manifest(left, "B0", values)
-            MODULE.write_marker_manifest(right, "B0", values)
+            MODULE.write_marker_manifest(
+                left, "B0", values, include_carrier_individuals=True
+            )
+            MODULE.write_marker_manifest(
+                right, "B0", values, include_carrier_individuals=True
+            )
             self.assertEqual(left.read_bytes(), right.read_bytes())
+            with gzip.open(left, "rt", encoding="utf-8") as handle:
+                header = handle.readline().rstrip("\n").split("\t")
+            self.assertIn("freq_minor_carrier_individuals", header)
 
     def test_reproducibility_verifier_detects_a_changed_output(self):
         with tempfile.TemporaryDirectory() as name:

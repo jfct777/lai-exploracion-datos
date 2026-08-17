@@ -1,0 +1,107 @@
+{
+  "stage": "M28B_V5_INDIVIDUAL_SAFE_MATCHING_AUDIT",
+  "version": 5,
+  "artifact_prefix": "m28b_v5",
+  "status": "PRE_FROZEN_BEFORE_CORRECTED_CAPACITY_AUDIT",
+  "scope": "technical_capacity_and_geometry_after_individual_pool_correction_no_lai",
+  "amendment": {
+    "supersedes_for_m28e": "M28B-v4",
+    "reason": "M28B-v4 used pools disjoint by haplotype node but not by diploid individual. Version 5 keeps the same capacity fractions, 0.05 cM bins, exact matching and geometry gates, but authenticates M28-v2 pools and requires two FREQ carrier individuals for every rare candidate.",
+    "historical_k": 8694,
+    "historical_k_policy": "Diagnostic comparator only. It is not inherited or used as a gate."
+  },
+  "development_inputs": {
+    "root_seed": 20260817,
+    "tree_sequence_sha256": "566946ec93cbc28c7f36d27878e12d091f1c87ebdd6fb6423b940f4f778391f7",
+    "pool_manifest_sha256": "56f9891bfb7f77d63ec3328107fc8e89b919c34ad16fda2c0c72dc3fde24f0e4",
+    "preflight_report_sha256": "e96cc352248bc05643099fc8d7107528d6a96c8e6fe9592561587d1059715b2a",
+    "preflight_manifest_sha256": "e229c1e66905282510698e9125b72840b1f049826fd22de064900b732bba8c41"
+  },
+  "validation_inputs": {
+    "root_seed": 20260818,
+    "tree_sequence_sha256": "780800c1f3d279746ace8631fa1b1ccd57782e9bf697a3dacc2cc983523f5f54",
+    "pool_manifest_sha256": "046c6e903ca4b3beea8ac468836d28bb953d32b4e731c13be86f42d7c110a4ff",
+    "preflight_report_sha256": "30f41bb4c5d77b583052409a4cdb591497bc8d1a02b1cad8183600c6ebeb758d",
+    "preflight_manifest_sha256": "46829d0f1b28d5a3a94199143c9b8b10980c1619b302a8319dd474435431c9e4"
+  },
+  "shared_inputs": {
+    "genetic_map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+    "m28_preflight_contract_sha256": "b1d11afbcc2d740ff4b88753d6bcca7d7a345dc1a05eb9cc83a268e2ec403438",
+    "m28_reproducibility_receipt_sha256": "10b15e3352f141e78fca7f07697d8d5a9e4779dbaf572db588fe281d6c3621e6",
+    "baseline_template": {
+      "uri": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/vcf_fixed/dnabr.refpop.fixed.chr22.vcf.gz",
+      "sha256": "1b9e7b23a6e046185056271513589d03c24406e5100606d078973a58d36e6afd",
+      "records": 110074,
+      "unique_positions": 110074,
+      "first_position": 16385840,
+      "last_position": 50784700,
+      "known_answer_ref_polymorphic": 79791,
+      "known_answer_ref_monomorphic": 30283
+    }
+  },
+  "pool_access": {
+    "allowed_genotypes": ["FREQ", "REF_LAI"],
+    "manifest_only": ["DONOR"],
+    "forbidden": ["TARGET", "mosaic_events", "lai_truth"],
+    "individual_gate": "Every individual has exactly two nodes in one ancestry and one role."
+  },
+  "marker_definitions": {
+    "rare_universe": "MAC>=2 and MAF<0.01 in FREQ, minor-allele oriented, carried by at least two FREQ individuals and with at least one minor copy in pooled REF_LAI.",
+    "minimum_freq_minor_carrier_individuals": 2,
+    "common_universe": "MAF>=0.01 in FREQ, with both the FREQ-oriented minor allele and its complement observed in pooled REF_LAI.",
+    "b0": "Exactly 79791 common-universe sites, allocated by Hamilton across 0.05 cM bins and selected by fixed hash before matching.",
+    "br": "B0 plus K rare sites carried by at least two distinct FREQ individuals, selected by fixed hash within each bin before matching.",
+    "bs": "B0 plus K unique common-reserve controls selected by exact one-dimensional minimum-cost matching."
+  },
+  "development": {
+    "bin_width_cm": 0.05,
+    "bin_origin": "cM interpolated at baseline first_position",
+    "b0_target_count": 79791,
+    "capacity_fractions": [0.25, 0.5, 0.75, 1.0],
+    "fraction_denominator": "C=sum_b min(rare_b, common_reserve_b, B0_b); target K=floor(f*C); distribute exact K by Hamilton largest remainders.",
+    "selection_rule": "Evaluate all four predeclared capacity fractions only in technical root 20260817 and freeze the largest fraction passing both geometry gates. Hamilton allocation defines each fraction as a separate configuration; monotonic inclusion between configurations is not required. Freeze the selected exact K for root 20260818.",
+    "rare_selection": "Rank eligible rare sites by fixed SHA-256 within bin and retain the quota before viewing common-marker distances.",
+    "matching_objective": "Select the ordered unique common-reserve subsequence within each bin minimizing sum(abs(rare_cm-control_cm)); deterministic ties retain the earlier candidate.",
+    "null_rule": "For each of 32 fixed-hash replicates, select common pseudo-queries from B0 with the same per-bin K and apply the identical exact matching algorithm.",
+    "null_replicates": 32,
+    "fixed_hash_salt": "M28B_V5_INDIVIDUAL_SAFE_20260817"
+  },
+  "validation": {
+    "configuration": "Run exactly once on technical root 20260818 with width 0.05 cM, the newly frozen K, identical individual-carrier rule, algorithms, salts and nulls.",
+    "K_allocation": "If root 20260818 capacity is at least frozen K, distribute exact K across its bins by Hamilton; otherwise STOP_CAPACITY.",
+    "prohibited_after_validation": [
+      "restore_historical_K_8694",
+      "reduce_new_K",
+      "change_fraction",
+      "change_carrier_rule",
+      "change_bin_width",
+      "change_nulls_or_salt",
+      "change_geometry_gate",
+      "try_another_technical_root"
+    ]
+  },
+  "geometry_gate": {
+    "p95": "Rare-common p95 absolute delta cM must not exceed the maximum p95 among 32 common-common null replicates.",
+    "wasserstein": "Rare-common Wasserstein distance cM must not exceed the maximum among the same nulls.",
+    "pass": "Both conditions pass."
+  },
+  "gates": {
+    "V5_0_INPUT_IDENTITY": "All M28-v2, map and baseline hashes match.",
+    "V5_1_INDIVIDUAL_DISJUNCTION": "Manifest keeps both homologues in exactly one role and ancestry.",
+    "V5_2_ACCESS_BOUNDARY": "Only FREQ and REF_LAI genotypes enter marker selection.",
+    "V5_3_DISTINCT_CARRIERS": "Every BR candidate has at least two distinct FREQ carrier individuals; this does not assert genealogical independence.",
+    "V5_4_DEV_SELECTION": "At least one frozen fraction passes both geometry gates.",
+    "V5_5_B0_AND_PARITY": "B0 is exactly 79791; BR and BS add the same K with identical bin quotas and no overlaps.",
+    "V5_6_ANCESTRY_SCOPE": "Selected rare sites retain nonzero AFR, EUR and ASIA reference support without relabelling ASIA as NAM.",
+    "V5_7_VALIDATION_GEOMETRY": "The untouched technical root passes both geometry gates with the new frozen K.",
+    "V5_8_SCOPE": "No LAI, TARGET, truth, SESOI or performance metric is computed."
+  },
+  "stop_rule": "STOP before M28E if no fraction passes DEV, validation capacity is below the newly frozen K, validation fails geometry, any individual crosses roles, any rare candidate has fewer than two FREQ carrier individuals, or any forbidden input is read.",
+  "claims_excluded": [
+    "rare_variants_improve_LAI",
+    "replication_of_real_Gnomix_geometry_or_LD",
+    "utility_in_DNABR_or_Native_American_ancestry",
+    "independent_validation_of_M14",
+    "authorization_to_open_M28E_VALID"
+  ]
+}

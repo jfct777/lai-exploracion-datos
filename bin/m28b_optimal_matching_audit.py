@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Develop and validate the final M28B-v4 geometric marker comparator."""
+"""Develop and validate versioned M28B geometric marker comparators."""
 
 from __future__ import annotations
 
@@ -39,6 +39,128 @@ from m28b_marker_capacity_audit import (  # noqa: E402
     write_json,
     write_marker_manifest,
 )
+
+
+def contract_identity(contract: dict) -> tuple[int, str]:
+    version = int(contract.get("version", 0))
+    if version == 4:
+        if contract.get("stage") != "M28B_V4_LAI_OPTIMAL_MATCHING_AUDIT":
+            raise ValueError("Unexpected M28B-v4 stage")
+        return version, "m28b_v4"
+    if version == 5:
+        if contract.get("stage") != "M28B_V5_INDIVIDUAL_SAFE_MATCHING_AUDIT":
+            raise ValueError("Unexpected M28B-v5 stage")
+        if contract.get("artifact_prefix") != "m28b_v5":
+            raise ValueError("M28B-v5 artifact_prefix must be m28b_v5")
+        if contract.get("status") != "PRE_FROZEN_BEFORE_CORRECTED_CAPACITY_AUDIT":
+            raise ValueError("M28B-v5 contract is not frozen for the capacity audit")
+        return version, "m28b_v5"
+    raise ValueError(f"Unsupported M28B optimal-matching contract version: {version}")
+
+
+def required_minimum_carrier_individuals(contract: dict) -> int:
+    version, _ = contract_identity(contract)
+    definitions = contract.get("marker_definitions", {})
+    if version == 5:
+        if "minimum_freq_minor_carrier_individuals" not in definitions:
+            raise ValueError("M28B-v5 carrier-individual threshold is missing")
+        value = int(definitions["minimum_freq_minor_carrier_individuals"])
+        if value != 2:
+            raise ValueError("M28B-v5 requires exactly two FREQ carrier individuals")
+        return value
+    return 0
+
+
+def eligible_rare_marker(marker: Marker, m28_contract: dict, minimum_carriers: int) -> bool:
+    """Apply the full rare-candidate rule, including distinct FREQ carriers."""
+
+    return (
+        rare_under_contract({"mac": marker.mac, "maf": marker.maf}, m28_contract)
+        and marker.ref_minor_total >= 1
+        and marker.freq_minor_carrier_individuals >= minimum_carriers
+    )
+
+
+def authenticate_v5_preflight(
+    args: argparse.Namespace, expected: dict, shared: dict, hashes: dict, mode: str
+) -> None:
+    if (
+        args.preflight_report is None
+        or args.preflight_manifest is None
+        or args.preflight_reproducibility is None
+    ):
+        raise ValueError(
+            f"M28B-v5 {mode} requires preflight report, manifest and reproducibility receipt"
+        )
+    hashes[f"{mode}_preflight_report"] = verify_hash(
+        args.preflight_report,
+        expected["preflight_report_sha256"],
+        f"{mode} preflight report",
+    )
+    hashes[f"{mode}_preflight_manifest"] = verify_hash(
+        args.preflight_manifest,
+        expected["preflight_manifest_sha256"],
+        f"{mode} preflight manifest",
+    )
+    hashes["m28_v2_reproducibility"] = verify_hash(
+        args.preflight_reproducibility,
+        shared["m28_reproducibility_receipt_sha256"],
+        "M28-v2 reproducibility receipt",
+    )
+    report = load_json(args.preflight_report)
+    manifest = load_json(args.preflight_manifest)
+    reproducibility = load_json(args.preflight_reproducibility)
+    required_gates = {f"S{index}_{name}" for index, name in enumerate((
+        "MAP", "REPRODUCIBILITY", "DISJUNCTION", "PHASE_AND_TRUTH",
+        "RARENESS", "EXPOSURE", "SCOPE",
+    ))}
+    if report.get("stage") != "M28_LAI_SIMULATION_PREFLIGHT":
+        raise ValueError(f"{mode} preflight report has the wrong stage")
+    if int(report.get("root_seed", -1)) != int(expected["root_seed"]):
+        raise ValueError(f"{mode} preflight report has the wrong root seed")
+    if report.get("pool_allocation_unit") != "diploid_individual":
+        raise ValueError(f"{mode} preflight did not allocate diploid individuals")
+    if report.get("pool_disjunction", {}).get("cross_role_individuals") != 0:
+        raise ValueError(f"{mode} preflight has cross-role individuals")
+    if report.get("decision") != "GO_REPRODUCIBILITY_CHECK":
+        raise ValueError(f"{mode} preflight has the wrong decision")
+    if report.get("contract_sha256") != shared["m28_preflight_contract_sha256"]:
+        raise ValueError(f"{mode} preflight report belongs to another M28 contract")
+    gates = report.get("gates", {})
+    if set(gates) != required_gates or any(
+        value is False for value in gates.values()
+    ):
+        raise ValueError(f"{mode} preflight gates are incomplete or failed")
+    if manifest.get("stage") != "M28_LAI_SIMULATION_PREFLIGHT":
+        raise ValueError(f"{mode} preflight manifest has the wrong stage")
+    if int(manifest.get("params", {}).get("root_seed", -1)) != int(expected["root_seed"]):
+        raise ValueError(f"{mode} preflight manifest has the wrong root seed")
+    if manifest.get("inputs", {}).get(
+        "m28_lai_simulation_preflight_preregistration.v2.json"
+    ) != shared["m28_preflight_contract_sha256"]:
+        raise ValueError(f"{mode} preflight manifest belongs to another M28 contract")
+    manifest_hashes = manifest.get("sha256", {})
+    expected_outputs = {
+        "m28_sources.trees": expected["tree_sequence_sha256"],
+        "m28_pools.private.tsv": expected["pool_manifest_sha256"],
+        "m28_preflight.public.json": expected["preflight_report_sha256"],
+    }
+    if any(manifest_hashes.get(name) != digest for name, digest in expected_outputs.items()):
+        raise ValueError(f"{mode} preflight manifest output hashes do not match the contract")
+    if (
+        reproducibility.get("stage") != "M28_LAI_SIMULATION_PREFLIGHT"
+        or reproducibility.get("gate") != "S1_REPRODUCIBILITY"
+        or reproducibility.get("decision") != "GO_PREFLIGHT_COMPLETE"
+        or reproducibility.get("passed") is not True
+        or reproducibility.get("amendment_sha256")
+        != shared["m28_preflight_contract_sha256"]
+        or reproducibility.get("tree_sequence_check", {}).get("semantic_equality") is not True
+        or any(
+            row.get("identical") is not True
+            for row in reproducibility.get("byte_checks", {}).values()
+        )
+    ):
+        raise ValueError("M28-v2 reproducibility receipt is incomplete or failed")
 
 
 def optimal_subsequence_pairs(queries: list[Marker], candidates: list[Marker]) -> list[MarkerPair]:
@@ -98,6 +220,7 @@ def allocate_exact_k(capacity: dict[int, int], target_k: int) -> dict[int, int]:
 
 
 def prepare_markers(args: argparse.Namespace, contract: dict, mode: str) -> dict:
+    version, _ = contract_identity(contract)
     shared = contract["shared_inputs"]
     expected = contract["development_inputs"] if mode == "development" else contract["validation_inputs"]
     baseline_expected = shared["baseline_template"]
@@ -107,9 +230,11 @@ def prepare_markers(args: argparse.Namespace, contract: dict, mode: str) -> dict
         "genetic_map": verify_hash(args.genetic_map, shared["genetic_map_sha256"], "genetic map"),
         "m28_preregistration": verify_hash(args.m28_preregistration, shared["m28_preflight_contract_sha256"], "M28 preregistration"),
         "baseline_template": verify_hash(args.baseline_template, baseline_expected["sha256"], "baseline template"),
-        "m28b_v4_preregistration": sha256(args.preregistration),
+        f"m28b_v{version}_preregistration": sha256(args.preregistration),
     }
-    if mode == "validation":
+    if version == 5:
+        authenticate_v5_preflight(args, expected, shared, hashes, mode)
+    elif mode == "validation":
         if args.preflight_manifest is None:
             raise ValueError("Validation requires --preflight-manifest")
         hashes["validation_preflight_manifest"] = verify_hash(
@@ -125,20 +250,24 @@ def prepare_markers(args: argparse.Namespace, contract: dict, mode: str) -> dict
     target_b0 = int(contract["development"]["b0_target_count"])
     if baseline_poly != target_b0:
         raise ValueError("Authenticated baseline informative count no longer matches B0")
-    pools = load_allowed_pools(args.pool_manifest, m28_contract["source_populations"]["labels"])
-
     import tskit
 
     tree_sequence = tskit.load(str(args.tree_sequence))
+    pools = load_allowed_pools(
+        args.pool_manifest,
+        m28_contract["source_populations"]["labels"],
+        tree_sequence=tree_sequence,
+        require_individual_schema=version == 5,
+    )
     markers, inventory = inventory_markers(tree_sequence, pools, genetic_map, m28_contract)
     first_bp = int(baseline_expected["first_position"])
     last_bp = int(baseline_expected["last_position"])
     interval = [marker for marker in markers if first_bp <= marker.bp <= last_bp]
     ref_haplotypes = int(inventory["ref_total_haplotypes"])
+    minimum_carrier_individuals = required_minimum_carrier_individuals(contract)
     rare = [
         marker for marker in interval
-        if rare_under_contract({"mac": marker.mac, "maf": marker.maf}, m28_contract)
-        and marker.ref_minor_total >= 1
+        if eligible_rare_marker(marker, m28_contract, minimum_carrier_individuals)
     ]
     common = [
         marker for marker in interval
@@ -173,6 +302,8 @@ def prepare_markers(args: argparse.Namespace, contract: dict, mode: str) -> dict
         "first_bp": first_bp,
         "last_bp": last_bp,
         "origin_cm": origin_cm,
+        "contract_version": version,
+        "minimum_freq_minor_carrier_individuals": minimum_carrier_individuals,
         "width": width,
         "rare": rare,
         "common": common,
@@ -249,10 +380,17 @@ def evaluate_configuration(prepared: dict, k_by_bin: dict[int, int], contract: d
         and len(control_ids) == len(selected_controls)
         and not (b0_ids & rare_ids or b0_ids & control_ids or rare_ids & control_ids)
     )
+    required_carriers = required_minimum_carrier_individuals(contract)
+    distinct_carrier_pass = all(
+        marker.freq_minor_carrier_individuals >= required_carriers
+        for marker in selected_rare
+    )
     return {
         "K": len(selected_rare),
         "geometry_pass": geometry_pass,
         "parity_pass": parity_pass,
+        "distinct_carrier_pass": distinct_carrier_pass,
+        "minimum_freq_minor_carrier_individuals": required_carriers,
         "ancestry_pass": all(value > 0 for value in ancestry_support.values()),
         "ancestry_support": ancestry_support,
         "rare_common": observed,
@@ -276,14 +414,21 @@ def evaluate_configuration(prepared: dict, k_by_bin: dict[int, int], contract: d
     }
 
 
-def public_evaluation(result: dict) -> dict:
+def public_evaluation(result: dict, version: int = 5) -> dict:
     excluded = {"rare_markers", "control_markers", "pairs", "null_summaries"}
+    if version < 5:
+        excluded |= {
+            "distinct_carrier_pass",
+            "minimum_freq_minor_carrier_individuals",
+        }
     return {key: value for key, value in result.items() if key not in excluded}
 
 
-def write_screen_table(path: Path, screens: list[dict]) -> None:
+def write_screen_table(path: Path, screens: list[dict], version: int = 5) -> None:
     columns = [
-        "fraction", "target_K", "pass", "parity_pass", "ancestry_pass",
+        "fraction", "target_K", "pass", "parity_pass",
+        *( ["distinct_carrier_pass"] if version >= 5 else [] ),
+        "ancestry_pass",
         "geometry_pass", "rare_common_p95_delta_cm", "null_p95_max_cm",
         "rare_common_wasserstein_cm", "null_wasserstein_max_cm",
     ]
@@ -292,7 +437,7 @@ def write_screen_table(path: Path, screens: list[dict]) -> None:
         writer.writeheader()
         for row in screens:
             result = row["evaluation"]
-            writer.writerow({
+            values = {
                 "fraction": row["fraction"],
                 "target_K": result["K"],
                 "pass": row["pass"],
@@ -303,7 +448,10 @@ def write_screen_table(path: Path, screens: list[dict]) -> None:
                 "null_p95_max_cm": result["common_common_null"]["p95_absolute_delta_cm_max"],
                 "rare_common_wasserstein_cm": result["rare_common"]["wasserstein_distance_cm"],
                 "null_wasserstein_max_cm": result["common_common_null"]["wasserstein_distance_cm_max"],
-            })
+            }
+            if version >= 5:
+                values["distinct_carrier_pass"] = result["distinct_carrier_pass"]
+            writer.writerow(values)
 
 
 def write_outputs(outdir: Path, prefix: str, prepared: dict, evaluation: dict | None) -> None:
@@ -312,14 +460,25 @@ def write_outputs(outdir: Path, prefix: str, prepared: dict, evaluation: dict | 
     controls = evaluation["control_markers"] if evaluation is not None else []
     pairs = evaluation["pairs"] if evaluation is not None else []
     nulls = evaluation["null_summaries"] if evaluation is not None else []
-    write_marker_manifest(outdir / f"{prefix}_B0.tsv.gz", "B0", b0)
-    write_marker_manifest(outdir / f"{prefix}_BR_additions.tsv.gz", "BR_addition", rare)
-    write_marker_manifest(outdir / f"{prefix}_BS_additions.tsv.gz", "BS_addition", controls)
+    include_carriers = int(prepared.get("contract_version", 0)) >= 5
+    write_marker_manifest(
+        outdir / f"{prefix}_B0.tsv.gz", "B0", b0,
+        include_carrier_individuals=include_carriers,
+    )
+    write_marker_manifest(
+        outdir / f"{prefix}_BR_additions.tsv.gz", "BR_addition", rare,
+        include_carrier_individuals=include_carriers,
+    )
+    write_marker_manifest(
+        outdir / f"{prefix}_BS_additions.tsv.gz", "BS_addition", controls,
+        include_carrier_individuals=include_carriers,
+    )
     write_pair_table(outdir / f"{prefix}_BR_BS_pairs.tsv.gz", pairs, rare)
     write_null_table(outdir / f"{prefix}_common_common_null.tsv", nulls)
 
 
 def run_development(args: argparse.Namespace, contract: dict) -> dict:
+    version, artifact_prefix = contract_identity(contract)
     prepared = prepare_markers(args, contract, "development")
     total_capacity = sum(prepared["capacity"].values())
     screens: list[dict] = []
@@ -327,17 +486,24 @@ def run_development(args: argparse.Namespace, contract: dict) -> dict:
         target_k = math.floor(float(fraction) * total_capacity + 1e-12)
         k_by_bin = allocate_exact_k(prepared["capacity"], target_k)
         evaluation = evaluate_configuration(prepared, k_by_bin, contract)
-        passed = evaluation["parity_pass"] and evaluation["ancestry_pass"] and evaluation["geometry_pass"]
+        passed = (
+            evaluation["parity_pass"]
+            and evaluation["ancestry_pass"]
+            and evaluation["geometry_pass"]
+            and evaluation["distinct_carrier_pass"]
+        )
         screens.append({"fraction": float(fraction), "pass": passed, "evaluation": evaluation})
     passing = [screen for screen in screens if screen["pass"]]
     selected = max(passing, key=lambda row: row["fraction"]) if passing else None
     decision = "DEV_CONFIGURATION_FROZEN" if selected else "STOP_DEV_GEOMETRY"
 
     args.outdir.mkdir(parents=True, exist_ok=True)
-    write_screen_table(args.outdir / "m28b_v4_dev_screens.tsv", screens)
+    write_screen_table(
+        args.outdir / f"{artifact_prefix}_dev_screens.tsv", screens, version
+    )
     write_outputs(
         args.outdir,
-        "m28b_v4_dev",
+        f"{artifact_prefix}_dev",
         prepared,
         None if selected is None else selected["evaluation"],
     )
@@ -351,49 +517,91 @@ def run_development(args: argparse.Namespace, contract: dict) -> dict:
         "frozen_K": None if selected is None else selected["evaluation"]["K"],
         "fixed_hash_salt": contract["development"]["fixed_hash_salt"],
     }
-    write_json(args.outdir / "m28b_v4_frozen_selection.json", frozen)
-    report = {
-        "stage": contract["stage"],
-        "phase": "development",
-        "scope": contract["scope"],
-        "decision": decision,
-        "hashes": prepared["hashes"],
-        "inventory": {
-            **prepared["inventory"],
-            "rare_REF1_in_shared_interval": len(prepared["rare"]),
-            "common_ref_polymorphic": len(prepared["common"]),
-            "B0": len(prepared["b0"]),
-            "maximum_K_capacity": total_capacity,
-        },
-        "screens": [
-            {"fraction": row["fraction"], "pass": row["pass"], "evaluation": public_evaluation(row["evaluation"])}
-            for row in screens
-        ],
-        "selected": None if selected is None else {
-            "fraction": selected["fraction"],
-            "evaluation": public_evaluation(selected["evaluation"]),
-        },
-        "gates": {
+    if version >= 5:
+        frozen["minimum_freq_minor_carrier_individuals"] = prepared[
+            "minimum_freq_minor_carrier_individuals"
+        ]
+    write_json(args.outdir / f"{artifact_prefix}_frozen_selection.json", frozen)
+    if version == 5:
+        gates = {
+            "V5_0_INPUT_IDENTITY": True,
+            "V5_1_INDIVIDUAL_DISJUNCTION": True,
+            "V5_2_ACCESS_BOUNDARY": True,
+            "V5_3_DISTINCT_CARRIERS": (
+                selected is not None
+                and selected["evaluation"]["distinct_carrier_pass"]
+            ),
+            "V5_4_DEV_SELECTION": selected is not None,
+            "V5_5_B0_AND_PARITY": (
+                selected is not None
+                and len(prepared["b0"]) == 79791
+                and selected["evaluation"]["parity_pass"]
+            ),
+            "V5_6_ANCESTRY_SCOPE": (
+                selected is not None and selected["evaluation"]["ancestry_pass"]
+            ),
+            "V5_8_SCOPE": True,
+        }
+    else:
+        gates = {
             "V4_0_INPUT_IDENTITY": True,
             "V4_1_ACCESS_BOUNDARY": True,
             "V4_2_DEV_SELECTION": selected is not None,
             "V4_3_B0_AND_PARITY": selected is not None and len(prepared["b0"]) == 79791 and selected["evaluation"]["parity_pass"],
             "V4_4_ANCESTRY_SCOPE": selected is not None and selected["evaluation"]["ancestry_pass"],
             "V4_7_SCOPE": True,
+        }
+    inventory_public = {
+        **prepared["inventory"],
+        "common_ref_polymorphic": len(prepared["common"]),
+        "B0": len(prepared["b0"]),
+        "maximum_K_capacity": total_capacity,
+    }
+    if version >= 5:
+        inventory_public.update({
+            "rare_eligible_in_shared_interval": len(prepared["rare"]),
+            "minimum_freq_minor_carrier_individuals": prepared[
+                "minimum_freq_minor_carrier_individuals"
+            ],
+        })
+    else:
+        inventory_public["rare_REF1_in_shared_interval"] = len(prepared["rare"])
+    report = {
+        "stage": contract["stage"],
+        "phase": "development",
+        "scope": contract["scope"],
+        "decision": decision,
+        "hashes": prepared["hashes"],
+        "inventory": inventory_public,
+        "screens": [
+            {"fraction": row["fraction"], "pass": row["pass"], "evaluation": public_evaluation(row["evaluation"], version)}
+            for row in screens
+        ],
+        "selected": None if selected is None else {
+            "fraction": selected["fraction"],
+            "evaluation": public_evaluation(selected["evaluation"], version),
         },
+        "gates": gates,
         "interpretation": "Technical DEV selection only; no validation seed, TARGET, truth or LAI performance entered this phase.",
     }
-    write_json(args.outdir / "m28b_v4_dev.public.json", report)
+    write_json(args.outdir / f"{artifact_prefix}_dev.public.json", report)
     return report
 
 
 def run_validation(args: argparse.Namespace, contract: dict) -> dict:
+    version, artifact_prefix = contract_identity(contract)
     if args.frozen_selection is None:
         raise ValueError("Validation requires --frozen-selection")
     frozen = load_json(args.frozen_selection)
     if frozen["preregistration_sha256"] != sha256(args.preregistration):
         raise ValueError("Frozen DEV selection belongs to another preregistration")
     prepared = prepare_markers(args, contract, "validation")
+    if version == 5 and "minimum_freq_minor_carrier_individuals" not in frozen:
+        raise ValueError("Frozen M28B-v5 selection lacks the distinct-carrier rule")
+    if int(frozen.get("minimum_freq_minor_carrier_individuals", 0)) != int(
+        prepared["minimum_freq_minor_carrier_individuals"]
+    ):
+        raise ValueError("Distinct-carrier rule differs between DEV and validation")
     frozen_k = frozen["frozen_K"]
     if frozen_k is None:
         evaluation = None
@@ -404,27 +612,40 @@ def run_validation(args: argparse.Namespace, contract: dict) -> dict:
     else:
         k_by_bin = allocate_exact_k(prepared["capacity"], int(frozen_k))
         evaluation = evaluate_configuration(prepared, k_by_bin, contract)
-        passed = evaluation["parity_pass"] and evaluation["ancestry_pass"] and evaluation["geometry_pass"]
+        passed = (
+            evaluation["parity_pass"]
+            and evaluation["ancestry_pass"]
+            and evaluation["geometry_pass"]
+            and evaluation["distinct_carrier_pass"]
+        )
         decision = "GO_PREREGISTER_GENERIC_LAI_PILOT" if passed else "STOP_VALIDATION_GEOMETRY"
 
     args.outdir.mkdir(parents=True, exist_ok=True)
-    write_outputs(args.outdir, "m28b_v4_validation", prepared, evaluation)
-    report = {
-        "stage": contract["stage"],
-        "phase": "single_untouched_validation",
-        "scope": contract["scope"],
-        "decision": decision,
-        "hashes": {**prepared["hashes"], "frozen_selection": sha256(args.frozen_selection)},
-        "frozen": frozen,
-        "inventory": {
-            **prepared["inventory"],
-            "rare_REF1_in_shared_interval": len(prepared["rare"]),
-            "common_ref_polymorphic": len(prepared["common"]),
-            "B0": len(prepared["b0"]),
-            "maximum_K_capacity": sum(prepared["capacity"].values()),
-        },
-        "evaluation": None if evaluation is None else public_evaluation(evaluation),
-        "gates": {
+    write_outputs(args.outdir, f"{artifact_prefix}_validation", prepared, evaluation)
+    if version == 5:
+        gates = {
+            "V5_0_INPUT_IDENTITY": True,
+            "V5_1_INDIVIDUAL_DISJUNCTION": True,
+            "V5_2_ACCESS_BOUNDARY": True,
+            "V5_3_DISTINCT_CARRIERS": (
+                evaluation is not None and evaluation["distinct_carrier_pass"]
+            ),
+            "V5_4_DEV_SELECTION": frozen_k is not None,
+            "V5_5_B0_AND_PARITY": (
+                evaluation is not None
+                and len(prepared["b0"]) == 79791
+                and evaluation["parity_pass"]
+            ),
+            "V5_6_ANCESTRY_SCOPE": (
+                evaluation is not None and evaluation["ancestry_pass"]
+            ),
+            "V5_7_VALIDATION_GEOMETRY": (
+                evaluation is not None and evaluation["geometry_pass"]
+            ),
+            "V5_8_SCOPE": True,
+        }
+    else:
+        gates = {
             "V4_0_INPUT_IDENTITY": True,
             "V4_1_ACCESS_BOUNDARY": True,
             "V4_2_DEV_SELECTION": frozen_k is not None,
@@ -433,10 +654,35 @@ def run_validation(args: argparse.Namespace, contract: dict) -> dict:
             "V4_5_VALIDATION_GEOMETRY": evaluation is not None and evaluation["geometry_pass"],
             "V4_6_REPRODUCIBILITY": None,
             "V4_7_SCOPE": True,
-        },
+        }
+    validation_inventory = {
+        **prepared["inventory"],
+        "common_ref_polymorphic": len(prepared["common"]),
+        "B0": len(prepared["b0"]),
+        "maximum_K_capacity": sum(prepared["capacity"].values()),
+    }
+    if version >= 5:
+        validation_inventory.update({
+            "rare_eligible_in_shared_interval": len(prepared["rare"]),
+            "minimum_freq_minor_carrier_individuals": prepared[
+                "minimum_freq_minor_carrier_individuals"
+            ],
+        })
+    else:
+        validation_inventory["rare_REF1_in_shared_interval"] = len(prepared["rare"])
+    report = {
+        "stage": contract["stage"],
+        "phase": "single_untouched_validation",
+        "scope": contract["scope"],
+        "decision": decision,
+        "hashes": {**prepared["hashes"], "frozen_selection": sha256(args.frozen_selection)},
+        "frozen": frozen,
+        "inventory": validation_inventory,
+        "evaluation": None if evaluation is None else public_evaluation(evaluation, version),
+        "gates": gates,
         "interpretation": "Single technical validation of marker geometry only. Passing does not show LAI improvement or transfer to DNABR/NAM.",
     }
-    write_json(args.outdir / "m28b_v4_validation.public.json", report)
+    write_json(args.outdir / f"{artifact_prefix}_validation.public.json", report)
     return report
 
 
@@ -450,6 +696,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--m28-preregistration", required=True, type=Path)
     parser.add_argument("--preregistration", required=True, type=Path)
     parser.add_argument("--preflight-manifest", type=Path)
+    parser.add_argument("--preflight-report", type=Path)
+    parser.add_argument("--preflight-reproducibility", type=Path)
     parser.add_argument("--frozen-selection", type=Path)
     parser.add_argument("--outdir", required=True, type=Path)
     return parser.parse_args()
