@@ -25,6 +25,7 @@ workflow {
         run_id: workflow.runName,
         container_path: params.m28b_container_image,
         container_digest: params.m28b_container_digest,
+        container_options: params.m28b_container_options,
         scientific_scope: 'marker capacity only; no LAI, TARGET, truth or donor selection',
         nextflow_command: workflow.commandLine,
         baseline_template_uri: 'gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/vcf_fixed/dnabr.refpop.fixed.chr22.vcf.gz',
