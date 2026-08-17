@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -128,6 +129,100 @@ class TestContract(unittest.TestCase):
             MODULE.sha256(REPO / "conf" / "m28c_gnomix_training_smoke.yaml"),
             contract["authenticated_inputs"]["gnomix_config_sha256"],
         )
+
+    def test_full_b0_dimensions_and_residual_policy(self):
+        contract = MODULE.load_contract(
+            REPO / "conf" / "m28c_gnomix_full_b0_preregistration.json"
+        )
+        with tempfile.TemporaryDirectory() as name:
+            genetic_map = Path(name) / "map.tsv"
+            genetic_map.write_text("22\t1\t0.0\n22\t50791300\t74.109562\n", encoding="utf-8")
+            observed = MODULE.calculate_dimensions(79791, genetic_map, contract)
+        self.assertEqual(observed, contract["gnomix_parameters"]["derived_expected"])
+        self.assertEqual(observed["terminal_window_markers"], 241)
+        self.assertEqual(observed["modeled_markers"], 79791)
+        self.assertEqual(MODULE.report_stem(contract), "m28c_gnomix_full_b0")
+        self.assertEqual(
+            MODULE.sha256(REPO / "conf" / "m28c_gnomix_full_b0.yaml"),
+            contract["authenticated_inputs"]["gnomix_config_sha256"],
+        )
+
+
+class TestFullComparison(unittest.TestCase):
+    def write_inference(self, root: Path, replicate: str) -> tuple[Path, Path]:
+        inference = root / f"inference_{replicate}"
+        results = inference / "results"
+        results.mkdir(parents=True)
+        (results / "query_results.msp").write_text(
+            "#Subpopulation order/codes: AFR=0\tEUR=1\tASIA=2\n"
+            "#chm\tspos\tepos\tsgpos\tegpos\tn snps\tT0.0\tT0.1\n"
+            "22\t100\t200\t1.0\t1.2\t2\t0\t1\n",
+            encoding="utf-8",
+        )
+        (results / "query_results.fb").write_text(
+            "#reference_panel_population:\tAFR\tEUR\tASIA\n"
+            "chromosome\tphysical position\tgenetic_position\tgenetic_marker_index"
+            "\tT0:::hap1:::AFR\tT0:::hap1:::EUR\tT0:::hap1:::ASIA\n"
+            "22\t150\t1.1\t.\t0.8\t0.1\t0.1\n",
+            encoding="utf-8",
+        )
+        report = root / f"inference_{replicate}.json"
+        contract_hash = MODULE.sha256(
+            REPO / "conf" / "m28c_gnomix_full_b0_preregistration.json"
+        )
+        report.write_text(
+            json.dumps(
+                {
+                    "replicate": replicate,
+                    "decision": "GO_REPLICATE_COMPARISON_NO_TRUTH",
+                    "contract_sha256": contract_hash,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return inference, report
+
+    def write_training_report(self, root: Path, replicate: str, data_hash: str) -> Path:
+        report = root / f"training_{replicate}.json"
+        report.write_text(
+            json.dumps(
+                {
+                    "replicate": replicate,
+                    "decision": "GO_FROZEN_MODEL_INFERENCE_NO_TRUTH",
+                    "contract_sha256": MODULE.sha256(
+                        REPO / "conf" / "m28c_gnomix_full_b0_preregistration.json"
+                    ),
+                    "generated_data_sha256": {"generated_data/matrix.npy": data_hash},
+                }
+            ),
+            encoding="utf-8",
+        )
+        return report
+
+    def arguments(self, root: Path, hash_b: str = "same") -> SimpleNamespace:
+        inference_a, report_a = self.write_inference(root, "A")
+        inference_b, report_b = self.write_inference(root, "B")
+        return SimpleNamespace(
+            preregistration=REPO / "conf" / "m28c_gnomix_full_b0_preregistration.json",
+            inference_a=inference_a,
+            report_a=report_a,
+            inference_b=inference_b,
+            report_b=report_b,
+            train_report_a=self.write_training_report(root, "A", "same"),
+            train_report_b=self.write_training_report(root, "B", hash_b),
+            outdir=root / "comparison",
+        )
+
+    def test_full_comparison_requires_identical_generated_training_data(self):
+        with tempfile.TemporaryDirectory() as name:
+            report = MODULE.comparison(self.arguments(Path(name)))
+        self.assertTrue(report["generated_training_data_hashes_exact"])
+        self.assertTrue(report["gates"]["T6_REPRODUCIBILITY"])
+
+    def test_full_comparison_rejects_different_generated_training_data(self):
+        with tempfile.TemporaryDirectory() as name:
+            with self.assertRaisesRegex(ValueError, "reproducibility failed"):
+                MODULE.comparison(self.arguments(Path(name), hash_b="different"))
 
 
 if __name__ == "__main__":

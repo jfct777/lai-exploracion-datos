@@ -1,0 +1,132 @@
+{
+  "stage": "M28C_GNOMIX_FULL_B0_RESOURCE_BENCHMARK",
+  "version": 1,
+  "status": "PRE_FROZEN_BEFORE_FULL_B0",
+  "scope": "full_B0_training_serialization_reload_and_inference_only_no_target_truth_accuracy_screen_or_effect_estimation",
+  "question": "Can the fixed Gnomix anchor train and infer reproducibly on all 79791 B0 markers within protected resources before TARGET truth is opened?",
+  "claims_excluded": [
+    "B0_local_ancestry_accuracy",
+    "B0_ceiling_or_headroom",
+    "rare_variant_incremental_utility",
+    "hyperparameter_selection",
+    "utility_in_real_DNABR",
+    "Native_American_interpretation"
+  ],
+  "authenticated_inputs": {
+    "reference_vcf_sha256": "ea4e52902da1de306c93060bb604f8686586810f93059457cc96fd58f7946fa4",
+    "reference_tbi_sha256": "41e1891cc2a341b09673b7d10eaa073315957ab7b45ac63a8f30c0dee216c6d5",
+    "target_vcf_sha256": "b53feee86c58eca1f5cc2c7cca9863a0a12966d02ff855baab267cfb447ccef3",
+    "target_tbi_sha256": "4ad237bb3c9713b9959afa690da43a9b7f329022deb5a0b6a3d7a96ab0a2f846",
+    "sample_map_sha256": "1ae29789a2d793957a367b77b78300ddba6d7537c10bb5cda318ef3fdd547647",
+    "b0_marker_table_sha256": "73a8c07deb3dc7fb749ab68f287cb0b77a3af0ec9ef19e1bd412590ff5f29202",
+    "genetic_map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+    "gnomix_config_sha256": "d320f76807e4cc0e87ac80002fc8f07f0aa0065acfe474bd428aa938a5749d92"
+  },
+  "software": {
+    "container_image": "dnabr-m28c-gnomix:e758f2c-r4",
+    "container_sha256": "sha256:0691d58732a4deb16125059658618d794997338de7e630255559b1832775a2a4",
+    "gnomix_commit": "e758f2c8108b660c6321c6a1b168b3a79e85a02d",
+    "runtime_known_answer_sha256": "b49109e1d1056dbdc640687f908104ae0e4efa12f6ac8c7392c72cc9e9432ba4",
+    "python": "3.13.15",
+    "bcftools": "1.16",
+    "scikit_allel": "1.3.13",
+    "scikit_learn": "1.7.2",
+    "xgboost_cpu": "3.4.1"
+  },
+  "source_panel": {
+    "chromosome": "chr22",
+    "assembly": "GRCh38",
+    "full_b0_markers": 79791,
+    "reference_samples": 90,
+    "reference_samples_per_ancestry": {"AFR": 30, "EUR": 30, "ASIA": 30},
+    "target_samples": 30,
+    "ploidy": 2,
+    "first_position": 16386159,
+    "last_position": 50784249,
+    "truth_policy": "No truth file or mosaic-event file is an input. ASIA must not be relabelled as NAM."
+  },
+  "subset": {
+    "markers": 79791,
+    "selection": "All authenticated B0 markers in original order; no subsampling or TARGET-based filtering."
+  },
+  "gnomix_parameters": {
+    "seed": 42,
+    "mode": "default",
+    "base_model": "LogisticRegression_L2_C3_liblinear_OVR",
+    "smoother": "XGBoost_100_trees_depth4_learning_rate0.1_L2_1_L1_0",
+    "window_size_cM": 0.2,
+    "smooth_size_windows": 75,
+    "context_ratio": 0.5,
+    "retrain_base": true,
+    "calibrate": false,
+    "n_cores": 4,
+    "r_admixed": 1,
+    "split_ratios": {"train1": 0.8, "train2": 0.15, "val": 0.05},
+    "train1_generations": [0, 2, 4, 6, 8, 12, 16, 24],
+    "train2_generations": [0, 2, 4, 6, 8, 12, 16, 24],
+    "validation_generations": [2, 4, 6, 8, 12, 16, 24],
+    "derived_expected": {
+      "C": 79791,
+      "M": 215,
+      "W": 371,
+      "A": 3,
+      "S": 75,
+      "context_markers_each_side": 107,
+      "remainder_markers": 26,
+      "terminal_window_markers": 241,
+      "modeled_markers": 79791
+    },
+    "rationale": "Carry forward the historical/default anchor unchanged. No screen is permitted before TARGET predictions and the scoring contract are frozen."
+  },
+  "terminal_partition": {
+    "complete_windows_before_terminal": 370,
+    "markers_per_complete_window": 215,
+    "remainder_markers": 26,
+    "terminal_window_markers": 241,
+    "modeled_markers": 79791,
+    "policy": "Gnomix trains W=371 base models; the terminal model consumes M plus the 26 residual markers. MSP counts must sum to all 79791 markers."
+  },
+  "execution": {
+    "canonical_replicate": "A",
+    "audit_replicate": "B",
+    "launch_order": "Run A alone, audit its resource trace, and launch B only after A passes every gate.",
+    "replicates": ["A", "B"],
+    "training_inputs": ["full_reference_vcf", "sample_map", "genetic_map", "frozen_config", "runtime_known_answer"],
+    "training_forbidden_inputs": ["target_vcf", "truth", "mosaic_events", "BR", "BS"],
+    "ordering": "Each model is serialized, audited and hashed before its corresponding TARGET inference process starts.",
+    "internal_validation_policy": "Preserve Gnomix internal synthetic-validation artifacts but do not inspect or use their values for progression or claims.",
+    "prediction_comparison": {
+      "msp_labels": "exact",
+      "metadata": "exact",
+      "probabilities_rtol": 0.0,
+      "probabilities_atol": 1e-10,
+      "generated_training_data_hashes": "exact",
+      "model_pickle_hash": "record_but_do_not_require_equal"
+    }
+  },
+  "resources": {
+    "executor": "local_docker_on_existing_development_vm",
+    "cpus_per_training": 4,
+    "memory_per_training": "24 GB",
+    "time_per_training": "60m",
+    "parallel_training_replicates": 1,
+    "max_retries": 0,
+    "blas_openmp_threads": 4,
+    "review_threshold_memory": "19.2 GiB",
+    "review_threshold_duration": "48m",
+    "cloud_batch_jobs": 0,
+    "new_vms": 0
+  },
+  "gates": {
+    "F0_AUTH": "All input, config, code, runtime-audit and container hashes match.",
+    "F1_FULL_INPUT": "Exactly 79791 ordered B0 markers and all expected phased REF/TARGET samples are retained.",
+    "F2_RESIDUAL_POLICY": "Runtime derives M=215, W=371, context=107 and assigns 241 markers to the terminal window, for 79791 modeled markers total.",
+    "F3_BOUNDARY": "Training receives no TARGET, truth, mosaic events, BR or BS.",
+    "F4_MODEL": "The replica trains and serializes the fixed three-ancestry architecture without nonfinite state.",
+    "F5_INFERENCE": "Inference retains 30 targets, 371 windows, all 79791 markers, AFR/EUR/ASIA and normalized finite probabilities.",
+    "F6_RESOURCES": "The replica stays at or below 19.2 GiB RSS and 48 minutes.",
+    "F7_REPRODUCIBILITY": "After B, generated training data hashes are exact, MSP is exact and FB max absolute difference is at most 1e-10.",
+    "F8_SCOPE": "No TARGET truth, accuracy, effect, screen, BR/BS, NAM or real-DNABR claim is produced."
+  },
+  "stop_rule": "Any failed gate stops. Do not launch B unless A passes F0-F6. Do not resize, retry, inspect truth or change scientific parameters inside this contract."
+}

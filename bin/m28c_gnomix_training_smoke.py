@@ -20,6 +20,11 @@ from pathlib import Path
 
 
 STAGE = "M28C_GNOMIX_TRAINING_SMOKE"
+FULL_STAGE = "M28C_GNOMIX_FULL_B0_RESOURCE_BENCHMARK"
+VALID_CONTRACTS = {
+    STAGE: "PRE_FROZEN_AMENDED_BEFORE_SUCCESSFUL_TRAINING",
+    FULL_STAGE: "PRE_FROZEN_BEFORE_FULL_B0",
+}
 
 
 def sha256(path: Path) -> str:
@@ -69,11 +74,15 @@ def run_command(
 
 def load_contract(path: Path) -> dict:
     contract = json.loads(path.read_text(encoding="utf-8"))
-    if contract.get("stage") != STAGE:
+    if contract.get("stage") not in VALID_CONTRACTS:
         raise ValueError(f"Unexpected contract stage: {contract.get('stage')!r}")
-    if contract.get("status") != "PRE_FROZEN_AMENDED_BEFORE_SUCCESSFUL_TRAINING":
+    if contract.get("status") != VALID_CONTRACTS[contract["stage"]]:
         raise ValueError("Training-smoke contract is not frozen")
     return contract
+
+
+def report_stem(contract: dict) -> str:
+    return "m28c_gnomix_full_b0" if contract["stage"] == FULL_STAGE else "m28c_gnomix_smoke"
 
 
 def require_hash(path: Path, expected: str, label: str) -> str:
@@ -213,6 +222,34 @@ def read_sample_map(path: Path) -> list[tuple[str, str]]:
     return [(sample, ancestry) for sample, ancestry in rows]
 
 
+def calculate_dimensions(marker_count: int, genetic_map: Path, contract: dict) -> dict:
+    map_cm = []
+    with genetic_map.open("r", encoding="utf-8") as handle:
+        for row in csv.reader(handle, delimiter="\t"):
+            if row:
+                map_cm.append(float(row[2]))
+    calculated_m = int(
+        round(float(contract["gnomix_parameters"]["window_size_cM"]) * (marker_count / max(map_cm)))
+    )
+    if marker_count % calculated_m == 0:
+        calculated_m += 1
+    windows = marker_count // calculated_m
+    remainder = marker_count % calculated_m
+    return {
+        "C": marker_count,
+        "M": calculated_m,
+        "W": windows,
+        "A": len(contract["source_panel"]["reference_samples_per_ancestry"]),
+        "S": int(contract["gnomix_parameters"]["smooth_size_windows"]),
+        "context_markers_each_side": int(
+            calculated_m * float(contract["gnomix_parameters"]["context_ratio"])
+        ),
+        "remainder_markers": remainder,
+        "terminal_window_markers": calculated_m + remainder,
+        "modeled_markers": (windows - 1) * calculated_m + calculated_m + remainder,
+    }
+
+
 def write_subset_inputs(
     source: Path,
     destination: Path,
@@ -312,22 +349,8 @@ def prepare(args: argparse.Namespace) -> dict:
     assert_phased_complete(target_subset, len(selected), len(target_samples))
 
     derived = contract["gnomix_parameters"]["derived_expected"]
-    map_cm = []
-    with args.genetic_map.open("r", encoding="utf-8") as handle:
-        for row in csv.reader(handle, delimiter="\t"):
-            if row:
-                map_cm.append(float(row[2]))
-    calculated_m = int(round(float(contract["gnomix_parameters"]["window_size_cM"]) * (len(selected) / max(map_cm))))
-    if len(selected) % calculated_m == 0:
-        calculated_m += 1
-    calculated = {
-        "C": len(selected),
-        "M": calculated_m,
-        "W": len(selected) // calculated_m,
-        "A": len(expected_counts),
-        "S": int(contract["gnomix_parameters"]["smooth_size_windows"]),
-        "context_markers_each_side": int(calculated_m * float(contract["gnomix_parameters"]["context_ratio"])),
-    }
+    calculated_all = calculate_dimensions(len(selected), args.genetic_map, contract)
+    calculated = {key: calculated_all[key] for key in derived}
     if calculated != derived:
         raise ValueError(f"Derived Gnomix dimensions differ: expected {derived}, observed {calculated}")
 
@@ -370,6 +393,86 @@ def prepare(args: argparse.Namespace) -> dict:
     return report
 
 
+def validate_full(args: argparse.Namespace) -> dict:
+    contract = load_contract(args.preregistration)
+    if contract["stage"] != FULL_STAGE:
+        raise ValueError("validate-full requires the full-B0 contract")
+    authenticated = contract["authenticated_inputs"]
+    observed_inputs = {
+        "reference_vcf": require_hash(args.reference_vcf, authenticated["reference_vcf_sha256"], "reference VCF"),
+        "reference_tbi": require_hash(args.reference_tbi, authenticated["reference_tbi_sha256"], "reference TBI"),
+        "target_vcf": require_hash(args.target_vcf, authenticated["target_vcf_sha256"], "target VCF"),
+        "target_tbi": require_hash(args.target_tbi, authenticated["target_tbi_sha256"], "target TBI"),
+        "sample_map": require_hash(args.sample_map, authenticated["sample_map_sha256"], "sample map"),
+        "b0_markers": require_hash(args.b0_markers, authenticated["b0_marker_table_sha256"], "B0 table"),
+        "genetic_map": require_hash(args.genetic_map, authenticated["genetic_map_sha256"], "genetic map"),
+        "gnomix_config": require_hash(args.gnomix_config, authenticated["gnomix_config_sha256"], "Gnomix config"),
+    }
+    panel = contract["source_panel"]
+    markers = read_b0_markers(args.b0_markers, int(panel["full_b0_markers"]))
+    expected_positions = [marker["position"] for marker in markers]
+    if bcftools_positions(args.reference_vcf) != expected_positions:
+        raise ValueError("Full reference positions differ from the authenticated B0 table")
+    if bcftools_positions(args.target_vcf) != expected_positions:
+        raise ValueError("Full target positions differ from the authenticated B0 table")
+    reference_contigs = bcftools_contigs(args.reference_vcf)
+    target_contigs = bcftools_contigs(args.target_vcf)
+    table_contigs = sorted({marker["chrom"] for marker in markers})
+    if len(reference_contigs) != 1 or target_contigs != reference_contigs:
+        raise ValueError("Full REF/TARGET contigs differ")
+    if len(table_contigs) != 1 or canonical_autosome(table_contigs[0]) != canonical_autosome(reference_contigs[0]):
+        raise ValueError("Full B0 table and VCF contigs differ")
+
+    sample_map = read_sample_map(args.sample_map)
+    reference_samples = bcftools_samples(args.reference_vcf)
+    target_samples = bcftools_samples(args.target_vcf)
+    expected_counts = panel["reference_samples_per_ancestry"]
+    observed_counts = {ancestry: sum(value == ancestry for _, value in sample_map) for ancestry in expected_counts}
+    if [sample for sample, _ in sample_map] != reference_samples or observed_counts != expected_counts:
+        raise ValueError("Full reference sample map differs from the contract")
+    if len(target_samples) != int(panel["target_samples"]) or set(reference_samples) & set(target_samples):
+        raise ValueError("Full target sample count or REF/TARGET disjunction failed")
+    assert_phased_complete(args.reference_vcf, len(markers), len(reference_samples))
+    assert_phased_complete(args.target_vcf, len(markers), len(target_samples))
+
+    calculated = calculate_dimensions(len(markers), args.genetic_map, contract)
+    expected_dimensions = contract["gnomix_parameters"]["derived_expected"]
+    if calculated != expected_dimensions:
+        raise ValueError(f"Full Gnomix dimensions/residual policy differ: {calculated}")
+    if calculated["modeled_markers"] != len(markers):
+        raise ValueError("Full Gnomix terminal-window policy does not retain every B0 marker")
+
+    args.outdir.mkdir(parents=True, exist_ok=False)
+    report = {
+        "stage": f"{FULL_STAGE}_VALIDATE",
+        "scope": contract["scope"],
+        "contract_sha256": sha256(args.preregistration),
+        "authenticated_input_sha256": observed_inputs,
+        "output_sha256": {
+            args.reference_vcf.name: observed_inputs["reference_vcf"],
+            args.target_vcf.name: observed_inputs["target_vcf"],
+        },
+        "reference_samples": len(reference_samples),
+        "target_samples": len(target_samples),
+        "reference_ancestry_counts": observed_counts,
+        "derived_gnomix_dimensions": calculated,
+        "terminal_partition": {
+            "complete_windows_before_terminal": calculated["W"] - 1,
+            "markers_per_complete_window": calculated["M"],
+            "terminal_window_markers": calculated["terminal_window_markers"],
+            "modeled_markers": calculated["modeled_markers"],
+        },
+        "target_used_for_training": False,
+        "truth_accessed": False,
+        "model_training_performed": False,
+        "gates": {"F0_AUTH": True, "F1_FULL_INPUT": True, "F2_RESIDUAL_POLICY": True, "F3_BOUNDARY": True},
+        "decision": "GO_FULL_B0_TRAINING_REPLICATE",
+    }
+    report_path = args.outdir / "m28c_gnomix_full_b0_validate.public.json"
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return report
+
+
 def load_yaml(path: Path) -> dict:
     import yaml
 
@@ -378,7 +481,7 @@ def load_yaml(path: Path) -> dict:
 
 def authenticate_prepared(reference: Path, prepare_report: Path) -> dict:
     report = json.loads(prepare_report.read_text(encoding="utf-8"))
-    if report.get("decision") != "GO_PARALLEL_TRAINING_REPLICATES":
+    if report.get("decision") not in {"GO_PARALLEL_TRAINING_REPLICATES", "GO_FULL_B0_TRAINING_REPLICATE"}:
         raise ValueError("Preparation stage did not pass")
     expected = report["output_sha256"].get(reference.name)
     observed = sha256(reference)
@@ -389,7 +492,9 @@ def authenticate_prepared(reference: Path, prepare_report: Path) -> dict:
 
 def audit_model(model_path: Path, config_path: Path, contract: dict) -> dict:
     config = load_yaml(config_path)
-    expected = contract["gnomix_parameters"]["derived_expected"]
+    expected_all = contract["gnomix_parameters"]["derived_expected"]
+    dimension_keys = ("C", "M", "W", "A", "S", "context_markers_each_side")
+    expected = {key: expected_all[key] for key in dimension_keys}
     with model_path.open("rb") as handle:
         model = pickle.load(handle)
     observed = {
@@ -488,8 +593,9 @@ def training(args: argparse.Namespace) -> dict:
     if not model_path.is_file() or model_path.stat().st_size == 0:
         raise ValueError("Gnomix did not create a nonempty model pickle")
     model_audit = audit_model(model_path, args.gnomix_config, contract)
+    generated_data = sorted(path for path in (args.outdir / "generated_data").rglob("*") if path.is_file())
     report = {
-        "stage": f"{STAGE}_TRAIN",
+        "stage": f"{contract['stage']}_TRAIN",
         "replicate": args.replicate,
         "scope": contract["scope"],
         "contract_sha256": sha256(args.preregistration),
@@ -500,6 +606,7 @@ def training(args: argparse.Namespace) -> dict:
         "runtime_known_answer_decision": runtime_audit["decision"],
         "model_relative_path": str(model_path.relative_to(args.outdir)),
         "model_sha256": sha256(model_path),
+        "generated_data_sha256": {str(path.relative_to(args.outdir)): sha256(path) for path in generated_data},
         "duration_seconds_internal": duration,
         "model_audit": model_audit,
         "target_input_present": False,
@@ -515,7 +622,7 @@ def training(args: argparse.Namespace) -> dict:
         },
         "decision": "GO_FROZEN_MODEL_INFERENCE_NO_TRUTH",
     }
-    report_path = args.outdir / "m28c_gnomix_smoke_train.public.json"
+    report_path = args.outdir / f"{report_stem(contract)}_train.public.json"
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
 
@@ -565,8 +672,13 @@ def audit_predictions(msp_path: Path, fb_path: Path, target_vcf: Path, contract:
     labels = [[int(value) for value in row[6:]] for row in msp["rows"]]
     if any(value not in (0, 1, 2) for row in labels for value in row):
         raise ValueError("MSP contains an invalid ancestry label")
-    if sum(int(float(row[5])) for row in msp["rows"]) != int(contract["subset"]["markers"]):
-        raise ValueError("MSP marker counts do not sum to the 10000-marker subset")
+    marker_counts = [int(float(row[5])) for row in msp["rows"]]
+    expected_marker_count = int(contract["subset"]["markers"])
+    if sum(marker_counts) != expected_marker_count:
+        raise ValueError("MSP marker counts do not sum to the contracted marker count")
+    expected_terminal = contract.get("terminal_partition", {}).get("terminal_window_markers")
+    if expected_terminal is not None and marker_counts[-1] != int(expected_terminal):
+        raise ValueError("MSP terminal window does not contain the contracted residual markers")
     expected_probability_columns = len(samples) * 2 * len(expected_populations)
     if len(fb["probability_header"]) != expected_probability_columns:
         raise ValueError("FB probability-column count differs from TARGET x haplotypes x ancestries")
@@ -585,6 +697,8 @@ def audit_predictions(msp_path: Path, fb_path: Path, target_vcf: Path, contract:
         "msp_haplotype_columns": len(expected_sample_columns),
         "fb_probability_columns": expected_probability_columns,
         "max_probability_sum_error": max_sum_error,
+        "msp_marker_count_sum": sum(marker_counts),
+        "msp_terminal_window_markers": marker_counts[-1],
     }
 
 
@@ -639,7 +753,7 @@ def inference(args: argparse.Namespace) -> dict:
         raise ValueError("Gnomix did not create both MSP and FB outputs")
     prediction_audit = audit_predictions(msp_path, fb_path, args.target_vcf, contract)
     report = {
-        "stage": f"{STAGE}_INFERENCE",
+        "stage": f"{contract['stage']}_INFERENCE",
         "replicate": args.replicate,
         "scope": contract["scope"],
         "contract_sha256": sha256(args.preregistration),
@@ -658,19 +772,22 @@ def inference(args: argparse.Namespace) -> dict:
         },
         "decision": "GO_REPLICATE_COMPARISON_NO_TRUTH",
     }
-    report_path = args.outdir / "m28c_gnomix_smoke_inference.public.json"
+    report_path = args.outdir / f"{report_stem(contract)}_inference.public.json"
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
 
 
 def comparison(args: argparse.Namespace) -> dict:
     contract = load_contract(args.preregistration)
+    contract_sha256 = sha256(args.preregistration)
     report_a = json.loads(args.report_a.read_text(encoding="utf-8"))
     report_b = json.loads(args.report_b.read_text(encoding="utf-8"))
     if report_a.get("replicate") != "A" or report_b.get("replicate") != "B":
         raise ValueError("Inference reports are not ordered A then B")
     if report_a.get("decision") != "GO_REPLICATE_COMPARISON_NO_TRUTH" or report_b.get("decision") != "GO_REPLICATE_COMPARISON_NO_TRUTH":
         raise ValueError("At least one inference replicate did not pass")
+    if report_a.get("contract_sha256") != contract_sha256 or report_b.get("contract_sha256") != contract_sha256:
+        raise ValueError("Inference report contract hash differs from the comparison contract")
     msp_a = args.inference_a / "results" / "query_results.msp"
     msp_b = args.inference_b / "results" / "query_results.msp"
     fb_a = args.inference_a / "results" / "query_results.fb"
@@ -694,9 +811,41 @@ def comparison(args: argparse.Namespace) -> dict:
             max_abs = max(max_abs, abs(value_a - value_b))
     tolerance = contract["execution"]["prediction_comparison"]
     predictions_equal = max_abs <= float(tolerance["probabilities_atol"])
+    generated_data_exact = None
+    training_report_sha256 = None
+    if contract["stage"] == FULL_STAGE:
+        if args.train_report_a is None or args.train_report_b is None:
+            raise ValueError("Full-B0 comparison requires both training reports")
+        train_a = json.loads(args.train_report_a.read_text(encoding="utf-8"))
+        train_b = json.loads(args.train_report_b.read_text(encoding="utf-8"))
+        if train_a.get("replicate") != "A" or train_b.get("replicate") != "B":
+            raise ValueError("Training reports are not ordered A then B")
+        if (
+            train_a.get("decision") != "GO_FROZEN_MODEL_INFERENCE_NO_TRUTH"
+            or train_b.get("decision") != "GO_FROZEN_MODEL_INFERENCE_NO_TRUTH"
+        ):
+            raise ValueError("At least one training replicate did not pass")
+        if (
+            train_a.get("contract_sha256") != contract_sha256
+            or train_b.get("contract_sha256") != contract_sha256
+        ):
+            raise ValueError("Training report contract hash differs from the comparison contract")
+        generated_data_exact = (
+            train_a.get("generated_data_sha256") == train_b.get("generated_data_sha256")
+            and bool(train_a.get("generated_data_sha256"))
+        )
+        training_report_sha256 = {
+            "A": sha256(args.train_report_a),
+            "B": sha256(args.train_report_b),
+        }
     gates = {
         "T5_INFERENCE": True,
-        "T6_REPRODUCIBILITY": msp_exact and metadata_exact and predictions_equal,
+        "T6_REPRODUCIBILITY": (
+            msp_exact
+            and metadata_exact
+            and predictions_equal
+            and generated_data_exact is not False
+        ),
         "T8_SCOPE": True,
     }
     if not all(gates.values()):
@@ -705,10 +854,12 @@ def comparison(args: argparse.Namespace) -> dict:
         )
     args.outdir.mkdir(parents=True, exist_ok=False)
     report = {
-        "stage": f"{STAGE}_COMPARE",
+        "stage": f"{contract['stage']}_COMPARE",
         "scope": contract["scope"],
-        "contract_sha256": sha256(args.preregistration),
+        "contract_sha256": contract_sha256,
         "replicate_report_sha256": {"A": sha256(args.report_a), "B": sha256(args.report_b)},
+        "training_report_sha256": training_report_sha256,
+        "generated_training_data_hashes_exact": generated_data_exact,
         "msp_byte_identical": msp_exact,
         "fb_metadata_exact": metadata_exact,
         "fb_probability_max_abs_difference": max_abs,
@@ -720,7 +871,7 @@ def comparison(args: argparse.Namespace) -> dict:
         "gates": gates,
         "decision": "PASS_PREDICTIONS_PENDING_RESOURCE_TRACE_REVIEW",
     }
-    report_path = args.outdir / "m28c_gnomix_smoke_compare.public.json"
+    report_path = args.outdir / f"{report_stem(contract)}_compare.public.json"
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
 
@@ -745,6 +896,19 @@ def parse_args() -> argparse.Namespace:
     prepare_parser.add_argument("--gnomix-config", required=True, type=Path)
     prepare_parser.add_argument("--outdir", required=True, type=Path)
     prepare_parser.set_defaults(function=prepare)
+
+    full_parser = subparsers.add_parser("validate-full")
+    add_common(full_parser)
+    full_parser.add_argument("--reference-vcf", required=True, type=Path)
+    full_parser.add_argument("--reference-tbi", required=True, type=Path)
+    full_parser.add_argument("--target-vcf", required=True, type=Path)
+    full_parser.add_argument("--target-tbi", required=True, type=Path)
+    full_parser.add_argument("--sample-map", required=True, type=Path)
+    full_parser.add_argument("--b0-markers", required=True, type=Path)
+    full_parser.add_argument("--genetic-map", required=True, type=Path)
+    full_parser.add_argument("--gnomix-config", required=True, type=Path)
+    full_parser.add_argument("--outdir", required=True, type=Path)
+    full_parser.set_defaults(function=validate_full)
 
     train_parser = subparsers.add_parser("train")
     add_common(train_parser)
@@ -776,6 +940,8 @@ def parse_args() -> argparse.Namespace:
     compare_parser.add_argument("--report-a", required=True, type=Path)
     compare_parser.add_argument("--inference-b", required=True, type=Path)
     compare_parser.add_argument("--report-b", required=True, type=Path)
+    compare_parser.add_argument("--train-report-a", type=Path)
+    compare_parser.add_argument("--train-report-b", type=Path)
     compare_parser.add_argument("--outdir", required=True, type=Path)
     compare_parser.set_defaults(function=comparison)
     return parser.parse_args()
