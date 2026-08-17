@@ -1,0 +1,85 @@
+{
+  "stage": "M28B_V2_LAI_JOINT_MARKER_CAPACITY_AUDIT",
+  "version": 2,
+  "status": "PRE_FROZEN_BEFORE_IMPLEMENTATION",
+  "scope": "joint_marker_allocation_only_no_lai_no_target_no_truth_no_donor_selection",
+  "reason_for_new_version": "V1 correctly stopped after requiring every B0 marker to be polymorphic in REF_LAI. Recalculation from the authenticated baseline genotypes showed that 30283 of its 110074 positions are monomorphic in the pooled reference, so that requirement was not faithful to B0.",
+  "authenticated_inputs": {
+    "m28_tree_sequence_sha256": "adcdd8aa75a114a26d6629f03d838880abcd279834c69e5cff80087797e11574",
+    "m28_pool_manifest_sha256": "8a6e38b682e429556ffef52d0f6e7086137fda8e3a855ac78cf0983282afe57d",
+    "genetic_map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+    "m28_preflight_contract_sha256": "a7b8937912086bec8aca16083cdd00f3127445ffa533de03ce97b3039b6155cc",
+    "baseline_template": {
+      "uri": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/vcf_fixed/dnabr.refpop.fixed.chr22.vcf.gz",
+      "sha256": "1b9e7b23a6e046185056271513589d03c24406e5100606d078973a58d36e6afd",
+      "records": 110074,
+      "unique_positions": 110074,
+      "first_position": 16385840,
+      "last_position": 50784700,
+      "known_answer_ref_polymorphic": 79791,
+      "known_answer_ref_monomorphic": 30283
+    }
+  },
+  "analysis_interval": {
+    "rule": "Use the exact baseline-template span. B0, BR and BS must all lie between first_position and last_position inclusive.",
+    "rationale": "M28 begins 1092082 bp before the first baseline marker; adding rare markers only in that leading interval would extend coverage rather than refine the same baseline."
+  },
+  "pool_access": {
+    "allowed": ["FREQ", "REF_LAI"],
+    "forbidden": ["DONOR", "TARGET", "mosaic_events", "lai_truth"]
+  },
+  "marker_definitions": {
+    "rare_universe": "MAC>=2 and MAF<0.01 in FREQ, minor allele oriented from GT, with at least one minor copy in pooled REF_LAI.",
+    "nonrare": "MAF>=0.01 in FREQ.",
+    "reference_polymorphic": "Both the FREQ-oriented minor allele and its complement occur in pooled REF_LAI.",
+    "reference_monomorphic": "Only one of those two alleles occurs in pooled REF_LAI.",
+    "sensitivity_reference_minor_copies": 2
+  },
+  "joint_allocation": {
+    "b0_target_count": 110074,
+    "b0_ref_polymorphic_target": 79791,
+    "b0_ref_monomorphic_target": 30283,
+    "bin_widths_cm": [0.05, 0.1, 0.25, 0.5, 1.0],
+    "primary_width_rule": "Use the narrowest preregistered width for which every bin can reproduce both B0 reference-information classes and allocate at least one rare-control pair globally.",
+    "K_rule": "Within the selected width, K is the sum over bins of min(eligible rare count, simulated reference-polymorphic nonrare supply minus the reference-polymorphic B0 demand). K is derived from capacity, not chosen manually.",
+    "rare_selection": "Within each bin, rank eligible rare sites by sha256 of the fixed salt, site id and position; retain exactly the bin capacity. Do not rank by ancestry, FST, REF copy count above one, DONOR, TARGET or truth.",
+    "fixed_hash_salt": "M28B_V2_CAPACITY_20260817",
+    "mapping": "Jointly map the reference-polymorphic B0 templates and selected rare queries to reference-polymorphic nonrare candidates in the same cM bin without replacement. Map monomorphic B0 templates to monomorphic nonrare candidates in the same bin. Break ties by cM distance, bp distance and site id.",
+    "required_diagnostics": [
+      "K_global_and_per_bin",
+      "B0_polymorphic_and_monomorphic_counts",
+      "B0_mapping_median_p95_max_delta_cm",
+      "BR_BS_median_p95_max_delta_cm",
+      "nearest_with_reuse_BR_BS_delta_cm",
+      "ancestry_support_of_selected_rare",
+      "capacity_for_REF_minor_copies_at_least_2"
+    ]
+  },
+  "gates": {
+    "V2_0_INPUT_IDENTITY": "All hashes and known-answer baseline counts match exactly.",
+    "V2_1_ACCESS_BOUNDARY": "Only FREQ and REF_LAI genotypes enter allocation.",
+    "V2_2_SHARED_INTERVAL": "Every B0, BR and BS marker lies inside the exact baseline-template span.",
+    "V2_3_B0_FIDELITY": "B0 has exactly 110074 unique markers: 79791 reference-polymorphic and 30283 reference-monomorphic, mapped within the selected cM bins.",
+    "V2_4_ARM_PARITY": "BR and BS add exactly K unique markers with identical per-bin counts and no overlap with B0.",
+    "V2_5_RARE_SCOPE": "Selected rare markers retain support in AFR, EUR and ASIA; ASIA is never relabelled NAM.",
+    "V2_6_REPRODUCIBILITY": "Two independent executions produce byte-identical scientific outputs.",
+    "V2_7_SCOPE": "No LAI model or truth metric is computed."
+  },
+  "allowed_decisions": [
+    "STOP_INPUT_IDENTITY",
+    "STOP_SHARED_INTERVAL",
+    "STOP_B0_FIDELITY",
+    "STOP_CAPACITY",
+    "STOP_PARITY",
+    "STOP_REPRODUCIBILITY",
+    "AUDIT_COMPLETE_PENDING_REPRODUCIBILITY",
+    "GO_PREREGISTER_LAI_COMPARATOR"
+  ],
+  "stop_rule": "Stop before LAI if no preregistered width reproduces B0 exactly, K is zero, any ancestry loses reference-supported rare evidence, parity fails, or selection needs TARGET, truth or LAI performance. Do not relax beyond 1 cM or change the hash salt after inspecting outputs.",
+  "claims_excluded": [
+    "rare_variants_improve_LAI",
+    "utility_in_real_DNABR_samples",
+    "utility_specific_to_Native_American_ancestry",
+    "independent_validation_of_M14"
+  ]
+}

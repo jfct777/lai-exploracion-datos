@@ -19,6 +19,16 @@ SCIENTIFIC_FILES = (
     "m28b_BR_BS_pairs.tsv.gz",
 )
 
+SCIENTIFIC_FILES_V2 = (
+    "m28b_v2_capacity.public.json",
+    "m28b_v2_capacity_screens.tsv",
+    "m28b_v2_B0.tsv.gz",
+    "m28b_v2_BR_additions.tsv.gz",
+    "m28b_v2_BS_additions.tsv.gz",
+    "m28b_v2_B0_mapping.tsv.gz",
+    "m28b_v2_BR_BS_pairs.tsv.gz",
+)
+
 
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -37,9 +47,9 @@ def locate(root: Path, name: str) -> Path:
     return matches[0]
 
 
-def verify(run1: Path, run2: Path) -> dict:
+def verify(run1: Path, run2: Path, filenames=SCIENTIFIC_FILES) -> dict:
     files = {}
-    for name in SCIENTIFIC_FILES:
+    for name in filenames:
         left = locate(run1, name)
         right = locate(run2, name)
         left_hash = sha256(left)
@@ -63,12 +73,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run1", required=True, type=Path)
     parser.add_argument("--run2", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--profile", choices=("v1", "v2"), default="v1")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    report = verify(args.run1, args.run2)
+    filenames = SCIENTIFIC_FILES if args.profile == "v1" else SCIENTIFIC_FILES_V2
+    report = verify(args.run1, args.run2, filenames)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps({"decision": report["decision"], "gate": report["gate"]}, sort_keys=True))

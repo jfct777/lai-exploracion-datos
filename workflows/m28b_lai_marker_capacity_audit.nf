@@ -24,7 +24,7 @@ workflow {
         nextflow_version: workflow.nextflow.version.toString(),
         run_id: workflow.runName,
         container_path: params.m28b_container_image,
-        container_digest: params.m28b_container_digest,
+        container_sha256: params.m28b_container_digest,
         container_options: params.m28b_container_options,
         scientific_scope: 'marker capacity only; no LAI, TARGET, truth or donor selection',
         nextflow_command: workflow.commandLine,
