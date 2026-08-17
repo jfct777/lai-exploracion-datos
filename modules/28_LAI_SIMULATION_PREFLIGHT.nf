@@ -22,8 +22,8 @@ process WRITE_M28_RUN_PROVENANCE {
     """
 }
 process RUN_M28_SIMULATION_PREFLIGHT {
-    tag "m28_seed_${root_seed}"
-    publishDir "${params.m28_results_dir}/seed-${root_seed}", mode: 'copy', overwrite: false
+    tag { "m28_seed_${root_seed}" }
+    publishDir { "${params.m28_results_dir}/seed-${root_seed}" }, mode: 'copy', overwrite: false
     container params.m28_container_image
     containerOptions params.m28_container_options
     cpus params.m28_cpus
