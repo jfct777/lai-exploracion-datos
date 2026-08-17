@@ -16,6 +16,11 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && cd /opt/gnomix \
     && python -c "import allel, sklearn, xgboost; from src.utils import read_vcf"
 
+# Nextflow uses ps from procps to collect task-level CPU and memory metrics.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends procps \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV PYTHONPATH=/opt/gnomix
 WORKDIR /opt/gnomix
 
