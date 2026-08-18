@@ -119,6 +119,16 @@ class ThresholdSensitivityContractTest(unittest.TestCase):
         self.assertIn("m16_5_sensitivity_results_dir = null",
                       dedicated.read_text(encoding="utf-8"))
 
+    def test_google_batch_config_is_isolated_labeled_and_bounded(self):
+        cloud = REPO / "conf" / "m16_5_threshold_sensitivity_google_batch.config"
+        text = cloud.read_text(encoding="utf-8")
+        self.assertIn("executor = 'google-batch'", text)
+        self.assertIn("resourceLabels = [team: 'frank']", text)
+        self.assertIn("maxForks = 2", text)
+        self.assertIn("executor.queueSize = 2", text)
+        self.assertIn("m16-5-threshold-sensitivity-20260818a", text)
+        self.assertNotIn("m16-5-minor-20260806d", text)
+
 
 if __name__ == "__main__":
     unittest.main()
