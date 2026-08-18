@@ -128,6 +128,8 @@ class M29RootB0ProductionTest(unittest.TestCase):
         self.assertIn("maxRetries = 0", config)
         self.assertIn("executor = 'local'", config)
         self.assertNotIn("google", config.lower())
+        run_config = (ROOT / "conf" / "m29_root_b0_production_20260818a.config").read_text()
+        self.assertIn("--network none --user 1017:1020", run_config)
 
 
 if __name__ == "__main__":
