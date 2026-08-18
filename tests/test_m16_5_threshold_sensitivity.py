@@ -101,7 +101,7 @@ class ThresholdSensitivityContractTest(unittest.TestCase):
 
     def test_post_diagnostic_amendment_is_explicit_and_non_selective(self):
         amendments = self.contract["amendments_before_first_successful_cloud_run"]
-        self.assertEqual(len(amendments), 1)
+        self.assertEqual(len(amendments), 2)
         self.assertEqual(amendments[0]["scope"],
                          "supplementary_non_selection_diagnostics")
         self.assertIn("do not alter", amendments[0]["reason"])
@@ -111,6 +111,13 @@ class ThresholdSensitivityContractTest(unittest.TestCase):
         self.assertIn(
             "maximum_family_component_concentration_in_a_community_of_at_least_10",
             checks)
+
+    def test_inventory_excludes_runtime_files_and_staged_inputs(self):
+        expected = set(self.mod.SCIENTIFIC_ARTIFACT_FILENAMES)
+        self.assertIn("configuration_summary.tsv", expected)
+        self.assertNotIn("m16_5_threshold_sensitivity.log", expected)
+        script = SCRIPT.read_text(encoding="utf-8")
+        self.assertNotIn('outdir.rglob("*")', script)
 
     def test_metadata_duplicate_policy_is_exact_and_fail_closed(self):
         inputs = self.contract["inputs"]
@@ -150,7 +157,7 @@ class ThresholdSensitivityContractTest(unittest.TestCase):
         self.assertIn("resourceLabels = [team: 'frank']", text)
         self.assertIn("maxForks = 2", text)
         self.assertIn("executor.queueSize = 2", text)
-        self.assertIn("m16-5-threshold-sensitivity-20260818b", text)
+        self.assertIn("m16-5-threshold-sensitivity-20260818c", text)
         self.assertNotIn("m16-5-minor-20260806d", text)
 
 

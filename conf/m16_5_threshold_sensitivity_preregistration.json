@@ -1,12 +1,17 @@
 {
   "schema_version": "1.0.0",
   "experiment_id": "M16.5-threshold-sensitivity",
-  "status": "PRE_FROZEN_BEFORE_EXECUTION",
+  "status": "PRE_FROZEN_AMENDED_AFTER_SUCCESSFUL_RUN_FOR_INVENTORY_ONLY",
   "amendments_before_first_successful_cloud_run": [
     {
       "date": "2026-08-18",
       "scope": "supplementary_non_selection_diagnostics",
       "reason": "The first cloud attempt stopped on an exact duplicate metadata row. A local diagnostic run then showed that all-observed degree AUC is structurally inflated because isolates cannot be assigned and that the maximum family fraction is dominated by tiny communities. Connected-only and community-size-aware summaries were therefore added transparently; they do not alter inputs, thresholds, communities, or the frozen no-automatic-winner rule."
+    },
+    {
+      "date": "2026-08-18",
+      "scope": "artifact_inventory_only_after_first_successful_cloud_run",
+      "reason": "The first successful cloud run produced valid scientific outputs, but the generic recursive inventory also listed staged inputs, caches and Nextflow command files. The inventory was narrowed to declared scientific outputs and plots only. No input, graph, threshold, diagnostic or interpretation changed."
     }
   ],
   "purpose": "Evaluate whether the descriptive M16.5 rare-allele co-sharing communities are robust to defensible graph thresholds.",

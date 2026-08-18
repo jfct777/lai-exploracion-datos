@@ -22,6 +22,15 @@ from typing import Any, Iterable
 
 NOISE_LABEL = -1
 ABSENT_LABEL = -2
+SCIENTIFIC_ARTIFACT_FILENAMES = (
+    "configuration_summary.tsv",
+    "resolution_summary.tsv",
+    "assignments.tsv.gz",
+    "neighbor_comparisons.tsv",
+    "pcrelate_community_concentration.tsv",
+    "identity_control.json",
+    "decision.json",
+)
 
 
 def _slug_bp(value: int) -> str:
@@ -711,8 +720,12 @@ def run(args: argparse.Namespace) -> None:
     _write_json(outdir / "decision.json", _json_value(decision))
 
     inventory_path = outdir / "artifact_inventory.tsv"
-    artifacts = sorted(p for p in outdir.rglob("*")
-                       if p.is_file() and p != inventory_path)
+    artifacts = [outdir / name for name in SCIENTIFIC_ARTIFACT_FILENAMES]
+    artifacts.extend(sorted((outdir / "plots").glob("*.png")))
+    missing_artifacts = [path for path in artifacts if not path.is_file()]
+    if missing_artifacts:
+        raise RuntimeError(
+            f"scientific artifact inventory is incomplete: {missing_artifacts}")
     with inventory_path.open("w", encoding="utf-8") as handle:
         handle.write("relative_path\tsize_bytes\tsha256\n")
         for artifact in artifacts:
