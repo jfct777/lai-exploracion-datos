@@ -88,6 +88,9 @@ class ThresholdSensitivityContractTest(unittest.TestCase):
         self.assertEqual(
             self.contract["fixed_parameters"]["pcrelate"][
                 "expected_related_pairs_in_m14_observed_cohort"], 1_069)
+        self.assertEqual(
+            self.contract["fixed_parameters"]["pcrelate"][
+                "family_concentration_minimum_community_size"], 10)
         combined = "\n".join([
             SCRIPT.read_text(encoding="utf-8"),
             MODULE.read_text(encoding="utf-8"),
@@ -95,6 +98,27 @@ class ThresholdSensitivityContractTest(unittest.TestCase):
         ]).lower()
         self.assertIn("pcrelate", combined)
         self.assertNotIn("king", combined)
+
+    def test_post_diagnostic_amendment_is_explicit_and_non_selective(self):
+        amendments = self.contract["amendments_before_first_successful_cloud_run"]
+        self.assertEqual(len(amendments), 1)
+        self.assertEqual(amendments[0]["scope"],
+                         "supplementary_non_selection_diagnostics")
+        self.assertIn("do not alter", amendments[0]["reason"])
+        checks = self.contract["metrics"]["dependence_checks"]
+        self.assertIn(
+            "assignment_auc_from_graph_degree_among_connected_samples", checks)
+        self.assertIn(
+            "maximum_family_component_concentration_in_a_community_of_at_least_10",
+            checks)
+
+    def test_metadata_duplicate_policy_is_exact_and_fail_closed(self):
+        inputs = self.contract["inputs"]
+        self.assertEqual(inputs["expected_exact_duplicate_rows_removed"], 1)
+        self.assertIn("exact duplicate", inputs["metadata_duplicate_policy"])
+        script = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("metadata.drop_duplicates()", script)
+        self.assertIn("conflicting rows", script)
 
     def test_contract_rejects_duplicate_configuration_ids(self):
         altered = json.loads(CONTRACT.read_text(encoding="utf-8"))
@@ -126,7 +150,7 @@ class ThresholdSensitivityContractTest(unittest.TestCase):
         self.assertIn("resourceLabels = [team: 'frank']", text)
         self.assertIn("maxForks = 2", text)
         self.assertIn("executor.queueSize = 2", text)
-        self.assertIn("m16-5-threshold-sensitivity-20260818a", text)
+        self.assertIn("m16-5-threshold-sensitivity-20260818b", text)
         self.assertNotIn("m16-5-minor-20260806d", text)
 
 

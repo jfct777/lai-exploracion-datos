@@ -294,7 +294,7 @@ def _load_pcrelate(path: Path, samples: list[str], contract: dict[str, Any], pd)
 
 
 def _pcrelate_metrics(samples, membership, related_pairs, family_component,
-                       config_id: str, np):
+                       config_id: str, minimum_community_size: int, np):
     index = {sample: idx for idx, sample in enumerate(samples)}
     comparable = []
     same = 0
@@ -308,6 +308,7 @@ def _pcrelate_metrics(samples, membership, related_pairs, family_component,
     assigned = membership >= 0
     rows = []
     maximum = 0.0
+    maximum_sized = 0.0
     for community in sorted(np.unique(membership[assigned]).tolist()):
         members = [samples[i] for i in np.flatnonzero(membership == community)]
         counts: dict[str, int] = {}
@@ -321,6 +322,10 @@ def _pcrelate_metrics(samples, membership, related_pairs, family_component,
         largest = max(counts.values(), default=0)
         concentration = largest / len(members) if members else math.nan
         maximum = max(maximum, concentration if math.isfinite(concentration) else 0.0)
+        if len(members) >= minimum_community_size:
+            maximum_sized = max(
+                maximum_sized,
+                concentration if math.isfinite(concentration) else 0.0)
         rows.append({
             "config_id": config_id,
             "community_res_1": int(community),
@@ -329,12 +334,19 @@ def _pcrelate_metrics(samples, membership, related_pairs, family_component,
             "largest_family_component_size": largest,
             "largest_family_component_fraction": concentration,
         })
+    n_assigned = int(assigned.sum())
+    n_assigned_family = sum(
+        sample in family_component
+        for sample, keep in zip(samples, assigned, strict=True) if keep)
     return {
         "n_pcrelate_pairs_in_m14_cohort": len(related_pairs),
         "n_pcrelate_pairs_both_assigned": len(comparable),
         "pcrelate_pairs_same_community_fraction": (
             same / len(comparable) if comparable else math.nan),
         "maximum_family_component_fraction_any_community": maximum,
+        "maximum_family_component_fraction_community_ge_10": maximum_sized,
+        "assigned_in_nontrivial_family_component_fraction": (
+            n_assigned_family / n_assigned if n_assigned else math.nan),
     }, rows
 
 
@@ -428,8 +440,16 @@ def run(args: argparse.Namespace) -> None:
     missing_metadata = metadata_required - set(metadata.columns)
     if missing_metadata:
         raise ValueError(f"metadata missing required columns: {sorted(missing_metadata)}")
+    metadata_rows_before = len(metadata)
+    metadata = metadata.drop_duplicates().copy()
+    exact_duplicate_rows_removed = metadata_rows_before - len(metadata)
+    if exact_duplicate_rows_removed != int(
+            input_cfg["expected_exact_duplicate_rows_removed"]):
+        raise ValueError(
+            "metadata exact-duplicate count differs from preregistration")
     if metadata[input_cfg["metadata_id_column"]].duplicated().any():
-        raise ValueError("metadata contains duplicate sample identifiers")
+        raise ValueError(
+            "metadata contains conflicting rows for one sample identifier")
     metadata = metadata.set_index(input_cfg["metadata_id_column"]).reindex(samples)
     if metadata.index.hasnans or metadata[input_cfg["metadata_cohort_column"]].isna().any():
         raise ValueError("cohort metadata is incomplete for M14 observed samples")
@@ -502,12 +522,27 @@ def run(args: argparse.Namespace) -> None:
         ancestry_auc = _oof_q_auc(
             q_observed, assigned, fixed["ancestry_assignment_diagnostic"], np,
             metrics, model_selection, pipeline, preprocessing, linear_model)
+        try:
+            ancestry_auc_connected = _oof_q_auc(
+                q_observed[connected], assigned[connected],
+                fixed["ancestry_assignment_diagnostic"], np, metrics,
+                model_selection, pipeline, preprocessing, linear_model)
+        except ValueError:
+            ancestry_auc_connected = math.nan
         assignment_cohort_nmi = float(metrics.normalized_mutual_info_score(
             assigned.astype(np.int8), cohort_observed))
         assignment_cohort_cramers_v = _bias_corrected_cramers_v(
             assigned.astype(np.int8), cohort_observed, pd, scipy_stats, np)
+        assignment_cohort_nmi_connected = float(
+            metrics.normalized_mutual_info_score(
+                assigned[connected].astype(np.int8), cohort_observed[connected]))
+        assignment_cohort_cramers_v_connected = _bias_corrected_cramers_v(
+            assigned[connected].astype(np.int8), cohort_observed[connected],
+            pd, scipy_stats, np)
         related_metrics, per_community_family = _pcrelate_metrics(
-            samples, membership, related_pairs, family_component, config_id, np)
+            samples, membership, related_pairs, family_component, config_id,
+            int(fixed["pcrelate"]["family_concentration_minimum_community_size"]),
+            np)
         family_rows.extend(per_community_family)
         summary_rows.append({
             **config,
@@ -527,8 +562,12 @@ def run(args: argparse.Namespace) -> None:
                 memberships[primary], int(fixed["minimum_community_size"]),
                 connected, metrics, np),
             "assignment_auc_degree_observed": _safe_auc(assigned, degree, metrics, np),
+            "assignment_auc_degree_connected": _safe_auc(
+                assigned[connected], degree[connected], metrics, np),
             "assignment_auc_degree_full": _safe_auc(full_assigned, full_degree, metrics, np),
             "assignment_auc_burden_observed": _safe_auc(assigned, burden_observed, metrics, np),
+            "assignment_auc_burden_connected": _safe_auc(
+                assigned[connected], burden_observed[connected], metrics, np),
             "assignment_auc_burden_full": _safe_auc(full_assigned, burden_full, metrics, np),
             "assignment_spearman_degree_observed": _safe_spearman(
                 assigned, degree, scipy_stats, np),
@@ -539,8 +578,12 @@ def run(args: argparse.Namespace) -> None:
             "assignment_spearman_burden_full": _safe_spearman(
                 full_assigned, burden_full, scipy_stats, np),
             "assignment_oof_auc_four_autosomal_q": ancestry_auc,
+            "assignment_oof_auc_four_autosomal_q_connected": ancestry_auc_connected,
             "assignment_vs_cohort_nmi": assignment_cohort_nmi,
+            "assignment_vs_cohort_nmi_connected": assignment_cohort_nmi_connected,
             "assignment_vs_cohort_bias_corrected_cramers_v": assignment_cohort_cramers_v,
+            "assignment_vs_cohort_bias_corrected_cramers_v_connected": (
+                assignment_cohort_cramers_v_connected),
             **related_metrics,
             "finestructure_ari_assigned": fine_ari,
             "finestructure_nmi_assigned": fine_nmi,
@@ -663,6 +706,7 @@ def run(args: argparse.Namespace) -> None:
             "rows_streamed": pcrelate_rows_seen,
             "in_cohort_pairs_passing_threshold": len(related_pairs),
         },
+        "metadata_exact_duplicate_rows_removed": exact_duplicate_rows_removed,
     }
     _write_json(outdir / "decision.json", _json_value(decision))
 

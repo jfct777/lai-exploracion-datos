@@ -2,6 +2,13 @@
   "schema_version": "1.0.0",
   "experiment_id": "M16.5-threshold-sensitivity",
   "status": "PRE_FROZEN_BEFORE_EXECUTION",
+  "amendments_before_first_successful_cloud_run": [
+    {
+      "date": "2026-08-18",
+      "scope": "supplementary_non_selection_diagnostics",
+      "reason": "The first cloud attempt stopped on an exact duplicate metadata row. A local diagnostic run then showed that all-observed degree AUC is structurally inflated because isolates cannot be assigned and that the maximum family fraction is dominated by tiny communities. Connected-only and community-size-aware summaries were therefore added transparently; they do not alter inputs, thresholds, communities, or the frozen no-automatic-winner rule."
+    }
+  ],
   "purpose": "Evaluate whether the descriptive M16.5 rare-allele co-sharing communities are robust to defensible graph thresholds.",
   "scope": {
     "analysis_type": "descriptive_threshold_sensitivity",
@@ -18,6 +25,8 @@
     "metadata_id_column": "ID",
     "metadata_comparison_column": "finestructure_clusters",
     "metadata_cohort_column": "Cohort",
+    "metadata_duplicate_policy": "collapse exact duplicate rows only; fail if one ID has conflicting values",
+    "expected_exact_duplicate_rows_removed": 1,
     "autosomal_q_columns": [
       "Autosomes_Indigenous_anc",
       "Autosomes_European_anc",
@@ -60,6 +69,7 @@
       "kinship_threshold": 0.0442,
       "chunksize_rows": 500000,
       "family_component_minimum_size": 2,
+      "family_concentration_minimum_community_size": 10,
       "expected_input_rows": 4062675,
       "expected_related_pairs_in_m14_observed_cohort": 1069
     },
@@ -111,14 +121,21 @@
     ],
     "dependence_checks": [
       "assignment_auc_from_graph_degree",
+      "assignment_auc_from_graph_degree_among_connected_samples",
       "assignment_auc_from_corrected_rare_burden",
+      "assignment_auc_from_corrected_rare_burden_among_connected_samples",
       "assignment_spearman_graph_degree",
       "assignment_spearman_corrected_rare_burden",
       "assignment_oof_auc_from_four_autosomal_Q",
+      "assignment_oof_auc_from_four_autosomal_Q_among_connected_samples",
       "assignment_vs_cohort_nmi",
+      "assignment_vs_cohort_nmi_among_connected_samples",
       "assignment_vs_cohort_bias_corrected_cramers_v",
+      "assignment_vs_cohort_bias_corrected_cramers_v_among_connected_samples",
       "pcrelate_related_pairs_within_same_community_fraction",
-      "maximum_family_component_concentration_in_a_community"
+      "maximum_family_component_concentration_in_a_community",
+      "maximum_family_component_concentration_in_a_community_of_at_least_10",
+      "assigned_fraction_in_nontrivial_family_components"
     ],
     "descriptive_external_comparison": [
       "finestructure_ari_assigned",

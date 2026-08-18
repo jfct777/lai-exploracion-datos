@@ -72,6 +72,6 @@ process RUN_M16_5_THRESHOLD_SENSITIVITY {
       --preregistration ${preregistration} \
       --core-script ${core_py} \
       --outdir . \
-      > m16_5_threshold_sensitivity.log 2>&1
+      2>&1 | tee m16_5_threshold_sensitivity.log
     """
 }
