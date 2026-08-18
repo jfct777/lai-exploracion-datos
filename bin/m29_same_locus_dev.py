@@ -285,8 +285,23 @@ def _prediction_windows(fb_path: Path, msp_path: Path, genetic_map: GeneticMap, 
             dtype=float,
         )
         left, right = boundaries[index], boundaries[index + 1]
-        windows.append(Window(left, right, genetic_map.cm_at(left), genetic_map.cm_at(right - 1), baseline))
+        windows.append(Window(left, right, genetic_map.cm_at(left), genetic_map.cm_at(min(right, genetic_map.positions[-1])), baseline))
     return fb_samples, windows
+
+
+def _half_open_cm_span(genetic_map: GeneticMap, left: int, right: int) -> float:
+    """Return an additive genetic length for a half-open physical interval.
+
+    Internal interval boundaries are evaluated at the shared boundary, matching
+    M28D.  The chromosome domain ends one base beyond the final map coordinate,
+    so only that terminal edge is clipped to the authenticated map endpoint.
+    """
+    if right <= left:
+        return 0.0
+    right_coordinate = min(right, genetic_map.positions[-1])
+    if right_coordinate < left:
+        return 0.0
+    return max(0.0, genetic_map.cm_at(right_coordinate) - genetic_map.cm_at(left))
 
 
 def _integrated_truth(truth: dict[str, tuple[list[TruthSegment], list[TruthSegment]]], samples: Sequence[str], windows: Sequence[Window], genetic_map: GeneticMap) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -303,8 +318,7 @@ def _integrated_truth(truth: dict[str, tuple[list[TruthSegment], list[TruthSegme
                 for segment in truth[sample][hap]:
                     left, right = max(window.left, segment.start), min(window.right, segment.end)
                     if left < right:
-                        cm = genetic_map.cm_at(right - 1) - genetic_map.cm_at(left)
-                        dosage[ANCESTRIES.index(segment.ancestry)] += max(0.0, cm)
+                        dosage[ANCESTRIES.index(segment.ancestry)] += _half_open_cm_span(genetic_map, left, right)
             proportions = dosage / (2 * length)
             if not np.isclose(proportions.sum(), 1.0, atol=2e-5):
                 raise ValueError("integrated truth does not sum to one")

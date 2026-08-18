@@ -45,6 +45,26 @@ class M29SameLocusDevTest(unittest.TestCase):
         swapped, _ = MODULE.build_features(["T000"], [window], positions, dosage_swapped, support)
         np.testing.assert_array_equal(direct, swapped)
 
+    def test_truth_integration_is_additive_across_half_open_boundaries(self):
+        class LinearMap:
+            positions = [0, 10]
+
+            @staticmethod
+            def cm_at(position):
+                return float(position)
+
+        truth = {
+            "T000": (
+                [MODULE.TruthSegment(0, 4, "AFR"), MODULE.TruthSegment(4, 10, "EUR")],
+                [MODULE.TruthSegment(0, 10, "ASIA")],
+            )
+        }
+        window = MODULE.Window(0, 10, 0.0, 10.0, np.asarray([[1 / 3, 1 / 3, 1 / 3]]))
+        observed, lengths, indexes = MODULE._integrated_truth(truth, ["T000"], [window], LinearMap())
+        np.testing.assert_allclose(observed, [[0.2, 0.3, 0.5]])
+        np.testing.assert_array_equal(lengths, [10.0])
+        np.testing.assert_array_equal(indexes, [0])
+
     @staticmethod
     def fixture(seed, injected):
         rng = np.random.default_rng(seed)
