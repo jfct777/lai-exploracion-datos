@@ -60,6 +60,10 @@ process RUN_M16_5_THRESHOLD_SENSITIVITY {
     export MPLCONFIGDIR="\$PWD/.matplotlib"
     export NUMBA_CACHE_DIR="\$PWD/.numba_cache"
     export HOME="\$PWD/.home"
+    export OMP_NUM_THREADS=1
+    export OPENBLAS_NUM_THREADS=1
+    export MKL_NUM_THREADS=1
+    export NUMBA_NUM_THREADS=1
     mkdir -p "\$MPLCONFIGDIR" "\$NUMBA_CACHE_DIR" "\$HOME"
 
     python3 ${evaluator_py} \

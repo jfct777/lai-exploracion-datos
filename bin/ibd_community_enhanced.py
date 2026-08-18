@@ -3017,7 +3017,13 @@ def _spectral_embedding(S: sp.csr_matrix, n_components: int,
     # eigsh with which='LA' for largest algebraic eigenvalues of the
     # symmetric normalised sharing — these correspond to the slowest-
     # mixing diffusion modes (Coifman & Lafon 2006 diffusion maps).
-    vals, vecs = eigsh(M, k=k, which="LA")
+    # ARPACK otherwise creates a random initial vector internally.  That does
+    # not change the graph or Leiden assignments, but it can rotate the UMAP
+    # figure between machines.  A fixed, non-constant vector makes the
+    # visualization reproducible without selecting a data-dependent start.
+    v0 = np.linspace(1.0, 2.0, M.shape[0], dtype=np.float64)
+    v0 /= np.linalg.norm(v0)
+    vals, vecs = eigsh(M, k=k, which="LA", v0=v0)
     order = np.argsort(-vals)
     return vecs[:, order].astype(np.float64)
 

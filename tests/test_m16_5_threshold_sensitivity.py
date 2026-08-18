@@ -101,7 +101,7 @@ class ThresholdSensitivityContractTest(unittest.TestCase):
 
     def test_post_diagnostic_amendment_is_explicit_and_non_selective(self):
         amendments = self.contract["amendments_before_first_successful_cloud_run"]
-        self.assertEqual(len(amendments), 2)
+        self.assertEqual(len(amendments), 3)
         self.assertEqual(amendments[0]["scope"],
                          "supplementary_non_selection_diagnostics")
         self.assertIn("do not alter", amendments[0]["reason"])
@@ -118,6 +118,13 @@ class ThresholdSensitivityContractTest(unittest.TestCase):
         self.assertNotIn("m16_5_threshold_sensitivity.log", expected)
         script = SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn('outdir.rglob("*")', script)
+
+    def test_network_layout_has_a_deterministic_eigensolver_start(self):
+        core = (REPO / "bin" / "ibd_community_enhanced.py").read_text()
+        self.assertIn('eigsh(M, k=k, which="LA", v0=v0)', core)
+        module = MODULE.read_text()
+        self.assertIn("export OPENBLAS_NUM_THREADS=1", module)
+        self.assertIn("export NUMBA_NUM_THREADS=1", module)
 
     def test_metadata_duplicate_policy_is_exact_and_fail_closed(self):
         inputs = self.contract["inputs"]
@@ -157,7 +164,7 @@ class ThresholdSensitivityContractTest(unittest.TestCase):
         self.assertIn("resourceLabels = [team: 'frank']", text)
         self.assertIn("maxForks = 2", text)
         self.assertIn("executor.queueSize = 2", text)
-        self.assertIn("m16-5-threshold-sensitivity-20260818c", text)
+        self.assertIn("m16-5-threshold-sensitivity-20260818d", text)
         self.assertNotIn("m16-5-minor-20260806d", text)
 
 

@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0.0",
   "experiment_id": "M16.5-threshold-sensitivity",
-  "status": "PRE_FROZEN_AMENDED_AFTER_SUCCESSFUL_RUN_FOR_INVENTORY_ONLY",
+  "status": "PRE_FROZEN_AMENDED_AFTER_SUCCESSFUL_RUN_FOR_NOSCIENCE_OUTPUT_FIXES",
   "amendments_before_first_successful_cloud_run": [
     {
       "date": "2026-08-18",
@@ -12,6 +12,11 @@
       "date": "2026-08-18",
       "scope": "artifact_inventory_only_after_first_successful_cloud_run",
       "reason": "The first successful cloud run produced valid scientific outputs, but the generic recursive inventory also listed staged inputs, caches and Nextflow command files. The inventory was narrowed to declared scientific outputs and plots only. No input, graph, threshold, diagnostic or interpretation changed."
+    },
+    {
+      "date": "2026-08-18",
+      "scope": "deterministic_figure_layout_only",
+      "reason": "Scientific tables were byte-identical between local and cloud execution, while PNG pixels differed because ARPACK eigsh used an implicit random starting vector. A fixed non-constant v0 and single-thread numerical environment were added for reproducible UMAP coordinates. Graphs, Leiden assignments, thresholds, diagnostics and selection rules are unchanged."
     }
   ],
   "purpose": "Evaluate whether the descriptive M16.5 rare-allele co-sharing communities are robust to defensible graph thresholds.",
