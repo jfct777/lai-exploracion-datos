@@ -1,0 +1,75 @@
+{
+  "stage": "M29_ROOT_B0_PRODUCTION",
+  "version": 1,
+  "status": "PRE_FROZEN_BEFORE_B0_SELECTION",
+  "scope": "produce_and_ingest_root_specific_B0_inputs_no_training_no_truth",
+  "expected": {
+    "b0_markers": 79791,
+    "reference_samples": 90,
+    "target_samples": 30
+  },
+  "roots": [
+    {
+      "label": "root17",
+      "root_seed": 20260817,
+      "m28b_mode": "development",
+      "source_attempt": "seed17-b_semantically_equal_reproducibility_member",
+      "sha256": {
+        "tree": "566946ec93cbc28c7f36d27878e12d091f1c87ebdd6fb6423b940f4f778391f7",
+        "pools": "56f9891bfb7f77d63ec3328107fc8e89b919c34ad16fda2c0c72dc3fde24f0e4",
+        "preflight_report": "e96cc352248bc05643099fc8d7107528d6a96c8e6fe9592561587d1059715b2a",
+        "preflight_manifest": "e229c1e66905282510698e9125b72840b1f049826fd22de064900b732bba8c41",
+        "mosaic_events": "abdc3d4510a9a4ceaf48851db4398ed2961435d342064bed821135259d6e1176"
+      }
+    },
+    {
+      "label": "root18",
+      "root_seed": 20260818,
+      "m28b_mode": "validation",
+      "source_attempt": "seed18-a",
+      "sha256": {
+        "tree": "780800c1f3d279746ace8631fa1b1ccd57782e9bf697a3dacc2cc983523f5f54",
+        "pools": "046c6e903ca4b3beea8ac468836d28bb953d32b4e731c13be86f42d7c110a4ff",
+        "preflight_report": "30f41bb4c5d77b583052409a4cdb591497bc8d1a02b1cad8183600c6ebeb758d",
+        "preflight_manifest": "46829d0f1b28d5a3a94199143c9b8b10980c1619b302a8319dd474435431c9e4",
+        "mosaic_events": "9c324fbcbb3e59722ee1700454c158e96abd91d2a67a3d331d19b0038954d665"
+      }
+    }
+  ],
+  "shared_inputs": {
+    "m28b_v5_contract_sha256": "6963431ad993fe328e52287a48bfcb4a0ffabe816c8f660838ea2520109fe5c8",
+    "m28_contract_sha256": "b1d11afbcc2d740ff4b88753d6bcca7d7a345dc1a05eb9cc83a268e2ec403438",
+    "reproducibility_receipt_sha256": "10b15e3352f141e78fca7f07697d8d5a9e4779dbaf572db588fe281d6c3621e6",
+    "genetic_map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+    "baseline_template": {
+      "uri": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/vcf_fixed/dnabr.refpop.fixed.chr22.vcf.gz",
+      "sha256": "1b9e7b23a6e046185056271513589d03c24406e5100606d078973a58d36e6afd"
+    }
+  },
+  "selection": {
+    "implementation": "reuse m28b_optimal_matching_audit.prepare_markers under the frozen M28B-v5 contract",
+    "rule": "79791 common REF-polymorphic markers allocated over 0.05 cM bins by Hamilton and ordered by the frozen SHA-256 salt",
+    "geometry_policy": "write B0 independently of BR/BS geometry status; do not evaluate or emit BR/BS",
+    "forbidden_inputs": ["m28_lai_truth.tsv.gz", "TARGET", "mosaic_events", "BR", "BS"]
+  },
+  "materialization": {
+    "implementation": "reuse materialize_m28c_b0_inputs.materialize through an authenticated compatibility adapter",
+    "mosaic_use": "copy DONOR genotypes into TARGET VCF only; ancestry labels do not select markers or train a model",
+    "truth_access": false
+  },
+  "ingest": {
+    "implementation": "reuse audit_m28c_gnomix_ingest.audit",
+    "outputs": ["BGZF reference VCF", "reference TBI", "BGZF target VCF", "target TBI", "Gnomix loader audit"],
+    "training": false,
+    "inference": false
+  },
+  "software": {
+    "simulation_container": "dnabr-m28-lai-sim:0.1.1",
+    "simulation_container_sha256": "sha256:1f08736aa2750eac4ab8fb0506fb22bad91d2266b7b02b9e35d971f554b807f7",
+    "gnomix_container": "dnabr-m28c-gnomix:e758f2c-r5",
+    "gnomix_container_sha256": "sha256:b89353efc9a4a5953519fa9f066728e2f63d0e9125fc9fc771ef3ea9bb9c961c",
+    "gnomix_commit": "e758f2c8108b660c6321c6a1b168b3a79e85a02d"
+  },
+  "stop_rule": "Stop on any hash, root, cardinality, role, VCF parity, BGZF/Tabix or exact Gnomix-loader failure. Do not train or infer in this stage.",
+  "claims_excluded": ["LAI_improvement", "independent_validation", "BR_or_BS_geometry", "model_training", "truth_scoring"]
+}
