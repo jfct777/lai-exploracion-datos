@@ -122,6 +122,10 @@ class M29RootGnomixB0Test(unittest.TestCase):
             self.assertEqual(report["decision"], "STOP_RSS_LIMIT_EXCEEDED")
             self.assertTrue(report["threshold_exceeded"])
 
+    def test_rss_proc_disappearance_is_tolerated(self):
+        with patch.object(Path, "read_text", side_effect=ProcessLookupError(3, "No such process")):
+            self.assertEqual(RSS._process_table(), {})
+
     def test_workflow_is_parallel_bounded_and_training_has_no_target_or_truth(self):
         workflow = (ROOT / "workflows/m29_root_gnomix_b0.nf").read_text()
         module = (ROOT / "modules/29_ROOT_GNOMIX_B0.nf").read_text()

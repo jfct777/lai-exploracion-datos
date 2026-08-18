@@ -25,7 +25,11 @@ def _process_table() -> dict[int, tuple[int, int]]:
             ppid = int(fields[3])
             rss_line = next(line for line in status if line.startswith("VmRSS:"))
             rss_kib = int(rss_line.split()[1])
-        except (FileNotFoundError, PermissionError, StopIteration, ValueError, IndexError):
+        # A process may disappear between listing /proc and reading stat/status.
+        # Linux can report that race as ENOENT or ESRCH, both represented by
+        # OSError subclasses.  Skipping that PID is safe because a terminated
+        # process no longer contributes to the live tree RSS.
+        except (OSError, StopIteration, ValueError, IndexError):
             continue
         table[int(entry.name)] = (ppid, rss_kib)
     return table
