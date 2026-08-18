@@ -1,0 +1,151 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "M16.5-threshold-sensitivity",
+  "status": "PRE_FROZEN_BEFORE_EXECUTION",
+  "purpose": "Evaluate whether the descriptive M16.5 rare-allele co-sharing communities are robust to defensible graph thresholds.",
+  "scope": {
+    "analysis_type": "descriptive_threshold_sensitivity",
+    "replaces_canonical_m16_5": false,
+    "trains_predictive_model": false,
+    "runs_nmf": false,
+    "selects_configuration_by_finestructure": false,
+    "interpretation_limit": "M14 edges represent rare-minor-allele co-sharing under an IBS-like rule; they are not certified IBD segments and bp thresholds must not be interpreted as cM."
+  },
+  "inputs": {
+    "pair_summary": "pair_sharing_summary.tsv",
+    "individual_summary": "individual_sharing_summary.tsv",
+    "global_summary": "global_sharing_summary.json",
+    "metadata_id_column": "ID",
+    "metadata_comparison_column": "finestructure_clusters",
+    "metadata_cohort_column": "Cohort",
+    "autosomal_q_columns": [
+      "Autosomes_Indigenous_anc",
+      "Autosomes_European_anc",
+      "Autosomes_EastAsian_anc",
+      "Autosomes_African_anc"
+    ],
+    "pcrelate_columns": {
+      "sample_a": "ID1",
+      "sample_b": "ID2",
+      "kinship": "kin"
+    },
+    "burden_column": "minor_m14_subset_carrier_rate"
+  },
+  "cohort": {
+    "expected_total_samples": 2619,
+    "expected_m14_observed_samples": 2315,
+    "expected_pair_rows": 54522,
+    "minimum_observed_longest_segment_bp": 1000000,
+    "absent_samples_are_reported_not_imputed": true
+  },
+  "fixed_parameters": {
+    "weight_transform": "log1p",
+    "resolutions": [0.5, 0.8, 1.0, 1.2, 1.5, 2.0, 3.0],
+    "primary_resolution": 1.0,
+    "n_seeds": 25,
+    "base_seed": 42,
+    "minimum_community_size": 3,
+    "ancestry_assignment_diagnostic": {
+      "model": "standardized_logistic_regression",
+      "features": "four_autosomal_Q_only",
+      "n_folds": 5,
+      "shuffle": true,
+      "random_seed": 42,
+      "C": 1.0,
+      "class_weight": "balanced",
+      "max_iter": 1000,
+      "evaluation": "out_of_fold_roc_auc"
+    },
+    "pcrelate": {
+      "kinship_threshold": 0.0442,
+      "chunksize_rows": 500000,
+      "family_component_minimum_size": 2,
+      "expected_input_rows": 4062675,
+      "expected_related_pairs_in_m14_observed_cohort": 1069
+    },
+    "palette": "glasbey",
+    "umap": {
+      "layout_seed": 42,
+      "n_spectral": 15,
+      "max_nodes": 3500,
+      "dpi": 200,
+      "width": 12,
+      "height": 8,
+      "label_min_size": 10
+    }
+  },
+  "configuration_design": {
+    "primary_grid": {
+      "minimum_total_shared_bp": [2000000, 3000000, 5000000],
+      "minimum_longest_segment_bp": [1000000, 1500000, 2000000]
+    },
+    "identity_control": {
+      "id": "identity_edge5Mb_seg0p5Mb",
+      "minimum_total_shared_bp": 5000000,
+      "minimum_longest_segment_bp": 500000,
+      "must_match": "edge5Mb_seg1Mb"
+    },
+    "stress_control": {
+      "id": "stress_edge10Mb_seg1Mb",
+      "minimum_total_shared_bp": 10000000,
+      "minimum_longest_segment_bp": 1000000
+    }
+  },
+  "metrics": {
+    "coverage": [
+      "n_total_samples",
+      "n_m14_observed_samples",
+      "n_absent_from_m14",
+      "n_nonisolated",
+      "n_isolated",
+      "n_assigned",
+      "n_noise",
+      "n_communities"
+    ],
+    "stability": [
+      "pairwise_seed_ari_all_observed",
+      "pairwise_seed_ari_connected",
+      "neighbor_assigned_set_jaccard",
+      "neighbor_ari_common_assigned",
+      "neighbor_nmi_common_assigned"
+    ],
+    "dependence_checks": [
+      "assignment_auc_from_graph_degree",
+      "assignment_auc_from_corrected_rare_burden",
+      "assignment_spearman_graph_degree",
+      "assignment_spearman_corrected_rare_burden",
+      "assignment_oof_auc_from_four_autosomal_Q",
+      "assignment_vs_cohort_nmi",
+      "assignment_vs_cohort_bias_corrected_cramers_v",
+      "pcrelate_related_pairs_within_same_community_fraction",
+      "maximum_family_component_concentration_in_a_community"
+    ],
+    "descriptive_external_comparison": [
+      "finestructure_ari_assigned",
+      "finestructure_nmi_assigned"
+    ]
+  },
+  "decision_rules": {
+    "hard_stop_if_identity_control_fails": true,
+    "hard_stop_if_required_input_or_column_is_missing": true,
+    "hard_stop_if_five_fold_ancestry_diagnostic_is_not_estimable": true,
+    "hard_stop_if_no_in_cohort_pcrelate_pair_passes_threshold": true,
+    "hard_stop_if_pcrelate_input_invariants_change": true,
+    "report_every_configuration": true,
+    "automatic_winner_selection": false,
+    "finestructure_is_descriptive_not_an_optimization_target": true,
+    "high_modularity_alone_is_not_evidence_of_biological_structure": true,
+    "interpretation": "Use coverage, seed stability, neighboring-configuration stability and degree/burden dependence jointly. A configuration may be called descriptively robust only if its result is not an isolated threshold artifact and is not explained mainly by graph degree or global rare burden."
+  },
+  "outputs": [
+    "configuration_summary.tsv",
+    "resolution_summary.tsv",
+    "assignments.tsv.gz",
+    "neighbor_comparisons.tsv",
+    "pcrelate_community_concentration.tsv",
+    "identity_control.json",
+    "decision.json",
+    "plots/",
+    "artifact_inventory.tsv"
+  ]
+}

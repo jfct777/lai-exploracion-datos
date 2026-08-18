@@ -1,0 +1,80 @@
+{
+  "stage": "M29_SAME_LOCUS_DEV",
+  "version": 1,
+  "status": "PRE_FROZEN_BEFORE_DEV",
+  "scope": "chr22_two_root_development_gate_only_no_validation",
+  "question": "Does FREQ-defined rare-allele information improve diploid ancestry-dose prediction beyond calibrated B0 and same-locus ancestry-label shams?",
+  "chromosome_domain": {
+    "chrom": "22",
+    "start_bp": 15287922,
+    "end_bp_exclusive": 50791378
+  },
+  "roots": {
+    "root_a": {
+      "root_seed": 20260817,
+      "sha256": {
+        "tree": "15c2bce4a492a2a807eae972a1b8d28960981a93cd2c5df2626f491cc2d7ca8d",
+        "pools": "56f9891bfb7f77d63ec3328107fc8e89b919c34ad16fda2c0c72dc3fde24f0e4",
+        "report": "e96cc352248bc05643099fc8d7107528d6a96c8e6fe9592561587d1059715b2a",
+        "manifest": "ce1fb4b049ec3cdcbd1518deb31e647e14b6518b8661d148e6187b4c21df15b9",
+        "catalog": "3162022c6882aa184094f96f6e8d49b6917b5fbe5a45ecfabf6cc4a8265b366c",
+        "haplotypes": "015f7c420730537cb2d9173971e4767d4d561d11ed22ce2b46149c9eb7832122",
+        "truth": "bf059f94ba40b033a75bb2d4ea782ce2d8f6cb86098a77e4812ee019f07da303"
+      },
+      "required_run_binding": ["fb", "msp"]
+    },
+    "root_b": {
+      "root_seed": 20260818,
+      "sha256": {
+        "tree": "780800c1f3d279746ace8631fa1b1ccd57782e9bf697a3dacc2cc983523f5f54",
+        "pools": "046c6e903ca4b3beea8ac468836d28bb953d32b4e731c13be86f42d7c110a4ff",
+        "report": "30f41bb4c5d77b583052409a4cdb591497bc8d1a02b1cad8183600c6ebeb758d",
+        "manifest": "46829d0f1b28d5a3a94199143c9b8b10980c1619b302a8319dd474435431c9e4",
+        "catalog": "7a12195c18db5d4bfd5a1cee43ed4f04eccc5cd21d9fb7ed01e8c24f2a00c3b3",
+        "haplotypes": "29c562da4cdf24a680b617fc155f0ee09546e8dbd4b23cd8dd4a75d5daeb9827",
+        "truth": "e5e2895b8316673afb6796795a2724d167c1bf2e98b2122ef0f7645b985e296a"
+      },
+      "required_run_binding": ["fb", "msp"]
+    }
+  },
+  "shared_inputs": {
+    "genetic_map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9"
+  },
+  "rare_universe": {
+    "selector": "FREQ_only",
+    "definition": "minor allele with MAC>=2, MAF<0.01 and at least two carrier individuals in FREQ; FREQ alone defines rarity",
+    "operational_observability": "retain for modeling only FREQ-defined sites with at least one minor copy in pooled REF_LAI; REF_LAI never defines rarity",
+    "prohibited_selectors": ["REF_LAI", "DONOR", "TARGET", "truth", "Gnomix_prediction"]
+  },
+  "arms": {
+    "B0_CAL": "B0 diploid posteriors plus four constant-zero columns",
+    "BR": "same B0 posteriors plus target rare load and three real REF_LAI ancestry-support channels",
+    "BSHAM": "same exact B0, rare loci, positions, target genotypes, missingness, load and LD as BR; only complete-individual REF_LAI ancestry labels are permuted"
+  },
+  "sham": {
+    "replicates": 32,
+    "base_seed": 290017,
+    "unit": "complete_diploid_REF_LAI_individual",
+    "fixed": ["ancestry_sample_sizes", "loci", "positions", "target_genotypes", "missingness", "rare_load", "LD"]
+  },
+  "model": {
+    "estimator": "multinomial_logistic_regression_L2",
+    "C_grid": [0.01, 0.1, 1.0, 10.0],
+    "solver": "lbfgs",
+    "max_iter": 5000,
+    "tol": 1e-08,
+    "normalization": "fit_on_training_root_only",
+    "C_selection": "apply the same mean-bidirectional DEV rule separately to B0_CAL, BR, and independently to each BSHAM replicate; the null repeats the complete tuning operation",
+    "feature_dimension": 7
+  },
+  "evaluation": {
+    "directions": ["root_a_to_root_b", "root_b_to_root_a"],
+    "primary": "equal-individual mean of genetic-length-weighted macro ancestry-proportion MAE",
+    "phase_policy": "diploid_unphased_homologue_swap_invariant",
+    "secondary": ["MAE_by_ancestry", "composition_Brier", "unordered_diploid_state_accuracy", "unordered_diploid_state_macro_F1_fixed_six"],
+    "boundary_policy": "not estimated in DEV because diploid window posteriors do not identify phased haplotype boundaries; do not impute phase",
+    "gate": "BR improvement over B0_CAL must be positive and exceed the 95th percentile of BSHAM improvements in both directions"
+  },
+  "stop_rule": "STOP before any VALID/TEST access if either direction fails, any provenance hash fails, an ancestry class is lost, convergence fails, or same-locus identity fails.",
+  "claims_excluded": ["confirmatory_validation", "DNABR_generalization", "Native_American_LAI", "deep_learning_benefit"]
+}
