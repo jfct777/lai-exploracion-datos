@@ -12,11 +12,14 @@
   "roots": {
     "root_a": {
       "root_seed": 20260817,
+      "source_attempt": "seed17-b",
+      "semantic_equivalence": "seed17-b and seed17-a have semantically identical tree-sequence tables; the M28-v2 reproducibility receipt records semantic_equality=true and byte-identical pools, catalog, haplotypes, mosaics and truth. Only the serialized tree UUID differs.",
+      "reproducibility_receipt_sha256": "10b15e3352f141e78fca7f07697d8d5a9e4779dbaf572db588fe281d6c3621e6",
       "sha256": {
-        "tree": "15c2bce4a492a2a807eae972a1b8d28960981a93cd2c5df2626f491cc2d7ca8d",
+        "tree": "566946ec93cbc28c7f36d27878e12d091f1c87ebdd6fb6423b940f4f778391f7",
         "pools": "56f9891bfb7f77d63ec3328107fc8e89b919c34ad16fda2c0c72dc3fde24f0e4",
         "report": "e96cc352248bc05643099fc8d7107528d6a96c8e6fe9592561587d1059715b2a",
-        "manifest": "ce1fb4b049ec3cdcbd1518deb31e647e14b6518b8661d148e6187b4c21df15b9",
+        "manifest": "e229c1e66905282510698e9125b72840b1f049826fd22de064900b732bba8c41",
         "catalog": "3162022c6882aa184094f96f6e8d49b6917b5fbe5a45ecfabf6cc4a8265b366c",
         "haplotypes": "015f7c420730537cb2d9173971e4767d4d561d11ed22ce2b46149c9eb7832122",
         "truth": "bf059f94ba40b033a75bb2d4ea782ce2d8f6cb86098a77e4812ee019f07da303"

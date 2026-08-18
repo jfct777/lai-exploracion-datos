@@ -1,0 +1,51 @@
+{
+  "stage": "M29_ROOT_GNOMIX_B0",
+  "version": 1,
+  "status": "PRE_FROZEN_BEFORE_ROOT_TRAINING",
+  "scope": "root_specific_B0_training_and_inference_only_no_truth_no_effect_estimation",
+  "roots": {"root17": 20260817, "root18": 20260818},
+  "authenticated_templates": {
+    "production_contract_sha256": "3e0fb0902abe96172f44a0881d322c843b32a88148bf61097b6d552b24fd7261",
+    "full_b0_contract_sha256": "4c12c2b3239c0a3bd5a7775e75a3bb941e9b6f77b7e7f8b2133432ae412188ae",
+    "gnomix_config_sha256": "d320f76807e4cc0e87ac80002fc8f07f0aa0065acfe474bd428aa938a5749d92",
+    "runner_sha256": "3fa51183e881bb9444d1fa0381a272db7c6787ef3b2a9b6787ab1048a9aa485c"
+  },
+  "parameters": {
+    "policy": "inherit unchanged from authenticated M28C full-B0 template",
+    "seed": 42,
+    "window_size_cM": 0.2,
+    "smooth_size_windows": 75,
+    "context_ratio": 0.5,
+    "base_model": "LogisticRegression L2 C=3 liblinear OVR",
+    "smoother": "XGBoost 100 trees, depth 4, learning rate 0.1, L2=1, L1=0",
+    "n_cores": 4
+  },
+  "numerical_guard": {
+    "policy": "inherit exact tolerance and patched runtime known-answer from M28C r5; the negative-roundoff count is derived separately from each authenticated root B0 before training",
+    "probability_tolerance": 1e-12,
+    "negative_mass_tolerance": 1e-12,
+    "runtime_known_answer_sha256": "edb06dc825e2a144ba11c4921e51a544c176c399b911207de610e6efb801f02c",
+    "patch_sha256": "177c48acf7dc6838fae47131f91bc6e1444dbc062ac7ffa7f3e6ccc7cba03a95"
+  },
+  "resources": {
+    "cpus_per_root": 4,
+    "memory_per_root": "8 GB",
+    "observed_equivalent_m28c_peak_rss_gib": 3.46,
+    "fail_closed_peak_rss_gib": 6.4,
+    "max_parallel_roots": 2,
+    "minimum_host_memory_for_two_parallel_roots": "20 GiB including workflow overhead",
+    "network": "disabled",
+    "max_retries": 0
+  },
+  "gates": {
+    "R0_CHAIN": "Every persistent selection/materialization/ingest report and manifest belongs to the same root and production contract.",
+    "R1_INPUTS": "All VCF/TBI/map/sample-map/B0/config hashes are bound into one root runtime contract.",
+    "R2_GUARD": "The fixed numerical guard matches the r5 runtime and accepts the root-specific B0 map without material negative mass.",
+    "R3_BOUNDARY": "Training receives REF only; inference receives TARGET only; neither process has truth or mosaic inputs.",
+    "R4_MODEL": "The unchanged full-B0 Gnomix model trains, serializes and reloads under the root contract; process-tree peak RSS must not exceed 6.4 GiB.",
+    "R5_PREDICTIONS": "FB/MSP contain 30 targets, 371 windows, 79,791 markers and finite normalized AFR/EUR/ASIA probabilities.",
+    "R6_BINDING": "The final M29 binding authenticates FB/MSP, inference report/manifest, runtime contract and run provenance for the exact root."
+  },
+  "stop_rule": "Stop the affected root on any hash, contract, numerical, model, inference or binding failure. Never substitute historical M28C predictions or open truth.",
+  "claims_excluded": ["LAI_accuracy", "rare_incremental_utility", "independent_validation", "DNABR_or_NAM_utility"]
+}
