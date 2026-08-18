@@ -119,6 +119,9 @@ class M29RootB0ProductionTest(unittest.TestCase):
         self.assertIn("prepare_m29_root_b0.py", workflow)
         self.assertIn("materialize_m28c_b0_inputs.py", workflow)
         self.assertIn("audit_m28c_gnomix_ingest.py", workflow)
+        self.assertIn("write_m29_root_b0_provenance", workflow + module)
+        self.assertIn("dnabr_git_commit", workflow)
+        self.assertIn("run_provenance", module)
 
     def test_nextflow_config_is_isolated_and_fail_closed(self):
         config = (ROOT / "conf/m29_root_b0_production.config").read_text()

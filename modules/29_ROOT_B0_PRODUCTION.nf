@@ -1,5 +1,27 @@
 nextflow.enable.dsl=2
 
+process WRITE_M29_ROOT_B0_PROVENANCE {
+    tag "m29_root_b0_provenance"
+    publishDir params.m29_b0_results_dir, mode: 'copy', overwrite: false
+    container params.m29_b0_sim_container
+    containerOptions params.m29_b0_container_options
+    cpus 1
+    memory '1 GB'
+    time '5m'
+
+    input:
+    val provenance_b64
+
+    output:
+    path "run_provenance.json", emit: provenance
+
+    script:
+    """
+    set -euo pipefail
+    printf '%s' '${provenance_b64}' | base64 -d > run_provenance.json
+    """
+}
+
 process SELECT_M29_ROOT_B0 {
     tag "m29_b0_select_${root_label}"
     publishDir params.m29_b0_results_dir, mode: 'copy', overwrite: false, saveAs: { name -> name.startsWith('root') ? name : null }
@@ -24,6 +46,7 @@ process SELECT_M29_ROOT_B0 {
     path m28b_marker_py
     path m28_py
     path manifest_py
+    path run_provenance
 
     output:
     tuple val(root_label), val(root_seed), path(tree), path(pools), path(mosaic_events), path("${root_label}/selection/m29_b0_markers.tsv.gz"), path("${root_label}/selection/m29_b0_selection.public.json"), emit: selected
@@ -46,6 +69,7 @@ process SELECT_M29_ROOT_B0 {
       --input ${m28_contract} --input ${m28b_contract} --input ${production_contract} \
       --input ${selector_py} --input ${m28b_py} --input ${m28b_generic_py} \
       --input ${m28b_joint_py} --input ${m28b_marker_py} --input ${m28_py} \
+      --input ${run_provenance} \
       --output ${root_label}/selection/m29_b0_markers.tsv.gz \
       --output ${root_label}/selection/m29_b0_selection.public.json \
       --params-json '{"root_seed":${root_seed},"truth_accessed":false,"BR_BS_evaluated":false}' \
@@ -68,6 +92,7 @@ process MATERIALIZE_M29_ROOT_B0 {
     path adapter_py
     path materializer_py
     path manifest_py
+    path run_provenance
 
     output:
     tuple val(root_label), val(root_seed), path("${root_label}/materialized/m28c_b0_reference.vcf.gz"), path("${root_label}/materialized/m28c_b0_target.vcf.gz"), path("${root_label}/materialized/m28c_b0_input_preflight.public.json"), emit: materialized
@@ -86,7 +111,8 @@ process MATERIALIZE_M29_ROOT_B0 {
     python3 ${manifest_py} --stage M29_ROOT_B0_MATERIALIZATION \
       --input ${tree} --input ${pools} --input ${mosaic_events} --input ${b0_markers} \
       --input ${selection_report} --input ${production_contract} --input ${adapter_py} \
-      --input ${materializer_py} --output ${root_label}/materialized/m28c_b0_reference.vcf.gz \
+      --input ${materializer_py} --input ${run_provenance} \
+      --output ${root_label}/materialized/m28c_b0_reference.vcf.gz \
       --output ${root_label}/materialized/m28c_b0_target.vcf.gz \
       --output ${root_label}/materialized/m28c_b0_reference.sample_map.tsv \
       --output ${root_label}/materialized/m28c_b0_reference_pairs.private.tsv \
@@ -112,6 +138,7 @@ process INGEST_M29_ROOT_B0 {
     path adapter_py
     path ingest_py
     path manifest_py
+    path run_provenance
 
     output:
     tuple val(root_label), val(root_seed), path("${root_label}/ingest/m28c_b0_reference.vcf.gz"), path("${root_label}/ingest/m28c_b0_reference.vcf.gz.tbi"), path("${root_label}/ingest/m28c_b0_target.vcf.gz"), path("${root_label}/ingest/m28c_b0_target.vcf.gz.tbi"), path("${root_label}/ingest/m28c_b0_gnomix_ingest.public.json"), path("${root_label}/ingest/m29_b0_ingest.manifest.json"), emit: ready
@@ -127,6 +154,7 @@ process INGEST_M29_ROOT_B0 {
     python3 ${manifest_py} --stage M29_ROOT_B0_GNOMIX_INGEST \
       --input ${reference_vcf} --input ${target_vcf} --input ${materialization_report} \
       --input ${production_contract} --input ${adapter_py} --input ${ingest_py} \
+      --input ${run_provenance} \
       --output ${root_label}/ingest/m28c_b0_reference.vcf.gz \
       --output ${root_label}/ingest/m28c_b0_reference.vcf.gz.tbi \
       --output ${root_label}/ingest/m28c_b0_target.vcf.gz \

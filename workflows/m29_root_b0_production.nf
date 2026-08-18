@@ -1,6 +1,11 @@
 nextflow.enable.dsl=2
 
-include { SELECT_M29_ROOT_B0; MATERIALIZE_M29_ROOT_B0; INGEST_M29_ROOT_B0 } from '../modules/29_ROOT_B0_PRODUCTION'
+include {
+    WRITE_M29_ROOT_B0_PROVENANCE;
+    SELECT_M29_ROOT_B0;
+    MATERIALIZE_M29_ROOT_B0;
+    INGEST_M29_ROOT_B0
+} from '../modules/29_ROOT_B0_PRODUCTION'
 
 workflow {
     def required = [
@@ -13,6 +18,22 @@ workflow {
     ]
     if (required.any { value -> !value }) error 'All M29 root-B0 inputs are required; no historical B0 may be substituted'
     def repoDir = projectDir.resolve('..')
+    def gitCommit = System.getenv('DNABR_GIT_COMMIT') ?: workflow.commitId
+    if (!gitCommit) error 'Set DNABR_GIT_COMMIT to the exact source commit'
+    def provenance = [
+        git_commit       : gitCommit,
+        nextflow_version : workflow.nextflow.version.toString(),
+        nextflow_command : workflow.commandLine,
+        run_name         : workflow.runName,
+        simulation_image : params.m29_b0_sim_container,
+        gnomix_image     : params.m29_b0_gnomix_container,
+        results_dir      : params.m29_b0_results_dir,
+        scientific_scope : 'Root-specific B0 selection, VCF materialization and Gnomix ingest only; no truth, training or inference',
+    ]
+    def provenanceB64 = groovy.json.JsonOutput.prettyPrint(
+        groovy.json.JsonOutput.toJson(provenance)
+    ).bytes.encodeBase64().toString()
+    WRITE_M29_ROOT_B0_PROVENANCE(channel.value(provenanceB64))
     roots = Channel.of(
         tuple('root17', 20260817, file(params.m29_b0_root17_tree, checkIfExists: true), file(params.m29_b0_root17_pools, checkIfExists: true), file(params.m29_b0_root17_report, checkIfExists: true), file(params.m29_b0_root17_manifest, checkIfExists: true), file(params.m29_b0_root17_mosaic, checkIfExists: true)),
         tuple('root18', 20260818, file(params.m29_b0_root18_tree, checkIfExists: true), file(params.m29_b0_root18_pools, checkIfExists: true), file(params.m29_b0_root18_report, checkIfExists: true), file(params.m29_b0_root18_manifest, checkIfExists: true), file(params.m29_b0_root18_mosaic, checkIfExists: true))
@@ -33,20 +54,23 @@ workflow {
         file("${repoDir}/bin/m28b_joint_capacity_audit.py", checkIfExists: true),
         file("${repoDir}/bin/m28b_marker_capacity_audit.py", checkIfExists: true),
         file("${repoDir}/bin/m28_simulation_preflight.py", checkIfExists: true),
-        manifestPy
+        manifestPy,
+        WRITE_M29_ROOT_B0_PROVENANCE.out.provenance
     )
     MATERIALIZE_M29_ROOT_B0(
         SELECT_M29_ROOT_B0.out.selected,
         productionContract,
         file("${repoDir}/bin/materialize_m29_root_b0.py", checkIfExists: true),
         file("${repoDir}/bin/materialize_m28c_b0_inputs.py", checkIfExists: true),
-        manifestPy
+        manifestPy,
+        WRITE_M29_ROOT_B0_PROVENANCE.out.provenance
     )
     INGEST_M29_ROOT_B0(
         MATERIALIZE_M29_ROOT_B0.out.materialized,
         productionContract,
         file("${repoDir}/bin/ingest_m29_root_b0.py", checkIfExists: true),
         file("${repoDir}/bin/audit_m28c_gnomix_ingest.py", checkIfExists: true),
-        manifestPy
+        manifestPy,
+        WRITE_M29_ROOT_B0_PROVENANCE.out.provenance
     )
 }
