@@ -16,6 +16,8 @@ class M29NextflowContractTest(unittest.TestCase):
         text = (ROOT / "modules" / "29_SAME_LOCUS_DEV.nf").read_text()
         self.assertIn("set -euo pipefail", text)
         self.assertIn("m29_dev.manifest.json", text)
+        self.assertEqual(text.count("stageAs: 'root_a/*'"), 10)
+        self.assertEqual(text.count("stageAs: 'root_b/*'"), 10)
         self.assertNotIn("M28E", text)
 
     def test_global_nextflow_config_is_not_part_of_m29(self):

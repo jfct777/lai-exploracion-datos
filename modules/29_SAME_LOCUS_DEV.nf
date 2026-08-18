@@ -12,8 +12,8 @@ process RUN_M29_SAME_LOCUS_DEV {
     input:
     path preregistration
     path genetic_map
-    tuple val(root_a_seed), path(root_a_tree), path(root_a_pools), path(root_a_report), path(root_a_manifest), path(root_a_catalog), path(root_a_haplotypes), path(root_a_truth), path(root_a_fb), path(root_a_msp), path(root_a_binding)
-    tuple val(root_b_seed), path(root_b_tree), path(root_b_pools), path(root_b_report), path(root_b_manifest), path(root_b_catalog), path(root_b_haplotypes), path(root_b_truth), path(root_b_fb), path(root_b_msp), path(root_b_binding)
+    tuple val(root_a_seed), path(root_a_tree, stageAs: 'root_a/*'), path(root_a_pools, stageAs: 'root_a/*'), path(root_a_report, stageAs: 'root_a/*'), path(root_a_manifest, stageAs: 'root_a/*'), path(root_a_catalog, stageAs: 'root_a/*'), path(root_a_haplotypes, stageAs: 'root_a/*'), path(root_a_truth, stageAs: 'root_a/*'), path(root_a_fb, stageAs: 'root_a/*'), path(root_a_msp, stageAs: 'root_a/*'), path(root_a_binding, stageAs: 'root_a/*')
+    tuple val(root_b_seed), path(root_b_tree, stageAs: 'root_b/*'), path(root_b_pools, stageAs: 'root_b/*'), path(root_b_report, stageAs: 'root_b/*'), path(root_b_manifest, stageAs: 'root_b/*'), path(root_b_catalog, stageAs: 'root_b/*'), path(root_b_haplotypes, stageAs: 'root_b/*'), path(root_b_truth, stageAs: 'root_b/*'), path(root_b_fb, stageAs: 'root_b/*'), path(root_b_msp, stageAs: 'root_b/*'), path(root_b_binding, stageAs: 'root_b/*')
     path m29_script
     path m28d_scorer
 
