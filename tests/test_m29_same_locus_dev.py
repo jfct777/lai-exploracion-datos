@@ -1,4 +1,6 @@
 import importlib.util
+import csv
+import gzip
 import json
 import os
 import sys
@@ -125,6 +127,63 @@ class M29SameLocusDevTest(unittest.TestCase):
             self.assertEqual(root["required_run_binding"], ["fb", "msp"])
             self.assertNotIn("fb", root["sha256"])
             self.assertNotIn("msp", root["sha256"])
+
+    def test_target_dosage_is_oriented_to_minor_code_zero_and_one(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rare.tsv.gz"
+            with gzip.open(path, "wt", encoding="utf-8", newline="") as handle:
+                writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+                writer.writerow(("chrom", "position", "minor_code", "T000_h0", "T000_h1", "T001_h0", "T001_h1"))
+                writer.writerow(("22", 10, 0, 0, 0, 0, 1))
+                writer.writerow(("22", 20, 1, 1, 1, 0, 0))
+            samples, positions, dosage = MODULE._load_target_rare(path, {10: 0, 20: 1})
+            self.assertEqual(samples, ["T000", "T001"])
+            np.testing.assert_array_equal(positions, [10, 20])
+            np.testing.assert_array_equal(dosage, [[2.0, 1.0], [2.0, 0.0]])
+            self.assertEqual(0 + 0, 0)  # historical allele-1 dosage
+            self.assertEqual(MODULE.minor_diploid_dosage([0, 0], 0), 2)
+            self.assertEqual(MODULE.minor_diploid_dosage([1, 1], 1), 2)
+
+    def test_target_minor_code_must_match_selected_catalog(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rare.tsv"
+            path.write_text("chrom\tposition\tminor_code\tT000_h0\tT000_h1\n22\t10\t1\t0\t0\n")
+            with self.assertRaisesRegex(ValueError, "minor_code mismatch"):
+                MODULE._load_target_rare(path, {10: 0})
+
+    def test_m29r_accepts_only_fixed_historical_C_10(self):
+        import tempfile
+
+        path = Path(__file__).parents[1] / "conf" / "m29r_minor_orientation_erratum.json"
+        contract = MODULE._load_contract(path)
+        self.assertEqual(contract["model"]["C_grid"], [10.0])
+        self.assertEqual(contract["model"]["fixed_C"], 10.0)
+        self.assertEqual(contract["model"]["C_selection"], "none_fixed_from_historical_M29_all_arms")
+        modified = json.loads(path.read_text())
+        modified["model"]["C_grid"] = [1.0, 10.0]
+        with tempfile.TemporaryDirectory() as tmp:
+            invalid = Path(tmp) / "invalid.json"
+            invalid.write_text(json.dumps(modified))
+            with self.assertRaisesRegex(ValueError, "only.*C=10"):
+                MODULE._load_contract(invalid)
+
+    def test_durable_code_provenance_validation(self):
+        import tempfile
+
+        self.assertEqual(MODULE.validate_git_commit("a" * 40), "a" * 40)
+        with self.assertRaisesRegex(ValueError, "git_commit"):
+            MODULE.validate_git_commit("unknown")
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "script.py"
+            script.write_text("print('fixed')\n")
+            observed = MODULE.sha256_file(script)
+            self.assertEqual(MODULE.authenticate_script(script, observed), observed)
+            with self.assertRaisesRegex(ValueError, "script sha256 mismatch"):
+                MODULE.authenticate_script(script, "0" * 64)
 
 
 if __name__ == "__main__":

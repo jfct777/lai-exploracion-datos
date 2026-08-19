@@ -16,6 +16,7 @@ import gzip
 import hashlib
 import json
 import math
+import re
 import sys
 import warnings
 from dataclasses import dataclass
@@ -74,6 +75,13 @@ class RootData:
     sham_features: list[np.ndarray]
 
 
+def minor_diploid_dosage(states: Sequence[int], minor_code: int) -> int:
+    """Count copies of the selected minor allele, including minor_code=0."""
+    if minor_code not in (0, 1) or len(states) != 2 or any(state not in (0, 1) for state in states):
+        raise ValueError("minor dosage requires two binary states and minor_code 0/1")
+    return sum(int(state == minor_code) for state in states)
+
+
 def open_text(path: Path) -> TextIO:
     return gzip.open(path, "rt", encoding="utf-8", newline="") if path.suffix == ".gz" else path.open("r", encoding="utf-8", newline="")
 
@@ -84,6 +92,19 @@ def sha256_file(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def validate_git_commit(value: str | None) -> str | None:
+    if value is not None and not re.fullmatch(r"[0-9a-f]{40}", value):
+        raise ValueError("git_commit must be an exact lowercase 40-character hexadecimal commit")
+    return value
+
+
+def authenticate_script(path: Path, expected_sha256: str | None) -> str:
+    observed = sha256_file(path)
+    if expected_sha256 is not None and observed != expected_sha256:
+        raise ValueError(f"M29 script sha256 mismatch: {observed} != {expected_sha256}")
+    return observed
 
 
 def require_file_hash(path: Path, expected: str, label: str) -> None:
@@ -110,12 +131,26 @@ def permute_diploid_labels(labels: Sequence[str], seed: int) -> np.ndarray:
 
 def _load_contract(path: Path) -> dict:
     contract = json.loads(path.read_text(encoding="utf-8"))
-    if contract.get("stage") != "M29_SAME_LOCUS_DEV" or contract.get("status") != "PRE_FROZEN_BEFORE_DEV":
-        raise ValueError("M29 preregistration is not frozen for DEV")
+    stage = contract.get("stage")
+    if stage == "M29_SAME_LOCUS_DEV":
+        if contract.get("status") != "PRE_FROZEN_BEFORE_DEV":
+            raise ValueError("M29 preregistration is not frozen for DEV")
+        if contract["model"]["C_grid"] != [0.01, 0.1, 1.0, 10.0]:
+            raise ValueError("C grid differs from preregistration")
+    elif stage == "M29R_MINOR_ORIENTATION_ERRATUM":
+        if contract.get("status") != "FROZEN_DIAGNOSTIC_ERRATUM_NO_NEW_VALIDATION":
+            raise ValueError("M29R erratum is not frozen for diagnostic rerun")
+        original = contract.get("original_preregistration", {})
+        if original.get("stage") != "M29_SAME_LOCUS_DEV" or not isinstance(original.get("sha256"), str) or len(original["sha256"]) != 64:
+            raise ValueError("M29R does not reference an exact original M29 preregistration")
+        if contract["model"].get("C_grid") != [10.0] or contract["model"].get("fixed_C") != 10.0:
+            raise ValueError("M29R permits only the historically selected fixed C=10.0")
+        if contract["model"].get("C_selection") != "none_fixed_from_historical_M29_all_arms":
+            raise ValueError("M29R must not reselect C bidirectionally")
+    else:
+        raise ValueError("contract is neither M29 nor the M29R orientation erratum")
     if contract.get("version") != 1:
-        raise ValueError("unsupported M29 contract version")
-    if contract["model"]["C_grid"] != [0.01, 0.1, 1.0, 10.0]:
-        raise ValueError("C grid differs from preregistration")
+        raise ValueError("unsupported M29/M29R contract version")
     if contract["sham"]["replicates"] != 32:
         raise ValueError("sham count differs from preregistration")
     return contract
@@ -172,7 +207,7 @@ def _load_rare_catalog(path: Path) -> dict[int, dict[str, str]]:
     return rows
 
 
-def _load_target_rare(path: Path, selected_positions: set[int]) -> tuple[list[str], np.ndarray, np.ndarray]:
+def _load_target_rare(path: Path, selected_minor_codes: dict[int, int]) -> tuple[list[str], np.ndarray, np.ndarray]:
     positions: list[int] = []
     dosage_rows: list[list[float]] = []
     with open_text(path) as handle:
@@ -187,24 +222,32 @@ def _load_target_rare(path: Path, selected_positions: set[int]) -> tuple[list[st
             raise ValueError("rare haplotypes do not contain complete diploid targets")
         for row in reader:
             position = int(row["position"])
-            if position not in selected_positions:
+            if position not in selected_minor_codes:
                 continue
+            target_minor_code = int(row["minor_code"])
+            if target_minor_code != selected_minor_codes[position]:
+                raise ValueError(f"target/catalog minor_code mismatch at {position}")
             values = []
             for sample in samples:
                 pair = [row[f"{sample}_h0"], row[f"{sample}_h1"]]
                 if any(value in {"", ".", "NA"} for value in pair):
                     values.append(float("nan"))
                 else:
-                    values.append(float(int(pair[0]) + int(pair[1])))
+                    states = [int(pair[0]), int(pair[1])]
+                    try:
+                        dosage = minor_diploid_dosage(states, target_minor_code)
+                    except ValueError as exc:
+                        raise ValueError(f"target haplotype state is not binary at {position}") from exc
+                    values.append(float(dosage))
             positions.append(position)
             dosage_rows.append(values)
-    if set(positions) != selected_positions:
+    if set(positions) != set(selected_minor_codes):
         raise ValueError("target rare table does not cover the selected FREQ universe")
     order = np.argsort(np.asarray(positions))
     return samples, np.asarray(positions, dtype=np.int64)[order], np.asarray(dosage_rows, dtype=float)[order]
 
 
-def _derive_freq_universe_and_ref_support(tree_path: Path, pool_path: Path, catalog_path: Path, genomic_offset: int) -> tuple[np.ndarray, np.ndarray, list[str], np.ndarray]:
+def _derive_freq_universe_and_ref_support(tree_path: Path, pool_path: Path, catalog_path: Path, genomic_offset: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], np.ndarray]:
     import tskit
 
     pools, node_ancestry = _load_pool_manifest(pool_path)
@@ -219,6 +262,7 @@ def _derive_freq_universe_and_ref_support(tree_path: Path, pool_path: Path, cata
     ordered_nodes = np.concatenate([freq_nodes, ref_nodes])
     genotype_indexes = np.asarray([sample_index[int(node)] for node in ordered_nodes], dtype=int)
     positions: list[int] = []
+    minor_codes: list[int] = []
     ref_genotypes: list[np.ndarray] = []
     for variant in ts.variants():
         position = genomic_offset + int(variant.site.position)
@@ -247,12 +291,13 @@ def _derive_freq_universe_and_ref_support(tree_path: Path, pool_path: Path, cata
         if int(ref_minor.sum()) == 0:
             continue
         positions.append(position)
+        minor_codes.append(minor)
         ref_genotypes.append(ref_minor)
     if not positions:
         raise ValueError("FREQ rare universe is empty after the two-carrier rule")
     if set(positions) - set(catalog):
         raise AssertionError("selected a site outside the FREQ catalog")
-    return np.asarray(positions, dtype=np.int64), np.asarray(ref_genotypes, dtype=np.int8), ref_labels, np.asarray([pair for _, pair in ref_people], dtype=int)
+    return np.asarray(positions, dtype=np.int64), np.asarray(minor_codes, dtype=np.int8), np.asarray(ref_genotypes, dtype=np.int8), ref_labels, np.asarray([pair for _, pair in ref_people], dtype=int)
 
 
 def ancestry_support(ref_dosage: np.ndarray, labels: Sequence[str]) -> np.ndarray:
@@ -436,12 +481,13 @@ def load_root(label: str, paths: dict[str, Path], spec: dict, binding_path: Path
     if report.get("stage") != "M28_LAI_SIMULATION_PREFLIGHT" or report.get("root_seed") != spec["root_seed"]:
         raise ValueError(f"{label}: M28-v2 report/root mismatch")
     genomic_offset = int(contract["chromosome_domain"]["start_bp"])
-    positions, ref_dosage, ref_labels, _ = _derive_freq_universe_and_ref_support(paths["tree"], paths["pools"], paths["catalog"], genomic_offset)
-    target_samples, target_positions, target_dosage = _load_target_rare(paths["haplotypes"], set(positions.tolist()))
+    positions, minor_codes, ref_dosage, ref_labels, _ = _derive_freq_universe_and_ref_support(paths["tree"], paths["pools"], paths["catalog"], genomic_offset)
+    selected_minor_codes = {int(position): int(minor) for position, minor in zip(positions, minor_codes)}
+    target_samples, target_positions, target_dosage = _load_target_rare(paths["haplotypes"], selected_minor_codes)
     if not np.array_equal(np.sort(positions), target_positions):
         raise ValueError(f"{label}: tree and target rare positions differ")
     order = np.argsort(positions)
-    positions, ref_dosage = positions[order], ref_dosage[order]
+    positions, minor_codes, ref_dosage = positions[order], minor_codes[order], ref_dosage[order]
     domain = (int(contract["chromosome_domain"]["start_bp"]), int(contract["chromosome_domain"]["end_bp_exclusive"]))
     fb_samples, windows = _prediction_windows(paths["fb"], paths["msp"], genetic_map, domain)
     if target_samples != fb_samples:
@@ -486,9 +532,14 @@ def run_gate(root_a: RootData, root_b: RootData, contract: dict) -> tuple[dict, 
         means = {C: np.mean([r["macro_mae"] for r in metrics if r["arm"] == arm and r["C"] == C and (sham is None or r["sham"] == sham)]) for C in Cs}
         return min(Cs, key=lambda value: (means[value], value))
 
-    selected_b0 = select_c("B0_CAL")
-    selected_br = select_c("BR")
-    selected_shams = {replicate: select_c("BSHAM", replicate) for replicate in range(contract["sham"]["replicates"])}
+    is_erratum = contract["stage"] == "M29R_MINOR_ORIENTATION_ERRATUM"
+    if is_erratum:
+        selected_b0 = selected_br = float(contract["model"]["fixed_C"])
+        selected_shams = {replicate: selected_b0 for replicate in range(contract["sham"]["replicates"])}
+    else:
+        selected_b0 = select_c("B0_CAL")
+        selected_br = select_c("BR")
+        selected_shams = {replicate: select_c("BSHAM", replicate) for replicate in range(contract["sham"]["replicates"])}
     direction_results = []
     passed = True
     for train, test in directions:
@@ -502,16 +553,26 @@ def run_gate(root_a: RootData, root_b: RootData, contract: dict) -> tuple[dict, 
         direction_pass = improvement > 0 and improvement > threshold
         passed &= direction_pass
         direction_results.append({"direction": direction, "b0_macro_mae": b0, "br_macro_mae": br, "br_improvement": improvement, "sham_improvement_p95": threshold, "pass": bool(direction_pass)})
+    if is_erratum:
+        decision = "M29R_ERRATUM_SIGNAL_REPLICATED" if passed else "M29R_ERRATUM_NO_REPLICATED_INCREMENTAL_SIGNAL"
+        scope = "DIAGNOSTIC_ERRATUM_DEV_ONLY_NO_NEW_VALIDATION"
+    else:
+        decision = "GO_FREEZE_DEV" if passed else "STOP_DEV_NO_REPLICATED_INCREMENTAL_SIGNAL"
+        scope = "DEV_ONLY_NO_VALID_ACCESS"
     summary = {
-        "stage": "M29_SAME_LOCUS_DEV",
-        "scope": "DEV_ONLY_NO_VALID_ACCESS",
+        "stage": contract["stage"],
+        "scope": scope,
         "selected_C": {"B0_CAL": selected_b0, "BR": selected_br, "BSHAM": {str(key): value for key, value in selected_shams.items()}},
         "directions": direction_results,
-        "decision": "GO_FREEZE_DEV" if passed else "STOP_DEV_NO_REPLICATED_INCREMENTAL_SIGNAL",
+        "decision": decision,
+        "C_policy": "fixed_historical_C_10_no_reselection" if is_erratum else "mean_bidirectional_DEV_selection",
         "primary_metric": "equal-individual mean of genetic-length-weighted macro ancestry-proportion MAE",
         "secondary_metrics": ["MAE_by_ancestry", "composition_Brier", "unordered_diploid_state_accuracy", "unordered_diploid_state_macro_F1_fixed_six"],
         "boundary_metric": "not_estimated_in_DEV: diploid window posteriors do not identify phased haplotype boundaries; no phase was imputed",
-        "claims_excluded": ["validated_LAI_improvement", "utility_in_DNABR", "Native_American_inference"],
+        "claims_excluded": contract.get(
+            "claims_excluded",
+            ["validated_LAI_improvement", "utility_in_DNABR", "Native_American_inference"],
+        ),
     }
     return summary, metrics, individual_rows
 
@@ -530,12 +591,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--preregistration", required=True)
     parser.add_argument("--genetic-map", required=True)
+    parser.add_argument("--git-commit")
+    parser.add_argument("--script-sha256")
     parser.add_argument("--outdir", required=True)
     for label in ("root_a", "root_b"):
         for key in ("tree", "pools", "report", "manifest", "catalog", "haplotypes", "truth", "fb", "msp"):
             parser.add_argument(f"--{label.replace('_', '-')}-{key.replace('_', '-')}", dest=f"{label}_{key}", required=True)
         parser.add_argument(f"--{label.replace('_', '-')}-binding", dest=f"{label}_binding", required=True)
     args = parser.parse_args()
+    script_sha256 = authenticate_script(Path(__file__).resolve(), args.script_sha256)
+    git_commit = validate_git_commit(args.git_commit)
     contract_path = Path(args.preregistration)
     contract = _load_contract(contract_path)
     genetic_map_path = Path(args.genetic_map)
@@ -547,6 +612,8 @@ def main() -> None:
     if root_a.seed == root_b.seed:
         raise ValueError("leave-one-root-out requires distinct roots")
     summary, metrics, individuals = run_gate(root_a, root_b, contract)
+    summary["code_sha256"] = {"m29_same_locus_dev.py": script_sha256}
+    summary["git_commit"] = git_commit
     summary["preregistration_sha256"] = sha256_file(contract_path)
     summary["input_sha256"] = {label: {**{key: sha256_file(path) for key, path in _root_inputs(args, label).items()}, "binding": sha256_file(Path(getattr(args, f"{label}_binding")))} for label in ("root_a", "root_b")}
     outdir = Path(args.outdir)
@@ -554,7 +621,12 @@ def main() -> None:
     (outdir / "m29_dev_summary.public.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _write_tsv(outdir / "m29_dev_metrics.tsv", metrics)
     _write_tsv(outdir / "m29_dev_individual_errors.tsv.gz", individuals)
-    manifest = {"stage": "M29_SAME_LOCUS_DEV", "sha256": {path.name: sha256_file(path) for path in sorted(outdir.iterdir())}}
+    manifest = {
+        "stage": contract["stage"],
+        "git_commit": git_commit,
+        "code_sha256": {"m29_same_locus_dev.py": script_sha256},
+        "sha256": {path.name: sha256_file(path) for path in sorted(outdir.iterdir())},
+    }
     (outdir / "m29_dev.manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 

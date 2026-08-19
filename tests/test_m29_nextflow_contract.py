@@ -16,9 +16,16 @@ class M29NextflowContractTest(unittest.TestCase):
         text = (ROOT / "modules" / "29_SAME_LOCUS_DEV.nf").read_text()
         self.assertIn("set -euo pipefail", text)
         self.assertIn("m29_dev.manifest.json", text)
+        self.assertIn("--git-commit", text)
         self.assertEqual(text.count("stageAs: 'root_a/*'"), 10)
         self.assertEqual(text.count("stageAs: 'root_b/*'"), 10)
         self.assertNotIn("M28E", text)
+
+    def test_workflow_resolves_exact_repository_head(self):
+        text = (ROOT / "workflows" / "m29_same_locus_dev.nf").read_text()
+        self.assertIn("repositoryHead", text)
+        self.assertIn("[0-9a-f]{40}", text)
+        self.assertNotIn("DNABR_GIT_COMMIT", text)
 
     def test_global_nextflow_config_is_not_part_of_m29(self):
         text = (ROOT / "conf" / "m29_same_locus_dev.config").read_text()

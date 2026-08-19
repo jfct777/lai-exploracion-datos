@@ -1,0 +1,102 @@
+{
+  "stage": "M29R_MINOR_ORIENTATION_ERRATUM",
+  "version": 1,
+  "status": "FROZEN_DIAGNOSTIC_ERRATUM_NO_NEW_VALIDATION",
+  "scope": "chr22_same_DEV_roots_diagnostic_correction_only",
+  "question": "Does the M29 DEV conclusion change after orienting every target genotype to the catalogued minor allele, including minor_code=0 sites?",
+  "original_preregistration": {
+    "stage": "M29_SAME_LOCUS_DEV",
+    "path": "conf/m29_same_locus_dev_preregistration.json",
+    "sha256": "45767079bd4594efddef9a23c3a4bb46dc826f840fa4705353ffc6432e013969"
+  },
+  "erratum": {
+    "historical_formula": "int(h0_state) + int(h1_state)",
+    "correct_formula": "I(h0_state == minor_code) + I(h1_state == minor_code)",
+    "changed_component": "target rare dosage orientation only",
+    "unchanged_components": [
+      "roots",
+      "windows",
+      "FREQ rare-site universe",
+      "REF_LAI ancestry support",
+      "features",
+      "B0 baseline",
+      "sham construction",
+      "evaluation metrics"
+    ]
+  },
+  "chromosome_domain": {
+    "chrom": "22",
+    "start_bp": 15287922,
+    "end_bp_exclusive": 50791378
+  },
+  "roots": {
+    "root_a": {
+      "root_seed": 20260817,
+      "source_attempt": "seed17-b",
+      "sha256": {
+        "tree": "566946ec93cbc28c7f36d27878e12d091f1c87ebdd6fb6423b940f4f778391f7",
+        "pools": "56f9891bfb7f77d63ec3328107fc8e89b919c34ad16fda2c0c72dc3fde24f0e4",
+        "report": "e96cc352248bc05643099fc8d7107528d6a96c8e6fe9592561587d1059715b2a",
+        "manifest": "e229c1e66905282510698e9125b72840b1f049826fd22de064900b732bba8c41",
+        "catalog": "3162022c6882aa184094f96f6e8d49b6917b5fbe5a45ecfabf6cc4a8265b366c",
+        "haplotypes": "015f7c420730537cb2d9173971e4767d4d561d11ed22ce2b46149c9eb7832122",
+        "truth": "bf059f94ba40b033a75bb2d4ea782ce2d8f6cb86098a77e4812ee019f07da303"
+      },
+      "required_run_binding": ["fb", "msp"]
+    },
+    "root_b": {
+      "root_seed": 20260818,
+      "source_attempt": "seed18-a",
+      "sha256": {
+        "tree": "780800c1f3d279746ace8631fa1b1ccd57782e9bf697a3dacc2cc983523f5f54",
+        "pools": "046c6e903ca4b3beea8ac468836d28bb953d32b4e731c13be86f42d7c110a4ff",
+        "report": "30f41bb4c5d77b583052409a4cdb591497bc8d1a02b1cad8183600c6ebeb758d",
+        "manifest": "46829d0f1b28d5a3a94199143c9b8b10980c1619b302a8319dd474435431c9e4",
+        "catalog": "7a12195c18db5d4bfd5a1cee43ed4f04eccc5cd21d9fb7ed01e8c24f2a00c3b3",
+        "haplotypes": "29c562da4cdf24a680b617fc155f0ee09546e8dbd4b23cd8dd4a75d5daeb9827",
+        "truth": "e5e2895b8316673afb6796795a2724d167c1bf2e98b2122ef0f7645b985e296a"
+      },
+      "required_run_binding": ["fb", "msp"]
+    }
+  },
+  "shared_inputs": {
+    "genetic_map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9"
+  },
+  "rare_universe": {
+    "selector": "FREQ_only",
+    "definition": "minor allele with MAC>=2, MAF<0.01 and at least two carrier individuals in FREQ; FREQ alone defines rarity",
+    "operational_observability": "retain only FREQ-defined sites with at least one minor copy in pooled REF_LAI",
+    "prohibited_selectors": ["REF_LAI", "DONOR", "TARGET", "truth", "Gnomix_prediction"]
+  },
+  "sham": {
+    "replicates": 32,
+    "base_seed": 290017,
+    "unit": "complete_diploid_REF_LAI_individual",
+    "fixed": ["ancestry_sample_sizes", "loci", "positions", "target_genotypes", "missingness", "rare_load", "LD"]
+  },
+  "model": {
+    "estimator": "multinomial_logistic_regression_L2",
+    "C_grid": [10.0],
+    "fixed_C": 10.0,
+    "C_selection": "none_fixed_from_historical_M29_all_arms",
+    "fixed_C_justification": "B0_CAL, BR and all 32 historical BSHAM arms selected C=10.0 in M29; the erratum must not retune after seeing the correction",
+    "solver": "lbfgs",
+    "max_iter": 5000,
+    "tol": 1e-08,
+    "normalization": "fit_on_training_root_only",
+    "feature_dimension": 7
+  },
+  "evaluation": {
+    "directions": ["root_a_to_root_b", "root_b_to_root_a"],
+    "primary": "equal-individual mean of genetic-length-weighted macro ancestry-proportion MAE",
+    "gate": "same historical M29 gate, rerun diagnostically at fixed C=10.0"
+  },
+  "stop_rule": "Stop if any original hash, minor-code identity, convergence, ancestry-class, or same-locus invariant fails.",
+  "claims_excluded": [
+    "new_validation",
+    "confirmatory_validation",
+    "DNABR_generalization",
+    "Native_American_LAI",
+    "deep_learning_benefit"
+  ]
+}
