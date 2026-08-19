@@ -234,7 +234,7 @@
   },
   "scoring_contract": {
     "status": "FROZEN_BEFORE_M30_INFERENCE",
-    "scorer_sha256": "8372fc6a6edac890712170406a4d44338d8471294192cd5e6d111ee56a3cdbd5",
+    "scorer_sha256": "84be4666979d9a9268dac1fda25153a86900859c7e30d2d806f49667b1b77602",
     "base_metric_library": {
       "path": "bin/m28d_b0_scorer.py",
       "sha256": "bd9dcd82a95987e3de32e9b64c8bb9637356545ce8f16821f59c4c3373513673"

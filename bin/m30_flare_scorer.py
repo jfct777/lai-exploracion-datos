@@ -16,6 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+# Google Batch executes the staged scorer through a temporary script path,
+# while the authenticated base module remains in the task working directory.
+# Make that explicit instead of relying on Python's launcher-specific sys.path.
+sys.path.insert(0, str(Path.cwd()))
 import m28d_b0_scorer as base
 
 
