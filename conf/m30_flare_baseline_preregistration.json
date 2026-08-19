@@ -1,0 +1,290 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "M30_FLARE_BASELINE",
+  "status": "PREREGISTERED_NOT_RUN",
+  "scope": "Direct FLARE v0.6.0 baseline on the two previously authenticated M29 chr22 roots; no outcome scoring in this workflow.",
+  "scientific_question": "Does a direct, well-matched FLARE baseline provide a useful comparator to the frozen Gnomix B0 predictions on the same phased marker sets?",
+  "analysis_role": "development",
+  "roots_are_not_independent_validation": true,
+  "truth_policy": {
+    "truth_permitted_in_preflight": false,
+    "truth_permitted_in_inference": false,
+    "truth_permitted_in_this_workflow": false,
+    "scoring_is_a_separate_downstream_stage": true
+  },
+  "methods": {
+    "gnomix": {
+      "action": "reuse_frozen_predictions",
+      "retraining": false
+    },
+    "flare": {
+      "mode": "direct",
+      "version": "0.6.0",
+      "reported_build": "616fcc9d4 03-Nov-2025",
+      "jar_sha256": "8c804341b555f302591b12cd72e870b1ca7849055d1dcd2b5cfa09b725bd9420",
+      "source_repository_head_observed": "d6a6c8fd4479ebdb68529824acd11d2b6bbac4a1",
+      "source_head_is_not_asserted_equivalent_to_jar": true,
+      "minimum_java_major": 11,
+      "parameters": {
+        "array": false,
+        "probs": true,
+        "em": true,
+        "min-mac": 1,
+        "min-maf": 0.0,
+        "gen": 10.0,
+        "update-p": false,
+        "panel-probs": false,
+        "seed": 3001701,
+        "nthreads": 4
+      },
+      "forbidden_optional_inputs": [
+        "model",
+        "gt-ancestries"
+      ],
+      "marker_retention_rule": "array=false describes the phased WGS inputs. min-maf=0 and min-mac=1 retain the fixed 79,791-locus grid because preflight requires MAC >= 1 at every reference locus, and output audit requires exact locus parity."
+    },
+    "flare2": {
+      "status": "DEFERRED",
+      "reason": "The current reference is an exact one-to-one match to three ancestry panels (AFR, EUR, ASIA). With nanc=3, clustering would be nearly redundant and would not test parental-panel mismatch."
+    }
+  },
+  "ancestry_order": [
+    "AFR",
+    "EUR",
+    "ASIA"
+  ],
+  "input_contract": {
+    "chromosome": "22",
+    "marker_count": 79791,
+    "reference_sample_count": 90,
+    "target_sample_count": 30,
+    "reference_panel_counts": {
+      "AFR": 30,
+      "EUR": 30,
+      "ASIA": 30
+    },
+    "phased": true,
+    "missing_genotypes_allowed": false,
+    "biallelic_only": true,
+    "reference_target_loci_must_match_exactly": true,
+    "reference_target_samples_must_be_disjoint": true,
+    "map_input_columns": [
+      "chrom",
+      "bp",
+      "cM"
+    ],
+    "map_output_columns": [
+      "chrom",
+      "id",
+      "cM",
+      "bp"
+    ],
+    "map_identifier_rule": "chrom:bp",
+    "map_row_count": 45141,
+    "map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9"
+  },
+  "roots": {
+    "root17": {
+      "root_seed": 20260817,
+      "coordinate_range_bp": [
+        16386258,
+        50784627
+      ],
+      "scoring_inputs": {
+        "truth": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m28-v2-individual-safe-20260817a/seed17-b/seed-20260817/m28/m28_lai_truth.tsv.gz",
+          "sha256": "bf059f94ba40b033a75bb2d4ea782ce2d8f6cb86098a77e4812ee019f07da303"
+        }
+      },
+      "inputs": {
+        "reference_vcf": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root17/ingest/m28c_b0_reference.vcf.gz",
+          "sha256": "0847407648ccc2b984c7a8a4fb2606d561adcb050105b927708a53130c7807d8"
+        },
+        "reference_tbi": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root17/ingest/m28c_b0_reference.vcf.gz.tbi",
+          "sha256": "ed7c18bd43835573d872274f0a4e638c17775ae7bc18a547d6e69b9b8453d213"
+        },
+        "target_vcf": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root17/ingest/m28c_b0_target.vcf.gz",
+          "sha256": "6c042e53f9cd963033fa01f983ec446424a2348c5692bf7ea6be55202f5aa389"
+        },
+        "target_tbi": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root17/ingest/m28c_b0_target.vcf.gz.tbi",
+          "sha256": "48cd386eaae49697448fe65ce41c3bf46c39ff7aa50dfa660eba53a98c4224eb"
+        },
+        "sample_map": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root17/materialized/m28c_b0_reference.sample_map.tsv",
+          "sha256": "1ae29789a2d793957a367b77b78300ddba6d7537c10bb5cda318ef3fdd547647"
+        },
+        "gnomix_binding": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-gnomix-b0-20260818c/29_root_gnomix_b0_20260818c/root17/binding/m29_b0_binding.json",
+          "sha256": "31fce970a302b8111e58a41a86486c64ae0dbc0e35c846780d2310d79e528436"
+        },
+        "gnomix_fb": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-gnomix-b0-20260818c/29_root_gnomix_b0_20260818c/root17/inference/results/query_results.fb",
+          "sha256": "73eb9597069c0bac6ef47380e6cc46d8cf42216ea8c9ac9d8bf4ad1a15c66993"
+        },
+        "gnomix_msp": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-gnomix-b0-20260818c/29_root_gnomix_b0_20260818c/root17/inference/results/query_results.msp",
+          "sha256": "393dbe9f8655ef4b69d1774af3c6941c542129c133c4e30454c023330189b400"
+        }
+      }
+    },
+    "root18": {
+      "root_seed": 20260818,
+      "coordinate_range_bp": [
+        16386265,
+        50784249
+      ],
+      "scoring_inputs": {
+        "truth": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m28-v2-individual-safe-20260817a/seed18-a/seed-20260818/m28/m28_lai_truth.tsv.gz",
+          "sha256": "e5e2895b8316673afb6796795a2724d167c1bf2e98b2122ef0f7645b985e296a"
+        }
+      },
+      "inputs": {
+        "reference_vcf": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root18/ingest/m28c_b0_reference.vcf.gz",
+          "sha256": "6bcf0ccfbc06e82bb89677848d2a5a9e61e56d18019dff95a4949e39ec4cb05d"
+        },
+        "reference_tbi": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root18/ingest/m28c_b0_reference.vcf.gz.tbi",
+          "sha256": "d602322e07c04e98c81bcf2d48cba3b8237e4b64d28bf8727154e234dc88c72c"
+        },
+        "target_vcf": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root18/ingest/m28c_b0_target.vcf.gz",
+          "sha256": "9cc8f5625b7096b1cf5b180fdf1186af05309ea0460dc8e091b502b7b493de8b"
+        },
+        "target_tbi": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root18/ingest/m28c_b0_target.vcf.gz.tbi",
+          "sha256": "f58dedca176e53824c4659069304fea946147a0c91caa6cad5ebc98754420836"
+        },
+        "sample_map": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root18/materialized/m28c_b0_reference.sample_map.tsv",
+          "sha256": "1ae29789a2d793957a367b77b78300ddba6d7537c10bb5cda318ef3fdd547647"
+        },
+        "gnomix_binding": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-gnomix-b0-20260818c/29_root_gnomix_b0_20260818c/root18/binding/m29_b0_binding.json",
+          "sha256": "32df2a8a4e6ceb4e7bdc890122705535fe5c87c360d908401e7da53582f001d7"
+        },
+        "gnomix_fb": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-gnomix-b0-20260818c/29_root_gnomix_b0_20260818c/root18/inference/results/query_results.fb",
+          "sha256": "890fef19d2211142cf3a2706ae3d88ebb9e81f202c208a26c1984397b4aead6a"
+        },
+        "gnomix_msp": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-gnomix-b0-20260818c/29_root_gnomix_b0_20260818c/root18/inference/results/query_results.msp",
+          "sha256": "2b714c457b1c8e1fb783575d6d062406637f4fa25e89c57ab62147534b52d922"
+        }
+      }
+    }
+  },
+  "execution_order": [
+    "scorer_known_answers_without_real_truth",
+    "root17_preflight",
+    "root17_flare_smoke_and_output_audit",
+    "root18_preflight",
+    "root18_flare_and_output_audit",
+    "paired_root17_root18_scoring_with_truth_in_separate_process"
+  ],
+  "stop_rules": [
+    "Any expected SHA-256 mismatch",
+    "Unexpected root label or seed",
+    "Unexpected marker or sample cardinality",
+    "Unphased, missing, non-diploid, or multiallelic genotype",
+    "Reference and target locus or allele mismatch",
+    "Reference and target sample overlap",
+    "Reference panel order/count mismatch",
+    "Invalid, non-monotonic, or non-covering genetic map",
+    "Gnomix binding does not authenticate the staged FB/MSP files",
+    "FLARE version, JAR hash, Java major version, container digest, or fixed parameter drift",
+    "Frozen scorer or synthetic known-answer gate mismatch",
+    "root17 output audit is not PASS"
+  ],
+  "planned_metrics_for_separate_scoring_stage": {
+    "primary": "macro ancestry-dose MAE, weighted by genetic distance and equally by individual",
+    "secondary": [
+      "diploid macro-F1",
+      "Brier score",
+      "per-ancestry error",
+      "boundary F1 at 0.2 cM",
+      "boundary F1 sensitivity at 0.1 and 0.5 cM",
+      "false transitions per cM",
+      "median and 90th-percentile distance between one-to-one matched predicted and true boundaries"
+    ],
+    "model_selection_in_this_workflow": false
+  },
+  "future_scoring_decision_rule": {
+    "estimand": "delta = MAE_FLARE - MAE_Gnomix",
+    "primary_direction": "lower_is_better",
+    "requirements_for_claiming_flare_improvement": [
+      "delta is below zero in root17",
+      "delta is below zero in root18",
+      "the upper bound of the pooled confidence interval is below zero",
+      "the pooled ancestry-specific MAE delta is at or below zero for AFR, EUR, and ASIA",
+      "boundary F1 at 0.2 cM is not worse",
+      "false transitions per cM do not increase"
+    ],
+    "outcome_role": "development_only",
+    "labels": {
+      "GO_FLARE_NEXT_DEV": "Both roots improve, the pooled interval is completely below zero, and all safeguards pass.",
+      "KEEP_GNOMIX": "Both root deltas are at or above zero, or the pooled interval is completely above zero.",
+      "INCONCLUSIVE_TRADEOFF": "Roots disagree, the interval crosses zero, or a safeguard fails despite a primary improvement."
+    }
+  },
+  "scoring_contract": {
+    "status": "FROZEN_BEFORE_M30_INFERENCE",
+    "scorer_sha256": "8372fc6a6edac890712170406a4d44338d8471294192cd5e6d111ee56a3cdbd5",
+    "base_metric_library": {
+      "path": "bin/m28d_b0_scorer.py",
+      "sha256": "bd9dcd82a95987e3de32e9b64c8bb9637356545ce8f16821f59c4c3373513673"
+    },
+    "alignment": {
+      "locus_key": "CHROM,POS,REF,ALT",
+      "sample_order_must_match": true,
+      "marker_count": 79791,
+      "same_target_vcf_for_both_methods": true,
+      "genetic_map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+      "prediction_support": "Discrete marker Voronoi cells split exactly at truth boundaries; both methods use the same cells and interpolated cM lengths."
+    },
+    "phase_policy": "Target h0/h1, truth h0/h1 and both prediction outputs are lineage-bound. No global or local post-truth haplotype swap is permitted.",
+    "metrics": {
+      "primary": "Normalized ancestry-dosage MAE weighted by cM, equal individuals within root and equal roots.",
+      "per_ancestry": [
+        "total-domain cM-weighted normalized dosage MAE",
+        "cM-weighted normalized dosage MAE conditional on truth dosage greater than zero"
+      ],
+      "hard_call": "Macro-F1 over truth-supported unordered diploid states; also report fixed-six-class macro-F1 over AA, EE, SS, AE, AS and ES only when all six truth states are present.",
+      "probability": "Haplotype Brier score on lineage-bound h0/h1. FLARE probabilities rounded to two decimals must sum within [0.99,1.01] and are renormalized before scoring.",
+      "boundaries": {
+        "matching": "Ordered, directed-transition-aware, maximum-cardinality then minimum-distance one-to-one matching.",
+        "primary_tolerance_cm": 0.2,
+        "sensitivity_tolerances_cm": [0.1, 0.5],
+        "reported": [
+          "precision",
+          "recall",
+          "F1",
+          "false transitions per cM",
+          "median matched distance in cM",
+          "p90 matched distance in cM"
+        ]
+      }
+    },
+    "bootstrap": {
+      "scheme": "Paired resampling of individuals with replacement inside each root; the same sampled indices are used for Gnomix and FLARE; root estimates are averaged with weight one half each.",
+      "replicates": 10000,
+      "seed": 3001702,
+      "interval": "two-sided percentile 95%",
+      "unit": "diploid individual"
+    },
+    "decision": {
+      "primary_delta": "MAE_FLARE - MAE_Gnomix",
+      "primary_root_requirement": "delta < 0 in root17 and root18",
+      "primary_interval_requirement": "pooled 95% CI upper bound < 0",
+      "ancestry_requirement": "pooled total and truth-present delta <= 0 for AFR, EUR and ASIA",
+      "boundary_requirement": "pooled boundary F1 delta at 0.2 cM >= 0 and pooled false-transitions-per-cM delta <= 0",
+      "labels": ["GO_FLARE_NEXT_DEV", "KEEP_GNOMIX", "INCONCLUSIVE_TRADEOFF"]
+    },
+    "claim_scope": "DEV comparison on roots 17 and 18 only; not independent validation."
+  }
+}
