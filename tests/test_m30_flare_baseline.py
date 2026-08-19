@@ -220,6 +220,9 @@ def test_nextflow_contract_is_sequential_and_has_no_truth_input():
     assert "resourceLabels = [team: 'frank']" in config
     assert "maxForks = 1" in config
     assert "executor.queueSize = 1" in config
+    assert "def repositoryHead = headValue" in workflow
+    assert "DNABR_GIT_COMMIT does not match repository HEAD" in workflow
+    assert "def gitCommit = repositoryHead" in workflow
     assert "m30_root18_reference_tbi" in config
     assert "root18/ingest/m28c_b0_reference.vcf.gz.tbi" in config
     root17_inference = module.split("process M30_RUN_FLARE_ROOT17", 1)[1].split(

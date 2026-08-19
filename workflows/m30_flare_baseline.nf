@@ -39,10 +39,34 @@ workflow {
     if (params.m30_flare_jar_sha256 != '8c804341b555f302591b12cd72e870b1ca7849055d1dcd2b5cfa09b725bd9420') {
         error '--m30_flare_jar_sha256 differs from the preregistered FLARE v0.6.0 JAR'
     }
-    def gitCommit = System.getenv('DNABR_GIT_COMMIT') ?: workflow.commitId
-    if (!gitCommit) error 'Set DNABR_GIT_COMMIT to the exact source commit'
-
     def repoDir = projectDir.resolve('..')
+    def dotGit = new File(repoDir.toFile(), '.git')
+    def gitDir = dotGit
+    if (dotGit.isFile()) {
+        def gitDirPath = dotGit.text.trim().replaceFirst(/^gitdir:\s*/, '')
+        gitDir = new File(gitDirPath)
+        if (!gitDir.isAbsolute()) gitDir = new File(dotGit.parentFile, gitDirPath)
+    }
+    def headValue = new File(gitDir, 'HEAD').text.trim()
+    def repositoryHead = headValue
+    if (headValue.startsWith('ref:')) {
+        def headRef = headValue.substring(4).trim()
+        def looseRef = new File(gitDir, headRef)
+        repositoryHead = looseRef.exists()
+            ? looseRef.text.trim()
+            : new File(gitDir, 'packed-refs').readLines()
+                .find { line -> line.endsWith(" ${headRef}") }
+                ?.split(' ')[0]
+    }
+    if (!(repositoryHead ==~ /[0-9a-f]{40}/)) {
+        error 'M30 could not resolve an exact 40-character commit from the repository'
+    }
+    def suppliedCommit = System.getenv('DNABR_GIT_COMMIT')
+    if (suppliedCommit && suppliedCommit != repositoryHead) {
+        error "DNABR_GIT_COMMIT does not match repository HEAD: supplied=${suppliedCommit}, HEAD=${repositoryHead}"
+    }
+    def gitCommit = repositoryHead
+
     def provenance = [
         experiment_id: 'M30_FLARE_BASELINE',
         git_commit: gitCommit,
