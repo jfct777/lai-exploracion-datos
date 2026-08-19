@@ -1,0 +1,146 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "P1A-continuous-structure-DEV",
+  "status": "PRE_FROZEN",
+  "purpose": "Test whether non-local M14-minor topology adds regional association within RHT Q_EUR>0.5 beyond ancestry, rare burden, missingness and local graph connectivity.",
+  "scope": {
+    "development_only": true,
+    "transductive_description": true,
+    "biological_validation": false,
+    "uses_reserved_fold_3": false,
+    "uses_novel_brazilian_variants": false,
+    "uses_nam_target": false,
+    "runs_graph_nulls": false
+  },
+  "inputs": {
+    "expected_sha256": {
+      "pairs": "870dfbc2ca03a4416f61860706f821e86dd08548f0c594b1f54f70842568017d",
+      "global_summary": "146a33177a988d6c96a0587c5758d9a0c560d81f561bd4ffaa1ad48c230685a5",
+      "metadata": "b7be61a6b84a47923279cd319c22c84247ea759b9b558659a048deda9a61f3e7",
+      "burden": "e646590391db448567d249dde17220a5a4e39bb0fb2a6d3ec9d4c381cdd0cbb9",
+      "feature_store": "966f8956794a833d5f6adec1d692f6c739145b5f00b5f14a2c46d2e0bab0a8f1",
+      "modeling_master": "9c8e66c15ee11b997264c34e5762a2f6b04ee6bd0e12a32656df78c2d30c47c6",
+      "split_manifest": "58bd57afb208ace5dce02edafdec92efb503590135d09f62d15061bb25e46b9c"
+    },
+    "expected_pair_rows": 54522,
+    "expected_samples": 2619,
+    "m14_carrier_allele_mode": "minor_allele",
+    "m14_min_segment_bp": 1000000,
+    "burden_column": "minor_m14_subset_carrier_rate",
+    "missing_column": "rare_missing_sites"
+  },
+  "population": {
+    "cohort": "RHT",
+    "q_eur_strictly_greater_than": 0.5,
+    "region_column": "Region",
+    "excluded_region_labels": ["", "UNKNOWN", "NAN"],
+    "primary_regions": ["NORTHEASTERN", "SOUTHEASTERN", "SOUTHERN"],
+    "expected_primary_target_samples": 212,
+    "expected_primary_region_counts": {
+      "NORTHEASTERN": 39,
+      "SOUTHEASTERN": 137,
+      "SOUTHERN": 36
+    },
+    "expected_primary_fold_counts": {"0": 66, "1": 50, "2": 41, "4": 55},
+    "expected_primary_fold_region_counts": {
+      "0": {"NORTHEASTERN": 10, "SOUTHEASTERN": 45, "SOUTHERN": 11},
+      "1": {"NORTHEASTERN": 13, "SOUTHEASTERN": 30, "SOUTHERN": 7},
+      "2": {"NORTHEASTERN": 5, "SOUTHEASTERN": 29, "SOUTHERN": 7},
+      "4": {"NORTHEASTERN": 11, "SOUTHEASTERN": 33, "SOUTHERN": 11}
+    },
+    "minimum_people_per_primary_region": 30,
+    "development_folds": [0, 1, 2, 4],
+    "reserved_fold": 3,
+    "kinship_group_column": "kinship_group_id_phi0442"
+  },
+  "graph": {
+    "primary_weight": "binary",
+    "primary_anchor_scope": "all_dnabr_train_other_folds",
+    "sensitivity_weight": "log1p_total_shared_bp_per_1Mb",
+    "uses_all_observed_pairs": true,
+    "nystrom_uses_eval_train_only": true,
+    "regularization": "tau_equals_mean_degree_train_gcc",
+    "drop_leading_eigenvector": true,
+    "dimensions": [2, 4, 8],
+    "maximum_unprojectable_fraction": 0.2,
+    "minimum_abs_eigenvalue": 1e-8,
+    "eigensolver_tolerance": 1e-8,
+    "eigensolver_maxiter": 20000
+  },
+  "model": {
+    "estimator": "multinomial_logistic_ridge",
+    "C_grid": [0.01, 0.1, 1.0, 10.0],
+    "class_weight": "balanced",
+    "max_iter": 5000,
+    "tolerance": 1e-6,
+    "q_ilr_zero_replacement": 1e-6,
+    "spline_degree": 2,
+    "spline_n_knots": 3,
+    "spline_applies_to": ["burden", "log1p_missing", "log1p_degree_to_gcc", "log1p_weight_strength_to_gcc"],
+    "spectral_coordinates_enter_linearly": true,
+    "probability_clip": 1e-15
+  },
+  "evaluation": {
+    "primary_metric": "macro_log_loss",
+    "secondary_descriptive_metrics": ["balanced_accuracy", "macro_brier"],
+    "secondary_metrics_are_load_bearing": false,
+    "hyperparameter_selection": "one_standard_error_across_inner_folds",
+    "one_se_tie_break": "strongest_ridge_then_smallest_spectral_dimension",
+    "delta_definition": "macro_log_loss_augmented_minus_B1",
+    "bootstrap_unit": "PC-Relate component phi>=0.0442",
+    "bootstrap_replicates": 9999,
+    "bootstrap_seed": 20260819,
+    "confidence_level": 0.95
+  },
+  "preflight_contract": {
+    "schema_version": "p1a-preflight-v1",
+    "decision": "PASS_PREFLIGHT_IDENTIFIABLE",
+    "scope": {
+      "cohort": "RHT",
+      "q_eur_strictly_greater_than": 0.5,
+      "development_folds": [0, 1, 2, 4],
+      "reserved_fold": 3,
+      "primary_anchor_scope": "all_dnabr_train_other_folds",
+      "interpretation": "descriptive_DEV_not_prospective_validation"
+    },
+    "required_true_gates": [
+      "global_m14_minor_contract",
+      "joins_complete",
+      "frozen_primary_groups_match_split",
+      "pcrelate_no_crossfold_edges_both_phi",
+      "at_least_three_primary_regions",
+      "region_component_support_both_phi",
+      "largest_component_at_most_half_class",
+      "all_dev_folds_contain_primary_regions",
+      "all_dnabr_anchor_unprojectable_at_most_20pct_overall"
+    ],
+    "expected_counts": {
+      "analysis_samples": 260,
+      "primary_regions": ["NORTHEASTERN", "SOUTHEASTERN", "SOUTHERN"],
+      "reserved_endpoints_used": 0
+    }
+  },
+  "decision": {
+    "requires_negative_delta_in_all_four_outer_folds": true,
+    "requires_bootstrap_upper_bound_below_zero": true,
+    "maximum_relative_worsening_in_any_region": 0.05,
+    "requires_log_length_sensitivity_negative_delta": true,
+    "weighted_sensitivity_cannot_rescue_binary_failure": true,
+    "requires_projectable_pooled_same_negative_direction": true,
+    "projectability_region_fold_coverage_is_descriptive_not_load_bearing": true,
+    "pass_label": "GO_CONDITIONAL_TO_GRAPH_NULL_DESIGN",
+    "stop_label": "STOP_DEV_NO_ROBUST_INCREMENTAL_REGIONAL_SIGNAL"
+  },
+  "outputs": [
+    "p1a_dev_report.json",
+    "p1a_inner_selection.tsv",
+    "p1a_outer_metrics.tsv",
+    "p1a_region_metrics.tsv",
+    "p1a_region_state_counts.tsv",
+    "p1a_region_projectability_counts.tsv",
+    "p1a_graph_diagnostics.tsv",
+    "p1a_graph_features.tsv.gz",
+    "p1a_oof_predictions.tsv.gz",
+    "p1a_cluster_bootstrap.tsv.gz"
+  ]
+}
