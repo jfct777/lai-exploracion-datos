@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0.0",
   "experiment_id": "P1A-continuous-structure-DEV",
-  "status": "PRE_FROZEN",
+  "status": "PRE_AMENDED_BEFORE_OUTCOMES",
   "purpose": "Test whether non-local M14-minor topology adds regional association within RHT Q_EUR>0.5 beyond ancestry, rare burden, missingness and local graph connectivity.",
   "scope": {
     "development_only": true,
@@ -12,6 +12,19 @@
     "uses_nam_target": false,
     "runs_graph_nulls": false
   },
+  "amendments": [
+    {
+      "amendment_id": "P1A-PRE-A1-OUTER-PROJECTABILITY",
+      "status": "PRE_AMENDED_BEFORE_OUTCOMES",
+      "aborted_run_id": "p1a-continuous-dev-20260819a",
+      "outcomes_observed": false,
+      "timing": "after technical abort and before any model fit or scientific result",
+      "trigger": "two of twelve inner EVAL projections were 0.220000 and 0.219512 unprojectable; all four outer EVAL projections were 0.109, 0.121, 0.171 and 0.180",
+      "change": "apply the frozen 0.20 projectability gate only to outer evaluations built with three TRAIN folds; retain inner fractions as diagnostics without a threshold",
+      "rationale": "inner anchor regime not calibrated by outer 20% gate",
+      "unchanged": "folds 0/1/2/4, closed fold 3, C grid, dimensions, one-SE selection, models, metrics, decision rules and graph weights"
+    }
+  ],
   "inputs": {
     "expected_sha256": {
       "pairs": "870dfbc2ca03a4416f61860706f821e86dd08548f0c594b1f54f70842568017d",
@@ -63,6 +76,8 @@
     "drop_leading_eigenvector": true,
     "dimensions": [2, 4, 8],
     "maximum_unprojectable_fraction": 0.2,
+    "projectability_gate_scope": "outer_only_three_train_folds",
+    "inner_projectability_role": "diagnostic_without_threshold",
     "minimum_abs_eigenvalue": 1e-8,
     "eigensolver_tolerance": 1e-8,
     "eigensolver_maxiter": 20000
@@ -128,6 +143,7 @@
     "weighted_sensitivity_cannot_rescue_binary_failure": true,
     "requires_projectable_pooled_same_negative_direction": true,
     "projectability_region_fold_coverage_is_descriptive_not_load_bearing": true,
+    "requires_outer_projectability_at_most_20pct": true,
     "pass_label": "GO_CONDITIONAL_TO_GRAPH_NULL_DESIGN",
     "stop_label": "STOP_DEV_NO_ROBUST_INCREMENTAL_REGIONAL_SIGNAL"
   },

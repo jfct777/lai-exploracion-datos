@@ -43,6 +43,15 @@ def graph_fixture() -> tuple[pd.DataFrame, set[str], set[str], set[str]]:
     return edges, anchors, {"t0", "t1", "t2"}, {"e0", "e1"}
 
 
+def spectral_features(*args, stage: str = "outer", enforce: bool = True, **kwargs):
+    return DEV.spectral_fold_features(
+        *args,
+        stage=stage,
+        enforce_projectability_gate=enforce,
+        **kwargs,
+    )
+
+
 class P1AContinuousStructureDevTest(unittest.TestCase):
     def test_hash_contract_rejects_wrong_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -54,7 +63,7 @@ class P1AContinuousStructureDevTest(unittest.TestCase):
 
     def test_nystrom_ignores_eval_eval_edges(self) -> None:
         edges, anchors, train_targets, eval_targets = graph_fixture()
-        base, base_diag = DEV.spectral_fold_features(
+        base, base_diag = spectral_features(
             edges, anchors, train_targets, eval_targets, "binary", 2, contract()
         )
         changed = pd.concat(
@@ -71,7 +80,7 @@ class P1AContinuousStructureDevTest(unittest.TestCase):
             ],
             ignore_index=True,
         )
-        observed, observed_diag = DEV.spectral_fold_features(
+        observed, observed_diag = spectral_features(
             changed, anchors, train_targets, eval_targets, "binary", 2, contract()
         )
         pd.testing.assert_frame_equal(base, observed, check_exact=False, atol=1e-11, rtol=1e-11)
@@ -80,14 +89,14 @@ class P1AContinuousStructureDevTest(unittest.TestCase):
 
     def test_edge_order_and_orientation_do_not_change_features(self) -> None:
         edges, anchors, train_targets, eval_targets = graph_fixture()
-        expected, _ = DEV.spectral_fold_features(
+        expected, _ = spectral_features(
             edges, anchors, train_targets, eval_targets, "binary", 2, contract()
         )
         reversed_edges = edges.rename(
             columns={"sample_a": "sample_b", "sample_b": "sample_a"}
         )[["sample_a", "sample_b", "total_shared_bp", "n_shared_variants_total"]]
         reversed_edges = reversed_edges.sample(frac=1.0, random_state=19).reset_index(drop=True)
-        observed, _ = DEV.spectral_fold_features(
+        observed, _ = spectral_features(
             reversed_edges, anchors, train_targets, eval_targets, "binary", 2, contract()
         )
         expected = expected.sort_values("sample_id").reset_index(drop=True)
@@ -99,7 +108,7 @@ class P1AContinuousStructureDevTest(unittest.TestCase):
         # Add six anchor isolates; three of four target TRAIN nodes are outside GCC.
         isolated = {f"iso{x}" for x in range(6)}
         with self.assertRaisesRegex(DEV.ContractError, "GCC/projectability"):
-            DEV.spectral_fold_features(
+            spectral_features(
                 edges,
                 anchors | isolated,
                 {"t0", "iso0", "iso1", "iso2"},
@@ -108,6 +117,62 @@ class P1AContinuousStructureDevTest(unittest.TestCase):
                 2,
                 contract(),
             )
+
+    def test_inner_22pct_is_diagnostic_but_outer_22pct_stops(self) -> None:
+        edges, anchors, train_targets, _ = graph_fixture()
+        extra = pd.DataFrame(
+            {
+                "sample_a": [f"e{x}" for x in range(2, 7)],
+                "sample_b": [f"t{x}" for x in range(2, 7)],
+                "total_shared_bp": [4_000_000] * 5,
+                "n_shared_variants_total": [2] * 5,
+            }
+        )
+        edges = pd.concat([edges, extra], ignore_index=True)
+        eval_targets = {f"e{x}" for x in range(9)}
+        _, diagnostic = spectral_features(
+            edges,
+            anchors,
+            train_targets,
+            eval_targets,
+            "binary",
+            2,
+            contract(),
+            stage="inner",
+            enforce=False,
+        )
+        self.assertAlmostEqual(
+            diagnostic["target_eval_unprojectable_fraction"], 2 / 9
+        )
+        self.assertFalse(diagnostic["projectability_gate_enforced"])
+        self.assertFalse(diagnostic["projectability_within_20pct"])
+        with self.assertRaisesRegex(DEV.ContractError, "GCC/projectability"):
+            spectral_features(
+                edges,
+                anchors,
+                train_targets,
+                eval_targets,
+                "binary",
+                2,
+                contract(),
+                stage="outer",
+                enforce=True,
+            )
+
+    def test_amendment_chronology_is_fail_closed(self) -> None:
+        cfg = contract()
+        self.assertEqual(cfg["status"], "PRE_AMENDED_BEFORE_OUTCOMES")
+        amendment = cfg["amendments"][0]
+        self.assertEqual(amendment["aborted_run_id"], "p1a-continuous-dev-20260819a")
+        self.assertFalse(amendment["outcomes_observed"])
+        DEV.load_contract(ROOT / "conf/p1a_continuous_structure_preregistration.json")
+        changed = json.loads(json.dumps(cfg))
+        changed["amendments"][0]["outcomes_observed"] = True
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "contract.json"
+            path.write_text(json.dumps(changed), encoding="utf-8")
+            with self.assertRaisesRegex(DEV.ContractError, "amendment drifted"):
+                DEV.load_contract(path)
 
     def test_linear_spectral_block_is_rotation_invariant(self) -> None:
         rng = np.random.default_rng(7)
@@ -199,7 +264,7 @@ class P1AContinuousStructureDevTest(unittest.TestCase):
 
     def test_exact_graph_strength_matches_weight_mode(self) -> None:
         edges, anchors, train_targets, eval_targets = graph_fixture()
-        binary, _ = DEV.spectral_fold_features(
+        binary, _ = spectral_features(
             edges, anchors, train_targets, eval_targets, "binary", 2, contract()
         )
         np.testing.assert_allclose(
@@ -208,10 +273,10 @@ class P1AContinuousStructureDevTest(unittest.TestCase):
         np.testing.assert_allclose(
             binary["weight_strength_to_gcc"], binary["degree_to_gcc"]
         )
-        weighted, weighted_diag = DEV.spectral_fold_features(
+        weighted, weighted_diag = spectral_features(
             edges, anchors, train_targets, eval_targets, "log_length", 2, contract()
         )
-        _, binary_diag = DEV.spectral_fold_features(
+        _, binary_diag = spectral_features(
             edges, anchors, train_targets, eval_targets, "binary", 2, contract()
         )
         self.assertEqual(binary_diag["n_anchor_train"], weighted_diag["n_anchor_train"])
@@ -237,7 +302,7 @@ class P1AContinuousStructureDevTest(unittest.TestCase):
             ],
             ignore_index=True,
         )
-        graph, _ = DEV.spectral_fold_features(
+        graph, _ = spectral_features(
             edges, anchors, train_targets, eval_targets, "log_length", 2, contract()
         )
         e0 = graph.set_index("sample_id").loc["e0"]
@@ -336,7 +401,7 @@ class P1AContinuousStructureDevTest(unittest.TestCase):
     def test_reserved_fold_edges_do_not_change_features_or_predictions(self) -> None:
         edges, anchors, _, eval_targets = graph_fixture()
         target_train = set(anchors)
-        base_graph, base_diag = DEV.spectral_fold_features(
+        base_graph, base_diag = spectral_features(
             edges, anchors, target_train, eval_targets, "binary", 2, contract(), {"r3"}
         )
         changed_edges = pd.concat(
@@ -353,7 +418,7 @@ class P1AContinuousStructureDevTest(unittest.TestCase):
             ],
             ignore_index=True,
         )
-        changed_graph, changed_diag = DEV.spectral_fold_features(
+        changed_graph, changed_diag = spectral_features(
             changed_edges,
             anchors,
             target_train,

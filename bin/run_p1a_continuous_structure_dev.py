@@ -75,8 +75,21 @@ def load_contract(path: Path) -> dict[str, Any]:
     contract = json.loads(path.read_text(encoding="utf-8"))
     if contract.get("experiment_id") != "P1A-continuous-structure-DEV":
         raise ContractError("wrong P1A contract")
-    if contract.get("status") != "PRE_FROZEN":
-        raise ContractError("P1A contract is not PRE_FROZEN")
+    if contract.get("status") != "PRE_AMENDED_BEFORE_OUTCOMES":
+        raise ContractError("P1A contract is not PRE_AMENDED_BEFORE_OUTCOMES")
+    amendments = contract.get("amendments", [])
+    if len(amendments) != 1:
+        raise ContractError("P1A requires exactly one preregistration amendment")
+    amendment = amendments[0]
+    required_amendment = {
+        "amendment_id": "P1A-PRE-A1-OUTER-PROJECTABILITY",
+        "status": "PRE_AMENDED_BEFORE_OUTCOMES",
+        "aborted_run_id": "p1a-continuous-dev-20260819a",
+        "outcomes_observed": False,
+        "rationale": "inner anchor regime not calibrated by outer 20% gate",
+    }
+    if any(amendment.get(key) != value for key, value in required_amendment.items()):
+        raise ContractError("P1A preregistration amendment drifted")
     scope = contract["scope"]
     forbidden = ("uses_reserved_fold_3", "uses_novel_brazilian_variants", "uses_nam_target", "runs_graph_nulls")
     if any(bool(scope.get(key)) for key in forbidden):
@@ -234,8 +247,17 @@ def spectral_fold_features(
     dimensions: int,
     contract: dict[str, Any],
     reserved_ids: set[str] | None = None,
+    *,
+    stage: str,
+    enforce_projectability_gate: bool,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Build TRAIN spectral coordinates and strict EVAL-to-TRAIN Nyström projection."""
+    if stage not in {"inner", "outer"}:
+        raise ContractError(f"unknown projectability stage: {stage}")
+    if enforce_projectability_gate != (stage == "outer"):
+        raise ContractError(
+            "projectability gate contract requires enforce=false for inner and true for outer"
+        )
     if target_train_ids & target_eval_ids:
         raise ContractError("TRAIN/EVAL target overlap")
     if not target_train_ids.issubset(anchor_train_ids):
@@ -410,7 +432,8 @@ def spectral_fold_features(
     train_missing = 1.0 - float(features[features["sample_id"].isin(target_train_ids)]["projectable"].mean())
     eval_missing = 1.0 - float(features[features["sample_id"].isin(target_eval_ids)]["projectable"].mean())
     maximum = float(graph_cfg["maximum_unprojectable_fraction"])
-    if train_missing > maximum or eval_missing > maximum:
+    within_projectability_threshold = train_missing <= maximum and eval_missing <= maximum
+    if enforce_projectability_gate and not within_projectability_threshold:
         raise ContractError(
             f"GCC/projectability stop: train={train_missing:.6f}, eval={eval_missing:.6f}"
         )
@@ -423,6 +446,7 @@ def spectral_fold_features(
     )
     diagnostics = {
         "mode": mode,
+        "projectability_stage": stage,
         "n_anchor_train": len(anchors),
         "n_train_edges": int(len(tt)),
         "n_train_components": int(n_components),
@@ -430,6 +454,8 @@ def spectral_fold_features(
         "train_gcc_fraction": float(len(gcc_ids) / len(anchors)),
         "target_train_unprojectable_fraction": train_missing,
         "target_eval_unprojectable_fraction": eval_missing,
+        "projectability_gate_enforced": bool(enforce_projectability_gate),
+        "projectability_within_20pct": bool(within_projectability_threshold),
         "n_eval_train_edges": int(len(et)),
         "n_eval_gcc_edges": int(len(et_gcc)),
         "tau": tau,
@@ -757,6 +783,8 @@ def nested_outer(
             dmax,
             contract,
             reserved_ids,
+            stage="inner",
+            enforce_projectability_gate=False,
         )
         diagnostic.update({"stage": "inner", "outer_fold": outer_fold, "eval_fold": inner_fold})
         graph_rows.append(diagnostic)
@@ -824,6 +852,8 @@ def nested_outer(
         dmax,
         contract,
         reserved_ids,
+        stage="outer",
+        enforce_projectability_gate=True,
     )
     diagnostic.update({"stage": "outer", "outer_fold": outer_fold, "eval_fold": outer_fold})
     graph_rows.append(diagnostic)
@@ -1158,9 +1188,10 @@ def run(args: argparse.Namespace) -> None:
     all_region_metrics = region_metrics[region_metrics["subset"].eq("ALL")]
     decision_cfg = contract["decision"]
     fold3_absent = bool(not oof["fold"].eq(RESERVED_FOLD).any())
-    reserved_endpoints_used = int(
-        pd.DataFrame(graph_rows)["reserved_fold_endpoints_used"].sum()
-    )
+    graph_diagnostics = pd.DataFrame(graph_rows)
+    reserved_endpoints_used = int(graph_diagnostics["reserved_fold_endpoints_used"].sum())
+    outer_graph_diagnostics = graph_diagnostics[graph_diagnostics["stage"].eq("outer")]
+    inner_graph_diagnostics = graph_diagnostics[graph_diagnostics["stage"].eq("inner")]
     gates = {
         "binary_delta_negative_all_four_outer_folds": bool(
             len(binary_outer) == 4 and binary_outer["delta_A_minus_B1"].lt(0).all()
@@ -1178,6 +1209,11 @@ def run(args: argparse.Namespace) -> None:
         "binary_projectable_pooled_has_all_regions": has_all_classes(
             binary_projectable, classes
         ),
+        "outer_projectability_at_most_20pct": bool(
+            len(outer_graph_diagnostics) == 2 * len(DEV_FOLDS)
+            and outer_graph_diagnostics["projectability_gate_enforced"].eq(True).all()
+            and outer_graph_diagnostics["projectability_within_20pct"].eq(True).all()
+        ),
         "fold3_absent": fold3_absent,
         "reserved_fold_endpoints_absent": reserved_endpoints_used == 0,
         "graph_nulls_not_run_in_phase1": True,
@@ -1189,6 +1225,7 @@ def run(args: argparse.Namespace) -> None:
         "log_length_sensitivity_no_sign_reversal",
         "binary_projectable_pooled_same_negative_direction",
         "binary_projectable_pooled_has_all_regions",
+        "outer_projectability_at_most_20pct",
         "fold3_absent",
         "reserved_fold_endpoints_absent",
         "graph_nulls_not_run_in_phase1",
@@ -1199,6 +1236,12 @@ def run(args: argparse.Namespace) -> None:
         "schema_version": "p1a-continuous-structure-dev-v1",
         "decision": decision,
         "scope": "DEV transductive regional association; not independent biological validation",
+        "preregistration_amendment": "P1A-PRE-A1-OUTER-PROJECTABILITY",
+        "aborted_run_before_amendment": {
+            "run_id": "p1a-continuous-dev-20260819a",
+            "status": "technical_abort_before_model_fit",
+            "outcomes_observed": False,
+        },
         "code_commit": args.code_commit,
         "classes": classes,
         "n_target": int(len(binary)),
@@ -1240,6 +1283,16 @@ def run(args: argparse.Namespace) -> None:
         },
         "log_length_pooled_delta_A_minus_B1": weighted_delta,
         "projectability_coverage_diagnostics_not_load_bearing": projectability_gates,
+        "inner_projectability_diagnostic": {
+            "n_splits": int(len(inner_graph_diagnostics)),
+            "n_above_20pct": int(
+                (~inner_graph_diagnostics["projectability_within_20pct"]).sum()
+            ),
+            "maximum_eval_unprojectable_fraction": float(
+                inner_graph_diagnostics["target_eval_unprojectable_fraction"].max()
+            ),
+            "threshold_enforced": False,
+        },
         "southern_projectability_by_fold": {
             str(fold): {
                 "n_projectable": int(
@@ -1275,6 +1328,7 @@ def run(args: argparse.Namespace) -> None:
             "Region is a recruitment/geographic label, not independent biological truth.",
             "M14-minor was ascertained and oriented using the full cohort; this is transductive DEV.",
             "No degree/block-preserving graph null was run in this stage.",
+            "Run p1a-continuous-dev-20260819a aborted on the pre-amendment inner gate before model fit and produced no outcome metrics.",
             "A PASS authorizes only a separate null-design PRE, not a biological claim or TEST opening.",
         ],
     }
@@ -1296,7 +1350,7 @@ def run(args: argparse.Namespace) -> None:
     region_projectability_counts.to_csv(
         output / "p1a_region_projectability_counts.tsv", sep="\t", index=False
     )
-    pd.DataFrame(graph_rows).sort_values(["mode", "stage", "outer_fold", "eval_fold"]).to_csv(
+    graph_diagnostics.sort_values(["mode", "stage", "outer_fold", "eval_fold"]).to_csv(
         output / "p1a_graph_diagnostics.tsv", sep="\t", index=False
     )
     graph_features = pd.concat(graph_feature_rows, ignore_index=True).sort_values(

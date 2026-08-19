@@ -81,7 +81,7 @@ process P1A_CONTINUOUS_STRUCTURE_DEV {
       --output p1a_dev/p1a_oof_predictions.tsv.gz \
       --output p1a_dev/p1a_cluster_bootstrap.tsv.gz \
       --output p1a_dev/p1a_run_provenance.json \
-      --params-json '{"scope":"DEV_transductive_no_fold3","anchor_scope":"all_dnabr_train_other_folds_both_modes","primary_graph":"binary","sensitivity":"log1p_bp_weights_only","graph_nulls":false,"team":"frank"}' \
+      --params-json '{"scope":"DEV_transductive_no_fold3","amendment":"P1A-PRE-A1-OUTER-PROJECTABILITY","amendment_status":"PRE_AMENDED_BEFORE_OUTCOMES","aborted_run_id":"p1a-continuous-dev-20260819a","outcomes_observed_before_amendment":false,"projectability_gate":"outer_only_three_train_folds","anchor_scope":"all_dnabr_train_other_folds_both_modes","primary_graph":"binary","sensitivity":"log1p_bp_weights_only","graph_nulls":false,"team":"frank"}' \
       --provenance-b64 '${provenance_b64}' \
       --stamp "\$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
       --run-provenance-ref p1a_run_provenance.json \
