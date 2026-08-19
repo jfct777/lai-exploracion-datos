@@ -1,0 +1,67 @@
+{
+  "stage": "M31_ORDERED_RARE_PREFLIGHT",
+  "version": 1,
+  "status": "PREFLIGHT_ONLY_NOT_SCIENTIFIC_EVIDENCE",
+  "scope": "chr22_root17_root18_technical_smoke_only",
+  "question": "Can the M28 rare target channel be authenticated and materialized in genomic order with allele-minor semantics corrected before any M31 model or metric is frozen?",
+  "chromosome_domain": {
+    "chrom": "22",
+    "start_bp": 15287922,
+    "end_bp_exclusive": 50791378
+  },
+  "rare_universe": {
+    "selector": "FREQ_only",
+    "minimum_mac": 2,
+    "maximum_maf_exclusive": 0.01,
+    "minimum_carrier_individuals": 2,
+    "minor_presence_formula": "observed_state == minor_code",
+    "prohibited_selectors": [
+      "REF_LAI",
+      "DONOR",
+      "TARGET",
+      "truth",
+      "Gnomix_prediction",
+      "FLARE_prediction"
+    ]
+  },
+  "materialization": {
+    "sample_identity_key": ["root_seed", "sample_id"],
+    "row_primary_key": ["root_seed", "sample_id", "locus_index"],
+    "locus_order": ["position", "locus_index"],
+    "layout": "long_tsv_gzip_streamed_site_major",
+    "missing_policy": "missing haplotypes are explicit and never converted to reference-allele presence",
+    "model_frozen": false,
+    "metrics_frozen": false
+  },
+  "roots": {
+    "root17": {
+      "root_seed": 20260817,
+      "source_attempt": "seed17-b",
+      "sha256": {
+        "tree": "566946ec93cbc28c7f36d27878e12d091f1c87ebdd6fb6423b940f4f778391f7",
+        "pools": "56f9891bfb7f77d63ec3328107fc8e89b919c34ad16fda2c0c72dc3fde24f0e4",
+        "catalog": "3162022c6882aa184094f96f6e8d49b6917b5fbe5a45ecfabf6cc4a8265b366c",
+        "haplotypes": "015f7c420730537cb2d9173971e4767d4d561d11ed22ce2b46149c9eb7832122"
+      }
+    },
+    "root18": {
+      "root_seed": 20260818,
+      "source_attempt": "seed18-a",
+      "sha256": {
+        "tree": "780800c1f3d279746ace8631fa1b1ccd57782e9bf697a3dacc2cc983523f5f54",
+        "pools": "046c6e903ca4b3beea8ac468836d28bb953d32b4e731c13be86f42d7c110a4ff",
+        "catalog": "7a12195c18db5d4bfd5a1cee43ed4f04eccc5cd21d9fb7ed01e8c24f2a00c3b3",
+        "haplotypes": "29c562da4cdf24a680b617fc155f0ee09546e8dbd4b23cd8dd4a75d5daeb9827"
+      }
+    }
+  },
+  "stop_rule": "Stop before modeling if any hash, root identity, FREQ-only invariant, target coverage, key uniqueness, locus order, allele-state encoding, or known-answer check fails.",
+  "claims_excluded": [
+    "scientific_effect_estimation",
+    "model_selection",
+    "hyperparameter_selection",
+    "LAI_improvement",
+    "DNABR_generalization",
+    "confirmatory_validation"
+  ]
+}
