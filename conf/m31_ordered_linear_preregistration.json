@@ -1,7 +1,13 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "experiment_id": "M31_ORDERED_LINEAR_DEV",
   "status": "PREREGISTERED_NOT_RUN",
+  "preregistration_revision": {
+    "revision": "PRE_1",
+    "date": "2026-08-20",
+    "supersedes_schema_version": "1.0.0",
+    "reason": "Before any fitted M31 run, freeze Voronoi-cM row weights, guarded primary-endpoint inner-CV selection, global-count scoring, and the additive H ceiling."
+  },
   "scope": "chr22_two_root_development_only_no_validation",
   "scientific_question": "Does genetically ordered rare-allele information improve FLARE local-ancestry boundaries beyond a common-only corrector and a rare-load-only control?",
   "roots": {
@@ -9,6 +15,15 @@
     "train_root18_test_root17": [20260818, 20260817]
   },
   "roots_are_not_independent_validation": true,
+  "execution_post": {
+    "full_run": "BLOCKED_PENDING_SEPARATE_POST",
+    "pilot_direction": "train_root17_predict_root18_only",
+    "pilot_fitted_arms": ["C", "L", "D"],
+    "pilot_excluded": ["H", "DSHAM", "HSHAM", "scientific_decision"],
+    "process_barrier": "fit-predict_fsync_manifest_and_exit_before_score-pilot_accepts_root18_truth",
+    "resume_unit": "hash_bound_complete_arm_checkpoint",
+    "pilot_label": "NO_SCIENTIFIC_DECISION"
+  },
   "baseline": {
     "primary": "FLARE_v0.6.0_frozen_M30",
     "historical_guardrail": "Gnomix_frozen_M29",
@@ -36,7 +51,7 @@
     "C": "residual corrector using only FLARE probabilities and ordered common context",
     "L": "C plus local diploid rare load without reference ancestry labels",
     "D": "L plus ancestry-specific REF_LAI rare support; diploid target dose is shared across haplotypes",
-    "H": "phase-aware rare presence by target haplotype; simulation ceiling only",
+    "H": "D plus phase-aware rare presence by target haplotype; simulation ceiling only",
     "DSHAM": "D with complete diploid REF_LAI ancestry labels permuted",
     "HSHAM": "H with complete diploid REF_LAI ancestry labels permuted"
   },
@@ -47,10 +62,15 @@
     "alphas": [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0],
     "boundary_training_weights": [1.0, 5.0, 20.0],
     "boundary_training_definition_cM": 0.2,
+    "training_row_weight": "Voronoi_genetic_cM * haplotype_specific_boundary_multiplier",
     "weight_normalization": "sum_to_number_of_diploid_individuals",
+    "feature_dtype_policy": "materialize_float32_for_TRAIN_CV_EVAL_accumulate_and_solve_float64",
     "feature_standardization": "fit_on_training_individuals_only",
     "inner_cv": "three deterministic folds grouped by complete diploid individual",
-    "hyperparameter_selection": "performed independently inside the training root for every fitted real or sham arm"
+    "hyperparameter_selection": "performed independently inside the training root for every fitted real or sham arm",
+    "inner_cv_primary": "OOF_boundary_F1_at_0.2_cM",
+    "inner_cv_guardrails": ["macro_ancestry_dose_MAE_not_worse_than_OOF_F0", "false_transitions_per_cM_at_0.2_cM_not_worse_than_OOF_F0", "NO_GUARDED_CONFIG_if_empty"],
+    "inner_cv_tie_break": ["min_false_transitions_per_cM_at_0.2_cM", "min_macro_ancestry_dose_MAE", "min_haplotype_Brier", "min_boundary_training_weight", "max_alpha"]
   },
   "null": {
     "replicates": 32,
@@ -65,9 +85,13 @@
     "secondary": ["false_transitions_per_cM", "matched_boundary_median_cM", "matched_boundary_p90_cM", "macro_ancestry_dose_MAE", "MAE_by_ancestry", "haplotype_Brier", "diploid_macro_F1"],
     "unit_of_uncertainty": "diploid_individual",
     "bootstrap_replicates": 10000,
+    "point_estimate_aggregation": "sum_global_sufficient_counts_then_compute_metrics",
+    "bootstrap_aggregation": "resample_complete_diploid_individual_count_bundles_then_reconstruct_global_metrics",
+    "prediction_truth_boundary": "hash_immutable_truth_blind_prediction_artifact_before_truth_scoring",
     "directions_are_not_independent_replicates": true
   },
   "decision": {
+    "NO_GUARDED_CONFIG": "at least one fitted real or sham arm has no hyperparameter configuration satisfying both OOF F0 guardrails; no GO label is permitted",
     "GO_NEW_ROOTS": "D improves boundary F1 over F0, C and L in both directions, exceeds every DSHAM improvement, does not increase macro MAE or false transitions, and no ancestry worsens in both directions",
     "LOAD_ONLY": "L improves but D does not improve over L",
     "PHASE_CEILING_ONLY": "H passes its sham and guardrails while D does not",
@@ -83,6 +107,9 @@
     "normalization uses the evaluation root",
     "any sham changes a quantity listed as fixed",
     "ridge solve or simplex projection is non-finite",
+    "any pilot checkpoint, prediction or manifest SHA-256 mismatch",
+    "fit-predict accepts or reads evaluation-root truth",
+    "full reciprocal run requested before a separate runner POST",
     "any VALID or TEST input is accessed"
   ],
   "claims_excluded": ["confirmatory_validation", "DNABR_generalization", "Native_American_LAI", "Brazil_novel_variant_effect", "deep_learning_benefit"]

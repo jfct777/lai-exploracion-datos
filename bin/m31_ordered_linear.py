@@ -31,7 +31,7 @@ import numpy as np
 
 
 EXPERIMENT_ID = "M31_ORDERED_LINEAR_DEV"
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 STATUS = "PREREGISTERED_NOT_RUN"
 SIDES = ("left", "right")
 EXPECTED_RINGS = ((0.0, 0.1), (0.1, 0.2), (0.2, 0.5), (0.5, 1.0))
@@ -119,10 +119,25 @@ def parse_contract(payload: Mapping[str, Any]) -> OrderedLinearContract:
     _require(payload.get("schema_version") == SCHEMA_VERSION, "unsupported schema_version")
     _require(payload.get("experiment_id") == EXPERIMENT_ID, "unexpected experiment_id")
     _require(payload.get("status") == STATUS, "contract is not preregistered as NOT_RUN")
+    _require(payload.get("preregistration_revision") == {
+        "revision": "PRE_1",
+        "date": "2026-08-20",
+        "supersedes_schema_version": "1.0.0",
+        "reason": "Before any fitted M31 run, freeze Voronoi-cM row weights, guarded primary-endpoint inner-CV selection, global-count scoring, and the additive H ceiling.",
+    }, "PRE revision metadata drifted")
     _require(payload.get("scope") == "chr22_two_root_development_only_no_validation",
              "M31 scope drifted or permits validation")
     _require(payload.get("roots_are_not_independent_validation") is True,
              "the two directions must not be treated as independent validation")
+    _require(payload.get("execution_post") == {
+        "full_run": "BLOCKED_PENDING_SEPARATE_POST",
+        "pilot_direction": "train_root17_predict_root18_only",
+        "pilot_fitted_arms": ["C", "L", "D"],
+        "pilot_excluded": ["H", "DSHAM", "HSHAM", "scientific_decision"],
+        "process_barrier": "fit-predict_fsync_manifest_and_exit_before_score-pilot_accepts_root18_truth",
+        "resume_unit": "hash_bound_complete_arm_checkpoint",
+        "pilot_label": "NO_SCIENTIFIC_DECISION",
+    }, "execution POST protocol drifted")
 
     roots = payload.get("roots")
     _require(isinstance(roots, Mapping) and len(roots) == 2, "contract must define exactly two directions")
@@ -178,7 +193,7 @@ def parse_contract(payload: Mapping[str, Any]) -> OrderedLinearContract:
         "C": "residual corrector using only FLARE probabilities and ordered common context",
         "L": "C plus local diploid rare load without reference ancestry labels",
         "D": "L plus ancestry-specific REF_LAI rare support; diploid target dose is shared across haplotypes",
-        "H": "phase-aware rare presence by target haplotype; simulation ceiling only",
+        "H": "D plus phase-aware rare presence by target haplotype; simulation ceiling only",
         "DSHAM": "D with complete diploid REF_LAI ancestry labels permuted",
         "HSHAM": "H with complete diploid REF_LAI ancestry labels permuted",
     }
@@ -199,8 +214,12 @@ def parse_contract(payload: Mapping[str, Any]) -> OrderedLinearContract:
     boundary_cm = _finite_number(model.get("boundary_training_definition_cM"),
                                  "boundary_training_definition_cM")
     _require(boundary_cm == 0.2, "boundary training definition drifted")
+    _require(model.get("training_row_weight") == "Voronoi_genetic_cM * haplotype_specific_boundary_multiplier",
+             "training row-weight definition drifted")
     _require(model.get("weight_normalization") == "sum_to_number_of_diploid_individuals",
              "weight normalization drifted")
+    _require(model.get("feature_dtype_policy") == "materialize_float32_for_TRAIN_CV_EVAL_accumulate_and_solve_float64",
+             "feature dtype policy drifted")
     _require(model.get("feature_standardization") == "fit_on_training_individuals_only",
              "feature standardization would permit leakage")
     _require(model.get("inner_cv") == "three deterministic folds grouped by complete diploid individual",
@@ -208,6 +227,15 @@ def parse_contract(payload: Mapping[str, Any]) -> OrderedLinearContract:
     _require(model.get("hyperparameter_selection")
              == "performed independently inside the training root for every fitted real or sham arm",
              "hyperparameter selection scope drifted")
+    _require(model.get("inner_cv_primary") == "OOF_boundary_F1_at_0.2_cM",
+             "inner-CV primary endpoint drifted")
+    _require(model.get("inner_cv_guardrails") == [
+        "macro_ancestry_dose_MAE_not_worse_than_OOF_F0",
+        "false_transitions_per_cM_at_0.2_cM_not_worse_than_OOF_F0",
+        "NO_GUARDED_CONFIG_if_empty",
+    ], "inner-CV guardrails drifted")
+    _require(model.get("inner_cv_tie_break") == ["min_false_transitions_per_cM_at_0.2_cM", "min_macro_ancestry_dose_MAE", "min_haplotype_Brier", "min_boundary_training_weight", "max_alpha"],
+             "inner-CV tie-break drifted")
 
     null = payload.get("null")
     _require(isinstance(null, Mapping) and null.get("replicates") == SHAM_REPLICATES, "sham replicate count drifted")
@@ -224,6 +252,12 @@ def parse_contract(payload: Mapping[str, Any]) -> OrderedLinearContract:
     _require(evaluation.get("unit_of_uncertainty") == "diploid_individual",
              "uncertainty unit must be the diploid individual")
     _require(evaluation.get("bootstrap_replicates") == BOOTSTRAP_REPLICATES, "bootstrap replicate count drifted")
+    _require(evaluation.get("point_estimate_aggregation") == "sum_global_sufficient_counts_then_compute_metrics",
+             "point-estimate aggregation drifted")
+    _require(evaluation.get("bootstrap_aggregation") == "resample_complete_diploid_individual_count_bundles_then_reconstruct_global_metrics",
+             "bootstrap aggregation drifted")
+    _require(evaluation.get("prediction_truth_boundary") == "hash_immutable_truth_blind_prediction_artifact_before_truth_scoring",
+             "prediction/truth boundary drifted")
     _require(evaluation.get("directions_are_not_independent_replicates") is True,
              "root directions must not be pooled as independent replicates")
 
@@ -235,12 +269,16 @@ def parse_contract(payload: Mapping[str, Any]) -> OrderedLinearContract:
         "normalization uses the evaluation root",
         "any sham changes a quantity listed as fixed",
         "ridge solve or simplex projection is non-finite",
+        "any pilot checkpoint, prediction or manifest SHA-256 mismatch",
+        "fit-predict accepts or reads evaluation-root truth",
+        "full reciprocal run requested before a separate runner POST",
         "any VALID or TEST input is accessed",
     ]
     _require(payload.get("stop_rules") == expected_stop_rules, "stop-rule set/order drifted")
 
     decision = payload.get("decision")
     expected_decision = {
+        "NO_GUARDED_CONFIG": "at least one fitted real or sham arm has no hyperparameter configuration satisfying both OOF F0 guardrails; no GO label is permitted",
         "GO_NEW_ROOTS": "D improves boundary F1 over F0, C and L in both directions, exceeds every DSHAM improvement, does not increase macro MAE or false transitions, and no ancestry worsens in both directions",
         "LOAD_ONLY": "L improves but D does not improve over L",
         "PHASE_CEILING_ONLY": "H passes its sham and guardrails while D does not",
@@ -1031,6 +1069,8 @@ def materialize_sample_features(
     support: np.ndarray,
     no_support: np.ndarray,
     rings_cm: Sequence[Sequence[float]] = EXPECTED_RINGS,
+    *,
+    requested_arms: Sequence[str] | None = None,
 ) -> SampleFeatures:
     """Materialize exact F0/C/L/D/H features for one diploid target.
 
@@ -1039,10 +1079,13 @@ def materialize_sample_features(
     central posterior and in the right innermost half-open context. This frozen
     redundancy lets ridge decide whether the local level or its context is
     useful without changing ring membership. L adds diploid rare load without reference labels. D adds diploid
-    target dose apportioned by REF_LAI support, and H replaces that channel by
-    target-haplotype presence (simulation ceiling). Every rare channel exposes
+    target dose apportioned by REF_LAI support, and H adds target-haplotype
+    presence to D (simulation ceiling). Every rare channel exposes
     both frozen normalizations and the same left/right edge masks.
     """
+    requested = tuple(requested_arms) if requested_arms is not None else ("C", "L", "D", "H")
+    if not requested or len(set(requested)) != len(requested) or set(requested) - {"C", "L", "D", "H"}:
+        raise ValueError("requested_arms must be a non-empty unique subset of C/L/D/H")
     baseline = np.asarray(baseline, dtype=np.float64)
     truth = np.asarray(truth, dtype=np.float64)
     target = np.asarray(target_hap_presence, dtype=np.float64)
@@ -1067,6 +1110,9 @@ def materialize_sample_features(
         common_names = tuple(f"center.{ancestry}" for ancestry in ANCESTRIES) + names
     common = np.stack(common_arms, axis=1)
 
+    if requested == ("C",):
+        return SampleFeatures(baseline, truth, {"C": common}, {"C": common_names or ()})
+
     finite = np.isfinite(target)
     diploid_callable = finite.all(axis=1)
     diploid_load = np.where(diploid_callable, target.sum(axis=1) / 2.0, np.nan)
@@ -1077,34 +1123,32 @@ def materialize_sample_features(
     load, load_names = _flatten_ring_features("rare_load", load_agg, ("diploid_minor_fraction", "missing_diploid"))
     load_for_haps = np.repeat(load[:, None, :], 2, axis=1)
 
-    apportioned = np.column_stack([diploid_load[:, None] * support, diploid_load * no_support])
-    apportioned_observed = np.repeat(diploid_callable[:, None], 4, axis=1)
-    d_agg = aggregate_signed_rings(marker_cm, rare_cm, apportioned, rings_cm, observed=apportioned_observed, domain_cm=domain)
-    d_features, d_names = _flatten_ring_features("diploid_support", d_agg, (*ANCESTRIES, "NO_REF_LAI_SUPPORT"))
-    d_for_haps = np.repeat(d_features[:, None, :], 2, axis=1)
-
-    haps: list[np.ndarray] = []
-    h_names: tuple[str, ...] | None = None
-    for hap in (0, 1):
-        callable_hap = finite[:, hap]
-        phase_values = np.column_stack([target[:, hap, None] * support, target[:, hap] * no_support])
-        phase_observed = np.repeat(callable_hap[:, None], 4, axis=1)
-        h_agg = aggregate_signed_rings(marker_cm, rare_cm, phase_values, rings_cm, observed=phase_observed, domain_cm=domain)
-        phase, h_names = _flatten_ring_features("haplotype_support", h_agg, (*ANCESTRIES, "NO_REF_LAI_SUPPORT"))
-        haps.append(phase)
-    h_features = np.stack(haps, axis=1)
-    arms = {
-        "C": common,
-        "L": np.concatenate([common, load_for_haps], axis=2),
-        "D": np.concatenate([common, load_for_haps, d_for_haps], axis=2),
-        "H": np.concatenate([common, load_for_haps, h_features], axis=2),
-    }
-    names_by_arm = {
-        "C": common_names or (),
-        "L": (common_names or ()) + load_names,
-        "D": (common_names or ()) + load_names + d_names,
-        "H": (common_names or ()) + load_names + (h_names or ()),
-    }
+    arms = {"C": common, "L": np.concatenate([common, load_for_haps], axis=2)}
+    names_by_arm = {"C": common_names or (), "L": (common_names or ()) + load_names}
+    if "D" in requested or "H" in requested:
+        apportioned = np.column_stack([diploid_load[:, None] * support, diploid_load * no_support])
+        apportioned_observed = np.repeat(diploid_callable[:, None], 4, axis=1)
+        d_agg = aggregate_signed_rings(marker_cm, rare_cm, apportioned, rings_cm, observed=apportioned_observed, domain_cm=domain)
+        d_features, d_names = _flatten_ring_features("diploid_support", d_agg, (*ANCESTRIES, "NO_REF_LAI_SUPPORT"))
+        d_arm = np.concatenate([common, load_for_haps, np.repeat(d_features[:, None, :], 2, axis=1)], axis=2)
+        d_arm_names = (common_names or ()) + load_names + d_names
+        if "D" in requested:
+            arms["D"] = d_arm
+            names_by_arm["D"] = d_arm_names
+    if "H" in requested:
+        haps: list[np.ndarray] = []
+        h_names: tuple[str, ...] | None = None
+        for hap in (0, 1):
+            callable_hap = finite[:, hap]
+            phase_values = np.column_stack([target[:, hap, None] * support, target[:, hap] * no_support])
+            phase_observed = np.repeat(callable_hap[:, None], 4, axis=1)
+            h_agg = aggregate_signed_rings(marker_cm, rare_cm, phase_values, rings_cm, observed=phase_observed, domain_cm=domain)
+            phase, h_names = _flatten_ring_features("haplotype_support", h_agg, (*ANCESTRIES, "NO_REF_LAI_SUPPORT"))
+            haps.append(phase)
+        arms["H"] = np.concatenate([d_arm, np.stack(haps, axis=1)], axis=2)
+        names_by_arm["H"] = d_arm_names + (h_names or ())
+    arms = {arm: arms[arm] for arm in requested}
+    names_by_arm = {arm: names_by_arm[arm] for arm in requested}
     for arm, matrix in arms.items():
         if matrix.shape != (len(marker_cm), 2, len(names_by_arm[arm])) or not np.all(np.isfinite(matrix)):
             raise AssertionError(f"{arm} feature materialization is non-finite or dimensionally inconsistent")
@@ -1147,7 +1191,12 @@ def validate_flare_audit(path: str | Path, root: str, flare_path: str | Path) ->
 class SelectedRidge:
     alpha: float
     boundary_weight: float
+    cv_boundary_f1_0_2cm: float
+    cv_false_transitions_per_cm_0_2cm: float
+    cv_macro_ancestry_dose_mae: float
     cv_brier: float
+    guarded: bool
+    selection_status: str
     model: WeightedStandardizedRidgeResidual
     fold_samples: tuple[tuple[str, ...], ...]
 
@@ -1159,6 +1208,8 @@ def select_grouped_ridge_corrector(
     sample_ids: Sequence[str],
     boundary_rows: Any,
     *,
+    marker_cm: Any,
+    marker_weights_cm: Any,
     alphas: Sequence[float] = EXPECTED_ALPHAS,
     boundary_weights: Sequence[float] = EXPECTED_BOUNDARY_WEIGHTS,
     seed: int = 31,
@@ -1173,26 +1224,67 @@ def select_grouped_ridge_corrector(
         raise ValueError("CV truth/baseline rows must match features and have three ancestries")
     if boundary.dtype != np.bool_ or boundary.shape != (x.shape[0],):
         raise ValueError("boundary_rows must be a boolean vector matching feature rows")
+    marker_coordinates = np.asarray(marker_cm, dtype=np.float64)
+    marker_weights = np.asarray(marker_weights_cm, dtype=np.float64)
+    if marker_coordinates.ndim != 1 or marker_weights.shape != marker_coordinates.shape or np.any(marker_weights < 0.0):
+        raise ValueError("marker_cm/marker_weights_cm are inconsistent")
+    unique_samples = sorted(set(samples.tolist()))
+    rows_per_sample = 2 * len(marker_coordinates)
+    if len(x) != len(unique_samples) * rows_per_sample:
+        raise ValueError("grouped ridge rows must be sample-major marker x haplotype")
+    base_weights = np.tile(np.repeat(marker_weights, 2), len(unique_samples))
     folds = grouped_three_fold_split(samples.tolist(), seed=seed)
-    candidates: list[tuple[float, float, float]] = []
+    baseline_summary, _baseline_rows = evaluate_haplotype_predictions(
+        baseline, truth, marker_coordinates, samples.tolist(), marker_weights_cm=marker_weights,
+    )
+    candidates: list[tuple[tuple[float, ...], float, float, dict[str, float]]] = []
+    guarded_candidates: list[tuple[tuple[float, ...], float, float, dict[str, float]]] = []
     for boundary_weight in boundary_weights:
-        raw_weights = np.where(boundary, float(boundary_weight), 1.0)
+        raw_weights = base_weights * np.where(boundary, float(boundary_weight), 1.0)
         for alpha in alphas:
-            numerator = 0.0
-            denominator = 0
+            oof_predicted: list[np.ndarray] = []
+            oof_truth: list[np.ndarray] = []
+            oof_samples: list[str] = []
             for fold in folds:
                 model = fit_ridge_corrector(
                     x[fold.train_indices], truth[fold.train_indices], baseline[fold.train_indices],
                     samples[fold.train_indices].tolist(), weights=raw_weights[fold.train_indices], alpha=float(alpha),
                 )
                 predicted = model.predict(x[fold.validation_indices], baseline[fold.validation_indices])
-                numerator += float(np.square(predicted - truth[fold.validation_indices]).sum())
-                denominator += 2 * len(fold.validation_indices)
-            candidates.append((numerator / denominator, float(alpha), float(boundary_weight)))
-    cv_brier, alpha, boundary_weight = min(candidates)
-    final_weights = np.where(boundary, boundary_weight, 1.0)
+                oof_predicted.append(predicted)
+                oof_truth.append(truth[fold.validation_indices])
+                oof_samples.extend(samples[fold.validation_indices].tolist())
+            metrics, _rows = evaluate_haplotype_predictions(
+                np.vstack(oof_predicted), np.vstack(oof_truth), marker_coordinates,
+                oof_samples, marker_weights_cm=marker_weights,
+            )
+            selection_key = (
+                -metrics["boundary_f1_0.2cM"],
+                metrics["false_transitions_per_cM_0.2cM"],
+                metrics["macro_ancestry_dose_mae"],
+                metrics["haplotype_brier"],
+                float(boundary_weight),
+                -float(alpha),
+            )
+            candidate = (selection_key, float(alpha), float(boundary_weight), metrics)
+            candidates.append(candidate)
+            if (
+                metrics["macro_ancestry_dose_mae"] <= baseline_summary["macro_ancestry_dose_mae"] + 1e-15
+                and metrics["false_transitions_per_cM_0.2cM"]
+                <= baseline_summary["false_transitions_per_cM_0.2cM"] + 1e-15
+            ):
+                guarded_candidates.append(candidate)
+    guarded = bool(guarded_candidates)
+    _key, alpha, boundary_weight, cv_metrics = min(
+        guarded_candidates if guarded else candidates, key=lambda value: value[0],
+    )
+    final_weights = base_weights * np.where(boundary, boundary_weight, 1.0)
     model = fit_ridge_corrector(x, truth, baseline, samples.tolist(), weights=final_weights, alpha=alpha)
-    return SelectedRidge(alpha, boundary_weight, cv_brier, model, tuple(fold.validation_samples for fold in folds))
+    return SelectedRidge(alpha, boundary_weight, cv_metrics["boundary_f1_0.2cM"],
+                         cv_metrics["false_transitions_per_cM_0.2cM"],
+                         cv_metrics["macro_ancestry_dose_mae"], cv_metrics["haplotype_brier"],
+                         guarded, "GUARDED_CONFIG" if guarded else "NO_GUARDED_CONFIG",
+                         model, tuple(fold.validation_samples for fold in folds))
 
 
 @dataclass(frozen=True)
@@ -1319,6 +1411,13 @@ def evaluate_haplotype_predictions(
     if predicted.shape[0] != len(unique) * 2 * marker_count:
         raise ValueError("metric rows must contain every marker/haplotype for every individual")
     individual: list[dict[str, Any]] = []
+    global_dose_numerator = np.zeros(3, dtype=np.float64)
+    global_brier_numerator = 0.0
+    global_confusion = np.zeros((len(DIPLOID_CLASSES), len(DIPLOID_CLASSES)), dtype=np.float64)
+    diploid_index = {state: index for index, state in enumerate(DIPLOID_CLASSES)}
+    global_boundaries: dict[float, list[Any]] = {
+        tolerance: [0, 0, 0, []] for tolerance in tolerances
+    }
     for sample in unique:
         indexes = np.flatnonzero(samples == sample)
         if indexes.size != 2 * marker_count:
@@ -1330,11 +1429,17 @@ def evaluate_haplotype_predictions(
         predicted_dose = sample_pred.sum(axis=1)
         truth_dose = sample_truth.sum(axis=1)
         dose_error = np.abs(predicted_dose - truth_dose) / 2.0
+        global_dose_numerator += (weights[:, None] * dose_error).sum(axis=0)
         ancestry_mae = {
             ancestry: float(np.average(dose_error[:, index], weights=weights))
             for index, ancestry in enumerate(ANCESTRIES)
         }
         haplotype_brier_by_marker = np.square(sample_pred - sample_truth).sum(axis=2).mean(axis=1) / 2.0
+        global_brier_numerator += float(np.dot(weights, haplotype_brier_by_marker))
+        predicted_states = [tuple(sorted(pair)) for pair in np.argmax(sample_pred, axis=2).astype(int).tolist()]
+        truth_states = [tuple(sorted(pair)) for pair in np.argmax(sample_truth, axis=2).astype(int).tolist()]
+        for marker_index, (observed, predicted_state) in enumerate(zip(truth_states, predicted_states)):
+            global_confusion[diploid_index[observed], diploid_index[predicted_state]] += weights[marker_index]
         row: dict[str, Any] = {
             "sample_id": sample,
             "macro_ancestry_dose_mae": float(np.mean(list(ancestry_mae.values()))),
@@ -1349,6 +1454,11 @@ def evaluate_haplotype_predictions(
             ]
             distances = [pair[2] for pair in pairs]
             n_truth, n_pred, matched = sum(map(len, truth_boundaries)), sum(map(len, pred_boundaries)), len(pairs)
+            accumulator = global_boundaries[tolerance]
+            accumulator[0] += n_truth
+            accumulator[1] += n_pred
+            accumulator[2] += matched
+            accumulator[3].extend(distances)
             precision = matched / n_pred if n_pred else (1.0 if n_truth == 0 else 0.0)
             recall = matched / n_truth if n_truth else (1.0 if n_pred == 0 else 0.0)
             suffix = f"{tolerance:.1f}cM"
@@ -1357,11 +1467,30 @@ def evaluate_haplotype_predictions(
             row[f"matched_boundary_median_{suffix}"] = float(np.median(distances)) if distances else float("nan")
             row[f"matched_boundary_p90_{suffix}"] = float(np.quantile(distances, 0.9)) if distances else float("nan")
         individual.append(row)
-    metric_keys = [key for key in individual[0] if key != "sample_id"]
-    summary: dict[str, Any] = {}
-    for key in metric_keys:
-        values = np.asarray([row[key] for row in individual], dtype=np.float64)
-        summary[key] = float(values[np.isfinite(values)].mean()) if np.any(np.isfinite(values)) else float("nan")
+    total_span_cm = len(unique) * span_cm
+    global_dose = global_dose_numerator / total_span_cm
+    summary: dict[str, Any] = {
+        "macro_ancestry_dose_mae": float(global_dose.mean()),
+        **{f"ancestry_dose_mae_{ancestry}": float(global_dose[index]) for index, ancestry in enumerate(ANCESTRIES)},
+        "haplotype_brier": global_brier_numerator / total_span_cm,
+        "diploid_macro_f1_fixed_six": float(np.mean([
+            (lambda tp, fp, fn: 2.0 * tp / (2.0 * tp + fp + fn) if 2.0 * tp + fp + fn else 0.0)(
+                global_confusion[index, index],
+                global_confusion[:, index].sum() - global_confusion[index, index],
+                global_confusion[index, :].sum() - global_confusion[index, index],
+            )
+            for index in range(len(DIPLOID_CLASSES))
+        ])),
+    }
+    for tolerance in tolerances:
+        n_truth, n_pred, matched, distances = global_boundaries[tolerance]
+        precision = matched / n_pred if n_pred else (1.0 if n_truth == 0 else 0.0)
+        recall = matched / n_truth if n_truth else (1.0 if n_pred == 0 else 0.0)
+        suffix = f"{tolerance:.1f}cM"
+        summary[f"boundary_f1_{suffix}"] = 2.0 * precision * recall / (precision + recall) if precision + recall else 0.0
+        summary[f"false_transitions_per_cM_{suffix}"] = (n_pred - matched) / (2.0 * total_span_cm)
+        summary[f"matched_boundary_median_{suffix}"] = float(np.median(distances)) if distances else float("nan")
+        summary[f"matched_boundary_p90_{suffix}"] = float(np.quantile(distances, 0.9)) if distances else float("nan")
     # Stable aliases used by the earlier numerical known-answer contract.
     summary["macro_ancestry_mae"] = summary["macro_ancestry_dose_mae"]
     summary["boundary_f1_0.2cM"] = summary["boundary_f1_0.2cM"]
@@ -1433,6 +1562,7 @@ def run_synthetic_end_to_end() -> dict[str, Any]:
     train_x, train_truth, train_baseline, train_ids, train_boundary = rows(tuple(f"TRAIN{i}" for i in range(6)))
     selected = select_grouped_ridge_corrector(
         train_x, train_truth, train_baseline, train_ids, train_boundary,
+        marker_cm=marker_cm, marker_weights_cm=_marker_voronoi_weights(marker_cm),
         alphas=(0.0001, 0.01, 1.0), boundary_weights=(1.0, 5.0), seed=3101,
     )
     test_x, test_truth, test_baseline, test_ids, _ = rows(("EVAL0", "EVAL1"))
