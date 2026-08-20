@@ -14,6 +14,7 @@ workflow {
         'm31_pre2_run_id', 'm31_pre2_preregistration', 'm31_pre2_genetic_map',
         'm31_pre2_container_image', 'm31_pre2_container_digest',
         'm31_pre2_execution_authorization', 'm31_pre2_cost_cap_usd',
+        'm31_pre2_execution_deadline_utc',
         'm31_pre2_pre1_c_checkpoint', 'm31_pre2_pre1_c_prediction',
         'm31_pre2_root18_truth_source',
         'm31_pre2_root17_sites', 'm31_pre2_root17_target', 'm31_pre2_root17_tree',
@@ -170,10 +171,12 @@ workflow {
         file(receiptFile, checkIfExists: true),
         file(moduleFile, checkIfExists: true), file(workflowFile, checkIfExists: true),
         file(configFile, checkIfExists: true), M31_PRE2_VERIFY_AUTHORIZATION.out.report,
-        params.m31_pre2_run_id
+        params.m31_pre2_run_id, params.m31_pre2_execution_deadline_utc,
+        params.m31_pre2_root18_reserve_seconds
     )
     M31_PRE2_SCORE_ROOT18(
-        M31_PRE2_ROOT17_GATE.out.open_token, M31_PRE2_ROOT17_GATE.out.receipt,
+        M31_PRE2_ROOT17_GATE.out.open_token, M31_PRE2_ROOT17_GATE.out.runtime_budget,
+        M31_PRE2_ROOT17_GATE.out.receipt,
         M31_PRE2_ROOT17_GATE.out.metrics, M31_PRE2_VERIFY_TECHNICAL.out.evidence,
         M31_PRE2_VERIFY_WORKERS.out.screen, worker4,
         file(contractFile, checkIfExists: true),
@@ -183,7 +186,8 @@ workflow {
         file(receiptFile, checkIfExists: true),
         file(moduleFile, checkIfExists: true), file(workflowFile, checkIfExists: true),
         file(configFile, checkIfExists: true), M31_PRE2_VERIFY_AUTHORIZATION.out.report,
-        params.m31_pre2_run_id, params.m31_pre2_root18_truth_source,
+        params.m31_pre2_run_id, params.m31_pre2_execution_deadline_utc,
+        params.m31_pre2_score_min_remaining_seconds, params.m31_pre2_root18_truth_source,
         params.m31_pre2_opening_ledger_uri
     )
 }

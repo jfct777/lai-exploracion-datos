@@ -14,6 +14,7 @@ import json
 import os
 import subprocess
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -46,6 +47,35 @@ class Pre2Error(ValueError):
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise Pre2Error(message)
+
+
+def _runtime_budget(
+    deadline_utc: str,
+    required_seconds: int,
+    stage: str,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Return a deterministic decision for the remaining wall-clock budget."""
+    require(required_seconds > 0, "required runtime budget must be positive")
+    try:
+        deadline = datetime.fromisoformat(deadline_utc.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise Pre2Error("execution deadline must be RFC3339") from error
+    require(deadline.tzinfo is not None, "execution deadline must include a timezone")
+    observed = now or datetime.now(timezone.utc)
+    require(observed.tzinfo is not None, "runtime observation must include a timezone")
+    remaining = int((deadline.astimezone(timezone.utc) - observed.astimezone(timezone.utc)).total_seconds())
+    passed = remaining >= required_seconds
+    return {
+        "schema_version": "1.0.0",
+        "stage": stage,
+        "status": "PASS_RUNTIME_BUDGET" if passed else "STOP_INSUFFICIENT_RUNTIME_BUDGET",
+        "deadline_utc": deadline.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "observed_utc": observed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "remaining_seconds": remaining,
+        "required_seconds": required_seconds,
+    }
 
 
 def _gcloud_executable() -> str:
@@ -591,7 +621,7 @@ def _binding(args: argparse.Namespace, manifest: Mapping[str, Any]) -> dict[str,
 def build_gate(args: argparse.Namespace) -> dict[str, Any]:
     require(
         not args.output.exists() and not args.open_token.exists()
-        and not args.root17_metrics.exists(),
+        and not args.root17_metrics.exists() and not args.runtime_budget_output.exists(),
         "gate output already exists",
     )
     worker_screen = json.loads(args.worker_screen.read_text(encoding="utf-8"))
@@ -623,14 +653,28 @@ def build_gate(args: argparse.Namespace) -> dict[str, Any]:
         claims_excluded=claims,
     )
     runner._atomic_json_fsync(args.output, receipt)
+    runtime_budget = _runtime_budget(
+        args.execution_deadline_utc, args.root18_reserve_seconds, "ROOT17_GATE",
+    )
+    if receipt["decision"]["status"] != "OPEN_ROOT18":
+        runtime_budget["status"] = "NOT_APPLICABLE_SCIENTIFIC_STOP"
+    runner._atomic_json_fsync(args.runtime_budget_output, runtime_budget)
     if receipt["decision"]["status"] == "OPEN_ROOT18":
-        token = {
-            "schema_version": "2.0.0", "status": "OPEN_ROOT18",
-            "receipt_sha256": core.sha256_file(args.output),
-            "receipt_semantic_sha256": receipt["receipt_semantic_sha256"],
-            "run_id": args.run_id,
-        }
-        runner._atomic_json_fsync(args.open_token, token)
+        if runtime_budget["status"] == "PASS_RUNTIME_BUDGET":
+            token = {
+                "schema_version": "2.0.0", "status": "OPEN_ROOT18",
+                "receipt_sha256": core.sha256_file(args.output),
+                "receipt_semantic_sha256": receipt["receipt_semantic_sha256"],
+                "runtime_budget_sha256": core.sha256_file(args.runtime_budget_output),
+                "execution_deadline_utc": runtime_budget["deadline_utc"],
+                "run_id": args.run_id,
+            }
+            runner._atomic_json_fsync(args.open_token, token)
+        else:
+            return {
+                "status": "STOP_PRE2_OPERATIONAL_DEADLINE_BEFORE_ROOT18",
+                "receipt": str(args.output),
+            }
     return {"status": receipt["decision"]["status"], "receipt": str(args.output)}
 
 
@@ -798,6 +842,33 @@ def score_root18(args: argparse.Namespace) -> dict[str, Any]:
     require(token.get("status") == "OPEN_ROOT18", "root18 opening token is not OPEN")
     require(token.get("run_id") == args.run_id, "opening token run ID differs")
     require(token.get("receipt_sha256") == core.sha256_file(args.receipt), "opening token receipt differs")
+    require(
+        token.get("runtime_budget_sha256") == core.sha256_file(args.runtime_budget),
+        "opening token runtime budget differs",
+    )
+    gate_budget = json.loads(args.runtime_budget.read_text(encoding="utf-8"))
+    require(gate_budget.get("status") == "PASS_RUNTIME_BUDGET", "root18 gate runtime budget did not pass")
+    require(
+        gate_budget.get("deadline_utc") == token.get("execution_deadline_utc")
+        == args.execution_deadline_utc,
+        "root18 execution deadline differs",
+    )
+    preclaim_budget = _runtime_budget(
+        args.execution_deadline_utc, args.min_score_remaining_seconds, "ROOT18_PRECLAIM",
+    )
+    if preclaim_budget["status"] != "PASS_RUNTIME_BUDGET":
+        args.outdir.mkdir(parents=True)
+        result = {
+            "schema_version": "2.0.0",
+            "experiment_id": "M31_ORDERED_LINEAR_DEV_PRE2",
+            "stage": "ROOT18_NOT_OPENED_RUNTIME_BUDGET",
+            "decision": {"status": "STOP_PRE2_OPERATIONAL_DEADLINE_BEFORE_ROOT18_CLAIM"},
+            "runtime_budget": preclaim_budget,
+            "root18_truth_accessed": False,
+            "root18_consumed": False,
+        }
+        runner._atomic_json_fsync(args.outdir / "m31_pre2.root18.result.json", result)
+        return {"status": result["decision"]["status"], "result": str(args.outdir / "m31_pre2.root18.result.json")}
     require(args.opening_ledger == GLOBAL_ROOT18_LEDGER_URI,
             "production root18 ledger must use the immutable global GCS object")
     evaluation_paths = runner.FeaturePaths(**{
@@ -854,6 +925,7 @@ def score_root18(args: argparse.Namespace) -> dict[str, Any]:
         "root18_role": "single_one_way_M31_development_evaluation_not_validation_or_replication",
         "root18_used_by_prior_M29R_M30": True,
         "ASIA_is_not_NAM": True,
+        "runtime_budget": preclaim_budget,
         "root18_consumed_no_retraining_or_reopening": True,
     }
     runner._atomic_json_fsync(args.outdir / "m31_pre2.root18.result.json", result)
@@ -933,11 +1005,17 @@ def build_parser() -> argparse.ArgumentParser:
     gate.add_argument("--run-id", required=True)
     gate.add_argument("--output", type=Path, required=True)
     gate.add_argument("--open-token", type=Path, required=True)
+    gate.add_argument("--runtime-budget-output", type=Path, required=True)
+    gate.add_argument("--execution-deadline-utc", required=True)
+    gate.add_argument("--root18-reserve-seconds", type=int, required=True)
 
     score = sub.add_parser("score")
     add_binding_paths(score)
     score.add_argument("--receipt", type=Path, required=True)
     score.add_argument("--open-token", type=Path, required=True)
+    score.add_argument("--runtime-budget", type=Path, required=True)
+    score.add_argument("--execution-deadline-utc", required=True)
+    score.add_argument("--min-score-remaining-seconds", type=int, required=True)
     score.add_argument("--opening-ledger", required=True)
     score.add_argument("--run-id", required=True)
     score.add_argument("--root18-truth-source", required=True)

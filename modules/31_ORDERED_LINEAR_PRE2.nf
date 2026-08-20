@@ -93,7 +93,7 @@ process M31_PRE2_FIT_PREDICT {
     cpus { workers }
     memory params.m31_pre2_fit_memory
     time params.m31_pre2_fit_time
-    maxForks 1
+    maxForks params.m31_pre2_fit_max_forks
 
     input:
     val workers
@@ -228,10 +228,13 @@ process M31_PRE2_ROOT17_GATE {
     path config_nf
     path execution_authorization
     val run_id
+    val execution_deadline_utc
+    val root18_reserve_seconds
 
     output:
     path 'm31_pre2.root17.metrics.json', emit: metrics
     path 'm31_pre2.root17.receipt.json', emit: receipt
+    path 'm31_pre2.runtime_budget.json', emit: runtime_budget
     path 'm31_pre2.OPEN_ROOT18.json', optional: true, emit: open_token
 
     script:
@@ -247,6 +250,9 @@ process M31_PRE2_ROOT17_GATE {
       --technical-evidence ${technical_evidence} \
       --root17-metrics m31_pre2.root17.metrics.json \
       --run-id '${run_id}' --output m31_pre2.root17.receipt.json \
+      --execution-deadline-utc '${execution_deadline_utc}' \
+      --root18-reserve-seconds '${root18_reserve_seconds}' \
+      --runtime-budget-output m31_pre2.runtime_budget.json \
       --open-token m31_pre2.OPEN_ROOT18.json
     """
 }
@@ -266,6 +272,7 @@ process M31_PRE2_SCORE_ROOT18 {
 
     input:
     path open_token
+    path runtime_budget
     path receipt
     path root17_metrics
     path technical_evidence
@@ -290,6 +297,8 @@ process M31_PRE2_SCORE_ROOT18 {
     path config_nf
     path execution_authorization
     val run_id
+    val execution_deadline_utc
+    val min_score_remaining_seconds
     val root18_truth_source
     val opening_ledger
 
@@ -309,6 +318,9 @@ process M31_PRE2_SCORE_ROOT18 {
       --execution-authorization ${execution_authorization} \
       --worker4-dir ${worker4_dir} --receipt ${receipt} \
       --open-token ${open_token} --technical-evidence ${technical_evidence} \
+      --runtime-budget ${runtime_budget} \
+      --execution-deadline-utc '${execution_deadline_utc}' \
+      --min-score-remaining-seconds '${min_score_remaining_seconds}' \
       --worker-screen ${worker_screen} \
       --root17-metrics ${root17_metrics} --opening-ledger '${opening_ledger}' \
       --run-id '${run_id}' --root18-truth-source '${root18_truth_source}' \

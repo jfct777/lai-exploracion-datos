@@ -2,6 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -35,10 +36,16 @@ class Pre2NextflowBoundaryTest(unittest.TestCase):
         self.assertIn("optional: true, emit: open_token", self.module)
         self.assertIn("cache false", self.module)
         self.assertIn("maxRetries 0", self.module)
+        self.assertIn("M31_PRE2_ROOT17_GATE.out.runtime_budget", self.workflow)
+        self.assertIn("m31_pre2_root18_reserve_seconds = 9000", self.config)
+        self.assertIn("m31_pre2_score_min_remaining_seconds = 7200", self.config)
 
     def test_worker_screen_is_real_and_exact(self):
         self.assertIn("channel.of(1, 4, 8)", self.workflow)
         self.assertIn("--worker-dir worker-1 --worker-dir worker-4 --worker-dir worker-8", self.module)
+        self.assertIn("maxForks params.m31_pre2_fit_max_forks", self.module)
+        self.assertIn("m31_pre2_fit_max_forks = 3", self.config)
+        self.assertIn("m31_pre2_fit_time = '14h'", self.config)
         for name in (
             "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
             "NUMEXPR_NUM_THREADS", "BLIS_NUM_THREADS",
@@ -89,6 +96,13 @@ class Pre2NextflowBoundaryTest(unittest.TestCase):
 
 
 class Pre2OpeningLedgerTest(unittest.TestCase):
+    def test_runtime_budget_passes_and_stops_at_the_declared_boundary(self):
+        now = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+        passed = PRE2._runtime_budget("2026-08-20T14:30:00Z", 9000, "ROOT17_GATE", now=now)
+        stopped = PRE2._runtime_budget("2026-08-20T14:29:59Z", 9000, "ROOT17_GATE", now=now)
+        self.assertEqual(passed["status"], "PASS_RUNTIME_BUDGET")
+        self.assertEqual(stopped["status"], "STOP_INSUFFICIENT_RUNTIME_BUDGET")
+
     def test_claim_is_permanent_and_exclusive(self):
         with tempfile.TemporaryDirectory() as temporary:
             ledger = Path(temporary) / "ledger"
