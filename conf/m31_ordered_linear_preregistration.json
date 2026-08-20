@@ -1,0 +1,89 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "M31_ORDERED_LINEAR_DEV",
+  "status": "PREREGISTERED_NOT_RUN",
+  "scope": "chr22_two_root_development_only_no_validation",
+  "scientific_question": "Does genetically ordered rare-allele information improve FLARE local-ancestry boundaries beyond a common-only corrector and a rare-load-only control?",
+  "roots": {
+    "train_root17_test_root18": [20260817, 20260818],
+    "train_root18_test_root17": [20260818, 20260817]
+  },
+  "roots_are_not_independent_validation": true,
+  "baseline": {
+    "primary": "FLARE_v0.6.0_frozen_M30",
+    "historical_guardrail": "Gnomix_frozen_M29",
+    "marker_count": 79791,
+    "prediction_support": "the exact phased target marker grid and Voronoi genetic cells authenticated by M30"
+  },
+  "rare_universe": {
+    "selector": "FREQ_only",
+    "definition": "minor allele with MAC>=2, MAF<0.01 and at least two FREQ carrier individuals",
+    "minor_presence": "I(observed_state == minor_code)",
+    "unsupported_in_REF_LAI": "retain the FREQ-selected site and expose an explicit no-support mask",
+    "forbidden_selectors": ["REF_LAI", "DONOR", "TARGET", "truth", "FLARE_prediction", "Gnomix_prediction"]
+  },
+  "ordered_representation": {
+    "coordinate": "genetic_cM",
+    "evaluation_grid": "exact_M30_FLARE_markers_no_interpolated_grid",
+    "signed_half_open_rings_cM": [[0.0, 0.1], [0.1, 0.2], [0.2, 0.5], [0.5, 1.0]],
+    "sides": ["left", "right"],
+    "normalization": ["genetic_length", "callable_or_observed_site_count"],
+    "edge_masks": true,
+    "frequency_weighting": "none_no_inverse_MAF"
+  },
+  "arms": {
+    "F0": "frozen FLARE haplotype posterior without a fitted corrector",
+    "C": "residual corrector using only FLARE probabilities and ordered common context",
+    "L": "C plus local diploid rare load without reference ancestry labels",
+    "D": "L plus ancestry-specific REF_LAI rare support; diploid target dose is shared across haplotypes",
+    "H": "phase-aware rare presence by target haplotype; simulation ceiling only",
+    "DSHAM": "D with complete diploid REF_LAI ancestry labels permuted",
+    "HSHAM": "H with complete diploid REF_LAI ancestry labels permuted"
+  },
+  "model": {
+    "estimator": "multivariate_L2_ridge_residual",
+    "prediction": "simplex_projection(FLARE_haplotype_posterior + X_beta)",
+    "posthoc_smoothing": false,
+    "alphas": [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0],
+    "boundary_training_weights": [1.0, 5.0, 20.0],
+    "boundary_training_definition_cM": 0.2,
+    "weight_normalization": "sum_to_number_of_diploid_individuals",
+    "feature_standardization": "fit_on_training_individuals_only",
+    "inner_cv": "three deterministic folds grouped by complete diploid individual",
+    "hyperparameter_selection": "performed independently inside the training root for every fitted real or sham arm"
+  },
+  "null": {
+    "replicates": 32,
+    "unit": "complete_diploid_REF_LAI_individual",
+    "fixed": ["loci", "positions", "target_genotypes", "target_phase", "missingness", "rare_load", "LD", "ancestry_sample_sizes"],
+    "changed": "mapping between REF_LAI individuals and ancestry labels",
+    "formal_resolution": "if the real statistic exceeds all 32 shams, exact exploratory p=1/33; do not report a percentile-95 significance claim"
+  },
+  "evaluation": {
+    "primary": "boundary_F1_at_0.2_cM",
+    "sensitivities_cM": [0.1, 0.5],
+    "secondary": ["false_transitions_per_cM", "matched_boundary_median_cM", "matched_boundary_p90_cM", "macro_ancestry_dose_MAE", "MAE_by_ancestry", "haplotype_Brier", "diploid_macro_F1"],
+    "unit_of_uncertainty": "diploid_individual",
+    "bootstrap_replicates": 10000,
+    "directions_are_not_independent_replicates": true
+  },
+  "decision": {
+    "GO_NEW_ROOTS": "D improves boundary F1 over F0, C and L in both directions, exceeds every DSHAM improvement, does not increase macro MAE or false transitions, and no ancestry worsens in both directions",
+    "LOAD_ONLY": "L improves but D does not improve over L",
+    "PHASE_CEILING_ONLY": "H passes its sham and guardrails while D does not",
+    "TRADEOFF": "boundary F1 improves but at least one prespecified guardrail fails",
+    "STOP_LINEAR_ORDERED_RARE": "neither D nor H shows replicated incremental benefit",
+    "next_step_after_GO": "generate prospectively frozen new simulation roots before CNN or any confirmatory claim"
+  },
+  "stop_rules": [
+    "any input or code SHA-256 mismatch",
+    "minor-allele known answers fail",
+    "marker, sample, phase, locus-order or root identity mismatch",
+    "any split separates haplotypes or loci from the same individual",
+    "normalization uses the evaluation root",
+    "any sham changes a quantity listed as fixed",
+    "ridge solve or simplex projection is non-finite",
+    "any VALID or TEST input is accessed"
+  ],
+  "claims_excluded": ["confirmatory_validation", "DNABR_generalization", "Native_American_LAI", "Brazil_novel_variant_effect", "deep_learning_benefit"]
+}
