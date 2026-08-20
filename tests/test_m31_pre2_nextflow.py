@@ -20,6 +20,9 @@ class Pre2NextflowBoundaryTest(unittest.TestCase):
         cls.module = (REPO / "modules" / "31_ORDERED_LINEAR_PRE2.nf").read_text()
         cls.workflow = (REPO / "workflows" / "m31_ordered_linear_pre2.nf").read_text()
         cls.config = (REPO / "conf" / "m31_ordered_linear_pre2.config").read_text()
+        cls.inputs_config = (
+            REPO / "conf" / "m31_ordered_linear_pre2_inputs.config"
+        ).read_text()
 
     def test_only_scorer_process_mentions_root18_truth(self):
         before_scorer, scorer = self.module.split("process M31_PRE2_SCORE_ROOT18", 1)
@@ -58,6 +61,26 @@ class Pre2NextflowBoundaryTest(unittest.TestCase):
         self.assertIn("M31_PRE2_VERIFY_AUTHORIZATION", self.workflow)
         self.assertIn("m31_pre2_execution_authorization", self.workflow)
         self.assertIn("--execution-authorization", self.module)
+
+    def test_audited_inputs_are_separate_and_do_not_authorize_execution(self):
+        expected = (
+            "m31_pre2_genetic_map", "m31_pre2_container_image",
+            "m31_pre2_pre1_c_checkpoint", "m31_pre2_pre1_c_prediction",
+            "m31_pre2_root17_sites", "m31_pre2_root17_target",
+            "m31_pre2_root17_tree", "m31_pre2_root17_pools",
+            "m31_pre2_root17_truth", "m31_pre2_root17_flare_vcf",
+            "m31_pre2_root17_flare_audit", "m31_pre2_root18_sites",
+            "m31_pre2_root18_target", "m31_pre2_root18_tree",
+            "m31_pre2_root18_pools", "m31_pre2_root18_flare_vcf",
+            "m31_pre2_root18_flare_audit", "m31_pre2_root18_truth_source",
+        )
+        for parameter in expected:
+            self.assertEqual(self.inputs_config.count(f"{parameter} ="), 1)
+        self.assertNotIn("m31_pre2_execution_authorization", self.inputs_config)
+        self.assertNotIn("m31_pre2_cost_cap_usd", self.inputs_config)
+        self.assertIn("m31-ordered-rare-preflight-20260820a", self.inputs_config)
+        self.assertIn("m30-flare-baseline-20260819b", self.inputs_config)
+        self.assertIn("m28-v2-individual-safe-20260817a", self.inputs_config)
 
     def test_every_pipeline_process_stages_import_dependencies(self):
         self.assertEqual(self.module.count("python3 ${pipeline_py}"), 7)
