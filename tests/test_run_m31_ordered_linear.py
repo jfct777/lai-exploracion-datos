@@ -27,6 +27,7 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[1]
 RUNNER_PATH = REPO / "bin" / "run_m31_ordered_linear.py"
 CORE_PATH = REPO / "bin" / "m31_ordered_linear.py"
+PRE2_RECEIPT_PATH = REPO / "bin" / "m31_pre2_receipt.py"
 
 
 def _load(name: str, path: Path):
@@ -41,6 +42,7 @@ def _load(name: str, path: Path):
 
 CORE = _load("m31_ordered_linear", CORE_PATH)
 RUNNER = _load("run_m31_ordered_linear_test", RUNNER_PATH)
+PRE2_RECEIPT = _load("m31_pre2_receipt_test", PRE2_RECEIPT_PATH)
 
 
 def _boundary_counts(truth: int, predicted: int, matched: int):
@@ -1332,6 +1334,145 @@ class Pre2MetricsAndDecisionTest(unittest.TestCase):
                 RUNNER.RunnerError, "outside|negative"
             ):
                 RUNNER.evaluate_pre2_root18_decision(metrics, l_guarded=False)
+
+
+class Pre2GateReceiptTest(unittest.TestCase):
+    @staticmethod
+    def _metrics(f1: float, error: float, ft: float = 0.10):
+        payload = {
+            "boundary_f1_0.2cM": f1,
+            "macro_ancestry_dose_mae": error,
+            "false_transitions_per_cM_0.2cM": ft,
+        }
+        for ancestry in CORE.ANCESTRIES:
+            payload[f"ancestry_dose_mae_{ancestry}"] = error
+            payload[f"ancestry_dose_mae_truth_present_{ancestry}"] = error
+        return payload
+
+    @staticmethod
+    def _binding():
+        return {
+            "contract_sha256": "a" * 64,
+            "git_commit": "b" * 40,
+            "runner_sha256": "c" * 64,
+            "core_sha256": "d" * 64,
+            "container_digest": "sha256:" + "e" * 64,
+            "prediction_manifest_sha256": "f" * 64,
+            "context_sha256": "1" * 64,
+            "root17_metrics_sha256": "2" * 64,
+            "technical_evidence_sha256": "3" * 64,
+            "receipt_code_sha256": "4" * 64,
+        }
+
+    def _checkpoint_fits(self, root: Path):
+        fits = {}
+        for arm in ("L", "D"):
+            artifact = RUNNER.PredictionArtifact(
+                "root18", ("S0",), arm, None,
+                (np.zeros((2, 2, 3), dtype=float),), "",
+            )
+            artifact = replace(
+                artifact,
+                sha256=RUNNER._prediction_sha256(
+                    artifact.root_name, artifact.sample_ids, artifact.arrays,
+                ),
+            )
+            fitted = _valid_fitted(arm)
+            selected_f1 = 0.705 if arm == "L" else 0.72
+            fitted.cv_boundary_f1 = selected_f1
+            fitted.candidate_table = tuple(
+                {**row, "boundary_f1_0.2cM": selected_f1}
+                if row["selected"] else row
+                for row in fitted.candidate_table
+            )
+            checkpoint = RUNNER._write_prediction_checkpoint(root, artifact, fitted, "2" * 64)
+            fits[arm] = checkpoint["fit"]
+        return fits
+
+    @staticmethod
+    def _claims():
+        contract = json.loads(
+            (REPO / "conf" / "m31_ordered_linear_pre2_preregistration.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        return contract["claims_excluded"]
+
+    def test_receipt_reconstructs_exactly_and_binds_open_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint_fits = self._checkpoint_fits(Path(tmp))
+            metrics = {
+                "F0": self._metrics(0.50, 0.30, 0.20),
+                "L": self._metrics(0.705, 0.20, 0.10),
+                "D": self._metrics(0.72, 0.20, 0.10),
+            }
+            technical = {name: True for name in RUNNER.PRE2_TECHNICAL_REQUIREMENTS}
+            claims = self._claims()
+            receipt = PRE2_RECEIPT.build_root17_gate_receipt(
+                metrics=metrics, checkpoint_fits=checkpoint_fits,
+                technical_requirements=technical, binding=self._binding(),
+                claims_excluded=claims,
+            )
+            self.assertEqual(receipt["decision"]["status"], "OPEN_ROOT18")
+            with self.assertRaisesRegex(PRE2_RECEIPT.ReceiptError, "frozen contract"):
+                PRE2_RECEIPT.build_root17_gate_receipt(
+                    metrics=metrics, checkpoint_fits=checkpoint_fits,
+                    technical_requirements=technical, binding=self._binding(),
+                    claims_excluded=claims[:-1],
+                )
+            rebuilt = PRE2_RECEIPT.validate_root17_gate_receipt(
+                receipt, expected_binding=self._binding(), checkpoint_fits=checkpoint_fits,
+                expected_metrics=metrics, expected_technical_requirements=technical,
+                expected_claims_excluded=claims,
+            )
+            self.assertEqual(rebuilt, receipt)
+
+            tampered = json.loads(json.dumps(receipt))
+            tampered["root17_metrics"]["D"]["boundary_f1_0.2cM"] = 0.99
+            with self.assertRaisesRegex(PRE2_RECEIPT.ReceiptError, "semantic SHA-256 mismatch"):
+                PRE2_RECEIPT.validate_root17_gate_receipt(
+                    tampered, expected_binding=self._binding(), checkpoint_fits=checkpoint_fits,
+                    expected_metrics=metrics, expected_technical_requirements=technical,
+                    expected_claims_excluded=claims,
+                )
+
+            resigned_metrics = json.loads(json.dumps(metrics))
+            resigned_metrics["D"]["ancestry_dose_mae_truth_present_AFR"] = 0.01
+            resigned = PRE2_RECEIPT.build_root17_gate_receipt(
+                metrics=resigned_metrics, checkpoint_fits=checkpoint_fits,
+                technical_requirements=technical, binding=self._binding(),
+                claims_excluded=claims,
+            )
+            with self.assertRaisesRegex(PRE2_RECEIPT.ReceiptError, "reconstruct exactly"):
+                PRE2_RECEIPT.validate_root17_gate_receipt(
+                    resigned, expected_binding=self._binding(), checkpoint_fits=checkpoint_fits,
+                    expected_metrics=metrics, expected_technical_requirements=technical,
+                    expected_claims_excluded=claims,
+                )
+
+    def test_stop_receipt_cannot_open_root18(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint_fits = self._checkpoint_fits(Path(tmp))
+            metrics = {
+                "F0": self._metrics(0.50, 0.30, 0.20),
+                "L": self._metrics(0.705, 0.20, 0.10),
+                "D": self._metrics(0.72, 0.20, 0.10),
+            }
+            technical = {name: True for name in RUNNER.PRE2_TECHNICAL_REQUIREMENTS}
+            technical["workers_1_4_8_exact_equality_pass"] = False
+            claims = self._claims()
+            receipt = PRE2_RECEIPT.build_root17_gate_receipt(
+                metrics=metrics, checkpoint_fits=checkpoint_fits,
+                technical_requirements=technical, binding=self._binding(),
+                claims_excluded=claims,
+            )
+            self.assertEqual(receipt["decision"]["status"], "STOP_PRE2_BEFORE_ROOT18")
+            with self.assertRaisesRegex(PRE2_RECEIPT.ReceiptError, "does not authorize"):
+                PRE2_RECEIPT.validate_root17_gate_receipt(
+                    receipt, expected_binding=self._binding(), checkpoint_fits=checkpoint_fits,
+                    expected_metrics=metrics, expected_technical_requirements=technical,
+                    expected_claims_excluded=claims,
+                )
 
 
 if __name__ == "__main__":
