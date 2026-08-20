@@ -20,7 +20,14 @@ BINDING_KEYS = {
     "context_sha256",
     "root17_metrics_sha256",
     "technical_evidence_sha256",
+    "worker_screen_sha256",
+    "execution_authorization_sha256",
+    "contract_code_sha256",
     "receipt_code_sha256",
+    "orchestrator_sha256",
+    "module_sha256",
+    "workflow_sha256",
+    "config_sha256",
 }
 RECEIPT_KEYS = {
     "schema_version",

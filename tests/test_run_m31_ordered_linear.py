@@ -1361,7 +1361,14 @@ class Pre2GateReceiptTest(unittest.TestCase):
             "context_sha256": "1" * 64,
             "root17_metrics_sha256": "2" * 64,
             "technical_evidence_sha256": "3" * 64,
+            "worker_screen_sha256": "9" * 64,
+            "execution_authorization_sha256": "0" * 64,
+            "contract_code_sha256": "9" * 64,
             "receipt_code_sha256": "4" * 64,
+            "orchestrator_sha256": "5" * 64,
+            "module_sha256": "6" * 64,
+            "workflow_sha256": "7" * 64,
+            "config_sha256": "8" * 64,
         }
 
     def _checkpoint_fits(self, root: Path):
