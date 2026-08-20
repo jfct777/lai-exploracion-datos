@@ -1114,5 +1114,225 @@ class PilotProcessBoundaryTest(unittest.TestCase):
             forbidden_truth.assert_not_called()
 
 
+class Pre2MetricsAndDecisionTest(unittest.TestCase):
+    @staticmethod
+    def _metrics(f1: float, error: float, ft: float = 0.10):
+        metrics = {
+            "boundary_f1_0.2cM": f1,
+            "macro_ancestry_dose_mae": error,
+            "false_transitions_per_cM_0.2cM": ft,
+        }
+        for ancestry in CORE.ANCESTRIES:
+            metrics[f"ancestry_dose_mae_{ancestry}"] = error
+            metrics[f"ancestry_dose_mae_truth_present_{ancestry}"] = error
+        return metrics
+
+    @staticmethod
+    def _technical(**overrides):
+        requirements = {name: True for name in RUNNER.PRE2_TECHNICAL_REQUIREMENTS}
+        requirements.update(overrides)
+        return requirements
+
+    def test_truth_present_mae_conditions_on_diploid_truth_presence(self):
+        genetic_map = CORE.GeneticMap(
+            np.array([100, 200], dtype=np.int64), np.array([0.0, 1.0], dtype=float),
+        )
+        root = SimpleNamespace(
+            name="root18", samples=("S0",), marker_positions=np.array([150]),
+            cell_left_bp=np.array([100]), cell_right_bp=np.array([200]), genetic_map=genetic_map,
+        )
+        truth = RUNNER.TruthBundle(
+            "root18",
+            {"S0": (
+                [CORE.TruthSegment(100, 201, "AFR")],
+                [CORE.TruthSegment(100, 201, "EUR")],
+            )},
+            np.zeros((1, 1, 2, 3), dtype=float),
+            (np.zeros(2, dtype=bool),),
+        )
+        predicted = np.array([[[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]]])
+        summary, counts = RUNNER.score_sample(root, truth, 0, predicted)
+        self.assertAlmostEqual(summary["ancestry_dose_mae_truth_present_AFR"], 0.5)
+        self.assertAlmostEqual(summary["ancestry_dose_mae_truth_present_EUR"], 0.5)
+        self.assertIsNone(summary["ancestry_dose_mae_truth_present_ASIA"])
+        np.testing.assert_allclose(counts.truth_present_cm_denominator, [1.0, 1.0, 0.0])
+        for ancestry in CORE.ANCESTRIES:
+            self.assertIsNone(summary[f"boundary_f1_0.2cM_{ancestry}"])
+            self.assertEqual(summary[f"boundary_truth_count_0.2cM_{ancestry}"], 0)
+
+    def test_truth_present_counts_fail_closed_when_partial_or_invalid(self):
+        base = _score_counts("S0", total_cm=1.0, dose_error=0.1)
+        partial = replace(
+            base, truth_present_mae_numerator=np.ones(3),
+            truth_present_cm_denominator=None,
+        )
+        with self.assertRaisesRegex(RUNNER.RunnerError, "pairing differs"):
+            RUNNER.summarize_counts([partial])
+        negative = replace(
+            base, truth_present_mae_numerator=np.ones(3),
+            truth_present_cm_denominator=np.array([1.0, -1.0, 1.0]),
+        )
+        with self.assertRaisesRegex(RUNNER.RunnerError, "negative"):
+            RUNNER.summarize_counts([negative])
+
+    def test_ancestry_boundary_metrics_attribute_true_and_false_transitions(self):
+        genetic_map = CORE.GeneticMap(
+            np.array([100, 300], dtype=np.int64), np.array([0.0, 2.0], dtype=float),
+        )
+        root = SimpleNamespace(
+            name="root18", samples=("S0",), marker_positions=np.array([150, 250]),
+            cell_left_bp=np.array([100, 200]), cell_right_bp=np.array([200, 300]),
+            genetic_map=genetic_map,
+        )
+        truth = RUNNER.TruthBundle(
+            "root18",
+            {"S0": (
+                [CORE.TruthSegment(100, 200, "AFR"), CORE.TruthSegment(200, 301, "EUR")],
+                [CORE.TruthSegment(100, 301, "AFR")],
+            )},
+            np.zeros((2, 1, 2, 3), dtype=float),
+            (np.zeros(4, dtype=bool),),
+        )
+        predicted = np.array([
+            [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        ])
+        summary, _counts = RUNNER.score_sample(root, truth, 0, predicted)
+        self.assertAlmostEqual(summary["boundary_f1_0.2cM_AFR"], 2.0 / 3.0)
+        self.assertEqual(summary["boundary_f1_0.2cM_EUR"], 1.0)
+        self.assertEqual(summary["boundary_f1_0.2cM_ASIA"], 0.0)
+        self.assertEqual(summary["boundary_truth_count_0.2cM_AFR"], 1)
+        self.assertEqual(summary["boundary_prediction_count_0.2cM_AFR"], 2)
+        self.assertEqual(summary["boundary_matched_count_0.2cM_AFR"], 1)
+        self.assertAlmostEqual(summary["false_transitions_per_cM_0.2cM_AFR"], 1.0 / 3.0)
+        self.assertIsNone(summary["false_transitions_per_cM_0.2cM_ASIA"])
+
+    def test_root17_gate_uses_primary_delta_and_reports_sensitivities(self):
+        metrics = {
+            "F0": self._metrics(0.70, 0.20),
+            "L": self._metrics(0.70, 0.21),
+            "D": self._metrics(0.711, 0.19),
+        }
+        decision = RUNNER.evaluate_pre2_root17_gate(
+            metrics, d_guarded=True, l_guarded=False,
+            technical_requirements=self._technical(),
+        )
+        self.assertEqual(decision["status"], "OPEN_ROOT18")
+        self.assertEqual(decision["candidate_scope"], "CANDIDATE_RARE_COMBINED_ONLY")
+        self.assertEqual(
+            decision["delta_f1_sensitivity_pass"],
+            {"0.005": True, "0.010": True, "0.020": False},
+        )
+
+    def test_root17_gate_fails_closed_on_technical_or_ancestry_guard(self):
+        metrics = {
+            "F0": self._metrics(0.70, 0.20),
+            "L": self._metrics(0.70, 0.21),
+            "D": self._metrics(0.72, 0.19),
+        }
+        metrics["D"]["ancestry_dose_mae_truth_present_ASIA"] = 0.21
+        decision = RUNNER.evaluate_pre2_root17_gate(
+            metrics, d_guarded=True, l_guarded=False,
+            technical_requirements=self._technical(truth_blind_prediction_manifest_fsynced=False),
+        )
+        self.assertEqual(decision["status"], "STOP_PRE2_BEFORE_ROOT18")
+        self.assertFalse(all(item["pass"] for item in decision["technical_checks"]))
+        self.assertFalse(all(item["pass"] for item in decision["scientific_checks"]))
+
+        with self.assertRaisesRegex(RUNNER.RunnerError, "requirement set drifted"):
+            RUNNER.evaluate_pre2_root17_gate(
+                metrics, d_guarded=True, l_guarded=False,
+                technical_requirements={"known_answers_pass": True},
+            )
+
+    def test_root17_rechecks_guarded_flag_and_frozen_parameters(self):
+        metrics = {
+            "F0": self._metrics(0.70, 0.20, 0.10),
+            "L": self._metrics(0.70, 0.21, 0.10),
+            "D": self._metrics(0.72, 0.21, 0.10),
+        }
+        decision = RUNNER.evaluate_pre2_root17_gate(
+            metrics, d_guarded=True, l_guarded=False,
+            technical_requirements=self._technical(),
+        )
+        self.assertEqual(decision["status"], "STOP_PRE2_BEFORE_ROOT18")
+        for name, value in (("delta", 0.005), ("tau", 0.0)):
+            kwargs = {name: value}
+            with self.subTest(name=name), self.assertRaisesRegex(RUNNER.RunnerError, "drifted"):
+                RUNNER.evaluate_pre2_root17_gate(
+                    metrics, d_guarded=True, l_guarded=False,
+                    technical_requirements=self._technical(), **kwargs,
+                )
+
+    def test_root17_cannot_hide_a_guarded_L(self):
+        metrics = {
+            "F0": self._metrics(0.70, 0.20, 0.10),
+            "L": self._metrics(0.705, 0.19, 0.09),
+            "D": self._metrics(0.72, 0.18, 0.08),
+        }
+        decision = RUNNER.evaluate_pre2_root17_gate(
+            metrics, d_guarded=True, l_guarded=False,
+            technical_requirements=self._technical(),
+        )
+        self.assertEqual(decision["status"], "STOP_PRE2_BEFORE_ROOT18")
+
+        for value in (0, None):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                RUNNER.RunnerError, "must be booleans"
+            ):
+                RUNNER.evaluate_pre2_root17_gate(
+                    metrics, d_guarded=True, l_guarded=value,
+                    technical_requirements=self._technical(),
+                )
+
+    def test_f1_comparison_uses_only_frozen_computational_tolerance(self):
+        metrics = {
+            "F0": self._metrics(0.70, 0.20),
+            "D": self._metrics(0.71 - 0.5e-15, 0.19),
+        }
+        within_tau = RUNNER.evaluate_pre2_root18_decision(metrics, l_guarded=False)
+        self.assertEqual(within_tau["status"], "CANDIDATE_RARE_COMBINED_ONLY_VS_F0")
+        metrics["D"]["boundary_f1_0.2cM"] = 0.71 - 2.0e-15
+        beyond_tau = RUNNER.evaluate_pre2_root18_decision(metrics, l_guarded=False)
+        self.assertEqual(beyond_tau["status"], "STOP_PRE2_ON_THESE_ROOTS")
+
+    def test_root18_requires_D_to_pass_against_guarded_L_and_F0(self):
+        metrics = {
+            "F0": self._metrics(0.70, 0.20, 0.12),
+            "L": self._metrics(0.705, 0.19, 0.11),
+            "D": self._metrics(0.716, 0.18, 0.10),
+        }
+        passed = RUNNER.evaluate_pre2_root18_decision(metrics, l_guarded=True)
+        self.assertEqual(passed["status"], "CANDIDATE_D_FOR_NEW_PROSPECTIVE_ROOTS")
+        metrics["D"]["macro_ancestry_dose_mae"] = 0.195
+        failed = RUNNER.evaluate_pre2_root18_decision(metrics, l_guarded=True)
+        self.assertEqual(failed["status"], "STOP_PRE2_ON_THESE_ROOTS")
+
+    def test_root18_unguarded_L_is_not_a_comparator(self):
+        metrics = {
+            "F0": self._metrics(0.70, 0.20),
+            "D": self._metrics(0.711, 0.19),
+        }
+        decision = RUNNER.evaluate_pre2_root18_decision(metrics, l_guarded=False)
+        self.assertEqual(decision["applicable_comparators"], ["F0"])
+        self.assertEqual(decision["status"], "CANDIDATE_RARE_COMBINED_ONLY_VS_F0")
+
+    def test_gate_rejects_out_of_domain_metrics(self):
+        for name, value in (
+            ("boundary_f1_0.2cM", 1.01),
+            ("macro_ancestry_dose_mae", -0.01),
+            ("false_transitions_per_cM_0.2cM", -0.01),
+        ):
+            metrics = {
+                "F0": self._metrics(0.70, 0.20),
+                "D": self._metrics(0.72, 0.19),
+            }
+            metrics["D"][name] = value
+            with self.subTest(name=name), self.assertRaisesRegex(
+                RUNNER.RunnerError, "outside|negative"
+            ):
+                RUNNER.evaluate_pre2_root18_decision(metrics, l_guarded=False)
+
+
 if __name__ == "__main__":
     unittest.main()

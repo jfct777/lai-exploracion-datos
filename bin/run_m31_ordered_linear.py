@@ -57,6 +57,20 @@ GUARD_FAILURE_NAMES = (
     "macro_ancestry_dose_mae_gt_f0",
     "false_transitions_per_cM_0.2cM_gt_f0",
 )
+PRE2_ANCESTRY_METRICS = tuple(
+    metric
+    for ancestry in core.ANCESTRIES
+    for metric in (
+        f"ancestry_dose_mae_{ancestry}",
+        f"ancestry_dose_mae_truth_present_{ancestry}",
+    )
+)
+PRE2_GATE_METRIC_NAMES = (
+    "boundary_f1_0.2cM",
+    "false_transitions_per_cM_0.2cM",
+    "macro_ancestry_dose_mae",
+    *PRE2_ANCESTRY_METRICS,
+)
 
 
 class RunnerError(RuntimeError):
@@ -362,6 +376,8 @@ class FittedArm:
     guard_failures: tuple[str, ...] = ()
     sufficient_stats_sha256: Mapping[str, str] = field(default_factory=dict)
     fold_stats_sha256: Mapping[str, str] = field(default_factory=dict)
+    pre2_cv_metrics: Mapping[str, float] = field(default_factory=dict)
+    f0_pre2_cv_metrics: Mapping[str, float] = field(default_factory=dict)
 
 
 def _validate_workers(workers: int) -> int:
@@ -531,8 +547,17 @@ def fit_arm_streaming(
             f0_counts = ordered_map(score_f0, range(len(root.samples)))
             f0_metrics_all = summarize_counts(f0_counts)
             f0_metrics = {name: float(f0_metrics_all[name]) for name in AUDIT_METRIC_NAMES}
-            candidates: list[tuple[tuple[float, ...], float, float, dict[str, float], tuple[str, ...]]] = []
-            guarded_candidates: list[tuple[tuple[float, ...], float, float, dict[str, float], tuple[str, ...]]] = []
+            f0_pre2_metrics = (
+                {name: float(f0_metrics_all[name]) for name in PRE2_GATE_METRIC_NAMES}
+                if all(f0_metrics_all.get(name) is not None for name in PRE2_GATE_METRIC_NAMES)
+                else {}
+            )
+            candidates: list[tuple[
+                tuple[float, ...], float, float, dict[str, float], tuple[str, ...], dict[str, float]
+            ]] = []
+            guarded_candidates: list[tuple[
+                tuple[float, ...], float, float, dict[str, float], tuple[str, ...], dict[str, float]
+            ]] = []
             candidate_rows: list[dict[str, Any]] = []
             for boundary_weight in boundary_weights:
                 for alpha in alphas:
@@ -550,6 +575,11 @@ def fit_arm_streaming(
                     counts = ordered_map(predict_and_score, range(len(root.samples)))
                     metrics_all = summarize_counts(counts)
                     metrics = {name: float(metrics_all[name]) for name in AUDIT_METRIC_NAMES}
+                    pre2_metrics = (
+                        {name: float(metrics_all[name]) for name in PRE2_GATE_METRIC_NAMES}
+                        if all(metrics_all.get(name) is not None for name in PRE2_GATE_METRIC_NAMES)
+                        else {}
+                    )
                     failures: list[str] = []
                     if metrics["macro_ancestry_dose_mae"] > f0_metrics["macro_ancestry_dose_mae"] + 1e-15:
                         failures.append("macro_ancestry_dose_mae_gt_f0")
@@ -559,7 +589,9 @@ def fit_arm_streaming(
                     key = (-metrics["boundary_f1_0.2cM"], metrics["false_transitions_per_cM_0.2cM"],
                            metrics["macro_ancestry_dose_mae"], metrics["haplotype_brier"],
                            float(boundary_weight), -float(alpha))
-                    candidate = (key, float(boundary_weight), float(alpha), metrics, guard_failures)
+                    candidate = (
+                        key, float(boundary_weight), float(alpha), metrics, guard_failures, pre2_metrics,
+                    )
                     candidates.append(candidate)
                     if not guard_failures:
                         guarded_candidates.append(candidate)
@@ -574,7 +606,10 @@ def fit_arm_streaming(
             guarded = bool(guarded_candidates)
             selection_status = "GUARDED_CONFIG" if guarded else "NO_GUARDED_CONFIG"
             selection_pool = guarded_candidates if guarded else candidates
-            _key, selected_weight, selected_alpha, selected_metrics, selected_failures = min(
+            (
+                _key, selected_weight, selected_alpha, selected_metrics,
+                selected_failures, selected_pre2_metrics,
+            ) = min(
                 selection_pool, key=lambda item: item[0]
             )
             selected_matches = 0
@@ -605,6 +640,7 @@ def fit_arm_streaming(
         selected_metrics["macro_ancestry_dose_mae"],
         selected_metrics["haplotype_brier"], guarded, selection_status, model, feature_count,
         f0_metrics, tuple(candidate_rows), selected_failures, stats_hashes, fold_stats_hashes,
+        selected_pre2_metrics, f0_pre2_metrics,
     )
 
 
@@ -646,6 +682,12 @@ class ScoreCounts:
     total_cm: float
     confusion: np.ndarray
     boundary: Mapping[float, tuple[int, int, int, tuple[float, ...]]]
+    truth_present_mae_numerator: np.ndarray | None = None
+    truth_present_cm_denominator: np.ndarray | None = None
+    boundary_by_ancestry: Mapping[
+        float, tuple[tuple[int, int, int, tuple[float, ...]], ...]
+    ] | None = None
+    truth_ancestry_haplotype_cm: np.ndarray | None = None
 
 
 def summarize_counts(counts: Sequence[ScoreCounts]) -> dict[str, Any]:
@@ -660,6 +702,46 @@ def summarize_counts(counts: Sequence[ScoreCounts]) -> dict[str, Any]:
         "haplotype_brier": float(sum(item.brier_numerator for item in counts) / total_cm),
         "diploid_macro_f1_fixed_six": _macro_f1_confusion(confusion),
     }
+    for item in counts:
+        require(
+            (item.truth_present_mae_numerator is None)
+            == (item.truth_present_cm_denominator is None),
+            f"truth-present numerator/denominator pairing differs for {item.sample_id}",
+        )
+        if item.truth_present_mae_numerator is not None:
+            numerator = np.asarray(item.truth_present_mae_numerator, dtype=float)
+            denominator = np.asarray(item.truth_present_cm_denominator, dtype=float)
+            require(numerator.shape == (3,) and denominator.shape == (3,),
+                    f"truth-present counts have wrong shape for {item.sample_id}")
+            require(np.all(np.isfinite(numerator)) and np.all(np.isfinite(denominator)),
+                    f"truth-present counts are nonfinite for {item.sample_id}")
+            require(np.all(numerator >= 0.0) and np.all(denominator >= 0.0),
+                    f"truth-present counts are negative for {item.sample_id}")
+    has_truth_present = [
+        item.truth_present_mae_numerator is not None
+        and item.truth_present_cm_denominator is not None
+        for item in counts
+    ]
+    require(all(has_truth_present) or not any(has_truth_present),
+            "truth-present score counts are only partially populated")
+    if all(has_truth_present):
+        present_numerator = sum(
+            (np.asarray(item.truth_present_mae_numerator, dtype=float) for item in counts),
+            np.zeros(3),
+        )
+        present_denominator = sum(
+            (np.asarray(item.truth_present_cm_denominator, dtype=float) for item in counts),
+            np.zeros(3),
+        )
+        require(np.all(present_denominator >= 0.0), "negative truth-present cM denominator")
+        for index, ancestry in enumerate(core.ANCESTRIES):
+            denominator = float(present_denominator[index])
+            numerator = float(present_numerator[index])
+            output[f"ancestry_dose_mae_truth_present_{ancestry}_numerator"] = numerator
+            output[f"ancestry_dose_mae_truth_present_{ancestry}_denominator_cm"] = denominator
+            output[f"ancestry_dose_mae_truth_present_{ancestry}"] = (
+                numerator / denominator if denominator > 0.0 else None
+            )
     for tolerance in core.BOUNDARY_TOLERANCES_CM:
         truth_count = sum(item.boundary[tolerance][0] for item in counts)
         prediction_count = sum(item.boundary[tolerance][1] for item in counts)
@@ -672,6 +754,88 @@ def summarize_counts(counts: Sequence[ScoreCounts]) -> dict[str, Any]:
         output[f"false_transitions_per_cM_{suffix}"] = (prediction_count - matched) / (2.0 * total_cm)
         output[f"matched_boundary_median_{suffix}"] = float(np.median(distances)) if distances else None
         output[f"matched_boundary_p90_{suffix}"] = float(np.quantile(distances, 0.9)) if distances else None
+    has_ancestry_boundaries = [item.boundary_by_ancestry is not None for item in counts]
+    require(all(has_ancestry_boundaries) or not any(has_ancestry_boundaries),
+            "ancestry-specific boundary counts are only partially populated")
+    if all(has_ancestry_boundaries):
+        for item in counts:
+            ancestry_boundary = item.boundary_by_ancestry
+            require(ancestry_boundary is not None, "ancestry boundary counts unexpectedly absent")
+            require(set(ancestry_boundary) == set(core.BOUNDARY_TOLERANCES_CM),
+                    f"ancestry boundary tolerances differ for {item.sample_id}")
+            require(all(len(values) == len(core.ANCESTRIES) for values in ancestry_boundary.values()),
+                    f"ancestry boundary dimension differs for {item.sample_id}")
+            for tolerance, by_ancestry in ancestry_boundary.items():
+                for values in by_ancestry:
+                    require(isinstance(values, tuple) and len(values) == 4,
+                            f"ancestry boundary count layout differs for {item.sample_id}")
+                    truth_count, prediction_count, matched, distances = values
+                    require(all(
+                        isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                        for value in (truth_count, prediction_count, matched)
+                    ), f"ancestry boundary counts are invalid for {item.sample_id}")
+                    require(matched <= min(truth_count, prediction_count),
+                            f"ancestry matched count is impossible for {item.sample_id}")
+                    require(isinstance(distances, tuple) and len(distances) == matched,
+                            f"ancestry boundary distances differ from matches for {item.sample_id}")
+                    require(all(
+                        isinstance(distance, (int, float)) and not isinstance(distance, bool)
+                        and math.isfinite(float(distance))
+                        and 0.0 <= float(distance) <= float(tolerance) + 1e-12
+                        for distance in distances
+                    ), f"ancestry boundary distance is invalid for {item.sample_id}")
+                global_counts = item.boundary[tolerance]
+                require(sum(value[0] for value in by_ancestry) == 2 * global_counts[0],
+                        f"ancestry truth boundary counts do not reconstruct global counts for {item.sample_id}")
+                require(sum(value[1] for value in by_ancestry) == 2 * global_counts[1],
+                        f"ancestry prediction boundary counts do not reconstruct global counts for {item.sample_id}")
+                require(sum(value[2] for value in by_ancestry) == 2 * global_counts[2],
+                        f"ancestry matched boundary counts do not reconstruct global counts for {item.sample_id}")
+            exposure = np.asarray(item.truth_ancestry_haplotype_cm, dtype=float)
+            require(exposure.shape == (3,) and np.all(np.isfinite(exposure))
+                    and np.all(exposure >= 0.0),
+                    f"ancestry haplotype-cM exposure is invalid for {item.sample_id}")
+        exposure_by_ancestry = sum(
+            (np.asarray(item.truth_ancestry_haplotype_cm, dtype=float) for item in counts),
+            np.zeros(3),
+        )
+        for tolerance in core.BOUNDARY_TOLERANCES_CM:
+            suffix = f"{tolerance:.1f}cM"
+            for ancestry_index, ancestry in enumerate(core.ANCESTRIES):
+                ancestry_counts = [
+                    item.boundary_by_ancestry[tolerance][ancestry_index]  # type: ignore[index]
+                    for item in counts
+                ]
+                truth_count = sum(item[0] for item in ancestry_counts)
+                prediction_count = sum(item[1] for item in ancestry_counts)
+                matched = sum(item[2] for item in ancestry_counts)
+                distances = [distance for item in ancestry_counts for distance in item[3]]
+                output[f"boundary_truth_count_{suffix}_{ancestry}"] = truth_count
+                output[f"boundary_prediction_count_{suffix}_{ancestry}"] = prediction_count
+                output[f"boundary_matched_count_{suffix}_{ancestry}"] = matched
+                if truth_count == 0 and prediction_count == 0:
+                    boundary_f1 = None
+                else:
+                    precision = matched / prediction_count if prediction_count else 0.0
+                    recall = matched / truth_count if truth_count else 0.0
+                    boundary_f1 = (
+                        2.0 * precision * recall / (precision + recall)
+                        if precision + recall else 0.0
+                    )
+                output[f"boundary_f1_{suffix}_{ancestry}"] = boundary_f1
+                exposure = float(exposure_by_ancestry[ancestry_index])
+                output[
+                    f"false_transitions_per_cM_{suffix}_{ancestry}_denominator_ancestry_haplotype_cm"
+                ] = exposure
+                output[f"false_transitions_per_cM_{suffix}_{ancestry}"] = (
+                    (prediction_count - matched) / exposure if exposure > 0.0 else None
+                )
+                output[f"matched_boundary_median_{suffix}_{ancestry}"] = (
+                    float(np.median(distances)) if distances else None
+                )
+                output[f"matched_boundary_p90_{suffix}_{ancestry}"] = (
+                    float(np.quantile(distances, 0.9)) if distances else None
+                )
     return output
 
 
@@ -680,6 +844,9 @@ def score_sample(root: FeatureDataset, truth: TruthBundle, sample_index: int, pr
     sample = root.samples[sample_index]
     require(predicted.shape == (len(root.marker_positions), 2, 3), "outer prediction shape differs from FLARE grid")
     mae_num = np.zeros(3)
+    truth_present_mae_num = np.zeros(3)
+    truth_present_cm = np.zeros(3)
+    truth_ancestry_haplotype_cm = np.zeros(3)
     brier_num = 0.0
     total_cm = 0.0
     confusion = np.zeros((6, 6), dtype=np.float64)
@@ -701,7 +868,12 @@ def score_sample(root: FeatureDataset, truth: TruthBundle, sample_index: int, pr
             labels = tuple(core.ANCESTRIES.index(truth_pair[hap][truth_indexes[hap]].ancestry) for hap in (0, 1))
             truth_dose = np.bincount(labels, minlength=3).astype(float)
             predicted_dose = predicted[marker_index].sum(axis=0)
-            mae_num += weight * np.abs(predicted_dose - truth_dose) / 2.0
+            interval_dose_error = weight * np.abs(predicted_dose - truth_dose) / 2.0
+            mae_num += interval_dose_error
+            present = truth_dose > 0.0
+            truth_present_mae_num[present] += interval_dose_error[present]
+            truth_present_cm[present] += weight
+            truth_ancestry_haplotype_cm += weight * truth_dose
             targets = np.eye(3)[list(labels)]
             brier_num += weight * float(np.square(predicted[marker_index] - targets).sum()) / 4.0
             observed_state = tuple(sorted(labels))
@@ -713,13 +885,210 @@ def score_sample(root: FeatureDataset, truth: TruthBundle, sample_index: int, pr
     truth_boundaries = [_truth_boundaries_exact(root, truth, sample, hap) for hap in (0, 1)]
     prediction_boundaries = [_predicted_boundaries(root, predicted, hap) for hap in (0, 1)]
     boundary: dict[float, tuple[int, int, int, tuple[float, ...]]] = {}
+    boundary_by_ancestry: dict[
+        float, tuple[tuple[int, int, int, tuple[float, ...]], ...]
+    ] = {}
     for tolerance in core.BOUNDARY_TOLERANCES_CM:
-        pairs = [pair for hap in (0, 1) for pair in core.ordered_boundary_pairs(truth_boundaries[hap], prediction_boundaries[hap], tolerance)]
+        pairs_by_haplotype = [
+            core.ordered_boundary_pairs(truth_boundaries[hap], prediction_boundaries[hap], tolerance)
+            for hap in (0, 1)
+        ]
+        pairs = [pair for haplotype_pairs in pairs_by_haplotype for pair in haplotype_pairs]
         distances = tuple(float(pair[2]) for pair in pairs)
         truth_count = sum(map(len, truth_boundaries)); prediction_count = sum(map(len, prediction_boundaries)); matched = len(pairs)
         boundary[float(tolerance)] = (truth_count, prediction_count, matched, distances)
-    counts = ScoreCounts(sample, mae_num, brier_num, total_cm, confusion, boundary)
+        ancestry_counts = []
+        for ancestry_index in range(len(core.ANCESTRIES)):
+            truth_count = sum(
+                ancestry_index in (item.before, item.after)
+                for haplotype in truth_boundaries for item in haplotype
+            )
+            prediction_count = sum(
+                ancestry_index in (item.before, item.after)
+                for haplotype in prediction_boundaries for item in haplotype
+            )
+            ancestry_distances = tuple(
+                float(distance)
+                for hap in (0, 1)
+                for truth_index, _prediction_index, distance in pairs_by_haplotype[hap]
+                if ancestry_index in (
+                    truth_boundaries[hap][truth_index].before,
+                    truth_boundaries[hap][truth_index].after,
+                )
+            )
+            ancestry_counts.append((
+                int(truth_count), int(prediction_count), len(ancestry_distances), ancestry_distances,
+            ))
+        boundary_by_ancestry[float(tolerance)] = tuple(ancestry_counts)
+    counts = ScoreCounts(
+        sample, mae_num, brier_num, total_cm, confusion, boundary,
+        truth_present_mae_num, truth_present_cm, boundary_by_ancestry,
+        truth_ancestry_haplotype_cm,
+    )
     return {"sample_id": sample, **summarize_counts([counts])}, counts
+
+
+PRE2_PRIMARY_DELTA_F1 = 0.01
+PRE2_DELTA_F1_SENSITIVITIES = (0.005, 0.02)
+PRE2_TAU = 1e-15
+PRE2_TECHNICAL_REQUIREMENTS = (
+    "contract_code_input_container_hashes_match",
+    "known_answers_pass",
+    "workers_1_4_8_exact_equality_pass",
+    "C_exactly_reproduces_PRE1_known_answer_configuration_metrics_and_semantic_prediction_hash",
+    "truth_blind_prediction_manifest_fsynced",
+)
+def _finite_metric(metrics: Mapping[str, Any], name: str, arm: str) -> float:
+    require(name in metrics, f"PRE2 metric {name} is absent for {arm}")
+    value = metrics[name]
+    require(isinstance(value, (int, float, np.number)) and not isinstance(value, bool),
+            f"PRE2 metric {name} is not numeric for {arm}")
+    value = float(value)
+    require(math.isfinite(value), f"PRE2 metric {name} is not finite for {arm}")
+    if "boundary_f1" in name or "dose_mae" in name:
+        require(0.0 <= value <= 1.0, f"PRE2 metric {name} is outside [0,1] for {arm}")
+    if "false_transitions_per_cM" in name:
+        require(value >= 0.0, f"PRE2 metric {name} is negative for {arm}")
+    return value
+
+
+def _pre2_f1_checks(
+    metrics: Mapping[str, Mapping[str, Any]], comparators: Sequence[str], delta: float,
+    tau: float,
+) -> list[dict[str, Any]]:
+    observed = _finite_metric(metrics["D"], "boundary_f1_0.2cM", "D")
+    checks = []
+    for comparator in comparators:
+        comparator_value = _finite_metric(
+            metrics[comparator], "boundary_f1_0.2cM", comparator,
+        )
+        checks.append({
+            "metric": "boundary_f1_0.2cM",
+            "comparator": comparator,
+            "observed_D": observed,
+            "required_D": comparator_value + delta,
+            "comparison_tolerance": tau,
+            "pass": observed + tau >= comparator_value + delta,
+        })
+    return checks
+
+
+def _pre2_noninferiority_checks(
+    metrics: Mapping[str, Mapping[str, Any]], comparators: Sequence[str],
+    names: Sequence[str], tau: float,
+) -> list[dict[str, Any]]:
+    checks = []
+    for comparator in comparators:
+        for name in names:
+            observed = _finite_metric(metrics["D"], name, "D")
+            limit = _finite_metric(metrics[comparator], name, comparator) + tau
+            checks.append({
+                "metric": name,
+                "comparator": comparator,
+                "observed_D": observed,
+                "maximum_D": limit,
+                "pass": observed <= limit,
+            })
+    return checks
+
+
+def _pre2_global_guarded(
+    metrics: Mapping[str, Mapping[str, Any]], arm: str, tau: float,
+) -> bool:
+    return (
+        _finite_metric(metrics[arm], "macro_ancestry_dose_mae", arm)
+        <= _finite_metric(metrics["F0"], "macro_ancestry_dose_mae", "F0") + tau
+        and _finite_metric(metrics[arm], "false_transitions_per_cM_0.2cM", arm)
+        <= _finite_metric(metrics["F0"], "false_transitions_per_cM_0.2cM", "F0") + tau
+    )
+
+
+def evaluate_pre2_root17_gate(
+    metrics: Mapping[str, Mapping[str, Any]], *, d_guarded: bool, l_guarded: bool,
+    technical_requirements: Mapping[str, bool], delta: float = PRE2_PRIMARY_DELTA_F1,
+    tau: float = PRE2_TAU,
+) -> dict[str, Any]:
+    """Evaluate the frozen PRE2 root17 gate without reading root18 truth."""
+    require(type(d_guarded) is bool and type(l_guarded) is bool,
+            "PRE2 guarded flags must be booleans")
+    require(delta == PRE2_PRIMARY_DELTA_F1, "PRE2 primary delta drifted from frozen contract")
+    require(tau == PRE2_TAU, "PRE2 tau drifted from frozen contract")
+    require(set(metrics) >= {"F0", "L", "D"}, "PRE2 root17 metrics require F0, L and D")
+    require(set(technical_requirements) == set(PRE2_TECHNICAL_REQUIREMENTS),
+            "PRE2 technical requirement set drifted from frozen contract")
+    technical = [
+        {"requirement": str(name), "pass": value is True}
+        for name, value in sorted(technical_requirements.items())
+    ]
+    comparators = ["F0", *(["L"] if l_guarded else [])]
+    d_guard_consistent = d_guarded is True and _pre2_global_guarded(metrics, "D", tau)
+    l_guard_consistent = l_guarded is _pre2_global_guarded(metrics, "L", tau)
+    scientific: list[dict[str, Any]] = [
+        {"requirement": "G_D_nonempty_and_selected_D_repasses_global_guards",
+         "pass": d_guard_consistent},
+        {"requirement": "if_G_L_nonempty_selected_L_repasses_global_guards",
+         "pass": l_guard_consistent},
+        *_pre2_f1_checks(metrics, comparators, delta, tau),
+        *_pre2_noninferiority_checks(metrics, comparators, PRE2_ANCESTRY_METRICS, tau),
+    ]
+    passed = all(item["pass"] for item in technical + scientific)
+    sensitivity = {}
+    for threshold in (PRE2_DELTA_F1_SENSITIVITIES[0], delta, PRE2_DELTA_F1_SENSITIVITIES[1]):
+        checks = _pre2_f1_checks(metrics, comparators, threshold, tau)
+        sensitivity[f"{threshold:.3f}"] = all(item["pass"] for item in checks)
+    return {
+        "stage": "ROOT17_OPEN_GATE",
+        "applicable_comparators": comparators,
+        "l_guarded": l_guarded,
+        "technical_checks": technical,
+        "scientific_checks": scientific,
+        "delta_f1_sensitivity_pass": sensitivity,
+        "status": (
+            "OPEN_ROOT18" if passed else "STOP_PRE2_BEFORE_ROOT18"
+        ),
+        "candidate_scope": (
+            "PREDICTIVE_D_INCREMENT_OVER_L_NO_MECHANISM"
+            if l_guarded else "CANDIDATE_RARE_COMBINED_ONLY"
+        ),
+    }
+
+
+def evaluate_pre2_root18_decision(
+    metrics: Mapping[str, Mapping[str, Any]], *, l_guarded: bool,
+    delta: float = PRE2_PRIMARY_DELTA_F1, tau: float = PRE2_TAU,
+) -> dict[str, Any]:
+    """Apply the frozen one-way root18 decision after truth is opened once."""
+    require(type(l_guarded) is bool, "PRE2 guarded flags must be booleans")
+    require(delta == PRE2_PRIMARY_DELTA_F1, "PRE2 primary delta drifted from frozen contract")
+    require(tau == PRE2_TAU, "PRE2 tau drifted from frozen contract")
+    require(set(metrics) >= {"F0", "D"}, "PRE2 root18 metrics require F0 and D")
+    require(not l_guarded or "L" in metrics, "guarded L metrics are absent")
+    comparators = ["F0", *(["L"] if l_guarded else [])]
+    required = [
+        *_pre2_f1_checks(metrics, comparators, delta, tau),
+        *_pre2_noninferiority_checks(
+            metrics, comparators,
+            ("macro_ancestry_dose_mae", "false_transitions_per_cM_0.2cM", *PRE2_ANCESTRY_METRICS),
+            tau,
+        ),
+    ]
+    passed = all(item["pass"] for item in required)
+    sensitivity = {}
+    for threshold in (PRE2_DELTA_F1_SENSITIVITIES[0], delta, PRE2_DELTA_F1_SENSITIVITIES[1]):
+        checks = _pre2_f1_checks(metrics, comparators, threshold, tau)
+        sensitivity[f"{threshold:.3f}"] = all(item["pass"] for item in checks)
+    return {
+        "stage": "ROOT18_ONE_WAY_DECISION",
+        "applicable_comparators": comparators,
+        "l_guarded": l_guarded,
+        "required_checks": required,
+        "delta_f1_sensitivity_pass": sensitivity,
+        "status": (
+            ("CANDIDATE_D_FOR_NEW_PROSPECTIVE_ROOTS" if l_guarded
+             else "CANDIDATE_RARE_COMBINED_ONLY_VS_F0")
+            if passed else "STOP_PRE2_ON_THESE_ROOTS"
+        ),
+    }
 
 
 def bootstrap_counts(counts: Sequence[ScoreCounts]) -> dict[str, Any]:
