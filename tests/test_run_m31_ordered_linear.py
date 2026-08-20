@@ -69,6 +69,57 @@ def _score_counts(
     )
 
 
+def _mock_threadpool_runtime():
+    return {
+        "controller": "threadpoolctl",
+        "controller_version": "3.6.0",
+        "status": "VERIFIED_ALL_POOLS_SINGLE_THREAD",
+        "pools": [{
+            "user_api": "blas", "internal_api": "openblas", "prefix": "libopenblas",
+            "version": "0.3.test", "num_threads": 1, "threading_layer": "pthreads",
+            "architecture": "fixture",
+        }],
+    }
+
+
+def _valid_fitted(arm: str):
+    f0 = {
+        "boundary_f1_0.2cM": 0.5,
+        "false_transitions_per_cM_0.2cM": 0.2,
+        "macro_ancestry_dose_mae": 0.3,
+        "haplotype_brier": 0.4,
+    }
+    metrics = {
+        "boundary_f1_0.2cM": 0.7,
+        "false_transitions_per_cM_0.2cM": 0.1,
+        "macro_ancestry_dose_mae": 0.2,
+        "haplotype_brier": 0.3,
+    }
+    selected_pair = (1.0, 10.0)
+    candidates = tuple({
+        "boundary_weight": float(weight),
+        "alpha": float(alpha),
+        **metrics,
+        "guarded": True,
+        "guard_failures": [],
+        "selected": (float(weight), float(alpha)) == selected_pair,
+    } for weight in CORE.EXPECTED_BOUNDARY_WEIGHTS for alpha in CORE.EXPECTED_ALPHAS)
+    return SimpleNamespace(
+        arm=arm, alpha=selected_pair[1], boundary_weight=selected_pair[0],
+        cv_boundary_f1=metrics["boundary_f1_0.2cM"],
+        cv_false_transitions_per_cm=metrics["false_transitions_per_cM_0.2cM"],
+        cv_macro_ancestry_dose_mae=metrics["macro_ancestry_dose_mae"],
+        cv_brier=metrics["haplotype_brier"], guarded=True, selection_status="GUARDED_CONFIG",
+        feature_count=RUNNER.PILOT_FEATURE_COUNTS[arm], f0_cv_metrics=f0,
+        candidate_table=candidates, guard_failures=(),
+        sufficient_stats_sha256={str(int(weight)): "a" * 64 for weight in CORE.EXPECTED_BOUNDARY_WEIGHTS},
+        fold_stats_sha256={
+            f"fold{fold}:{int(weight)}": "b" * 64
+            for fold in range(3) for weight in CORE.EXPECTED_BOUNDARY_WEIGHTS
+        },
+    )
+
+
 class SufficientStatisticsEquivalenceTest(unittest.TestCase):
     def test_fit_from_stats_matches_core_fit_with_voronoi_boundary_weights(self):
         genetic_map = CORE.GeneticMap(
@@ -198,6 +249,157 @@ class GroupedCvSelectionTest(unittest.TestCase):
         self.assertEqual(fitted.cv_boundary_f1, 0.80)
 
 
+class ParallelIndividualEquivalenceTest(unittest.TestCase):
+    @staticmethod
+    def _fixture(fail_index=None):
+        samples = tuple(f"S{index}" for index in range(6))
+        positions = np.array([100, 200, 300, 400], dtype=np.int64)
+        genetic_map = CORE.GeneticMap(
+            np.array([100, 401], dtype=np.int64), np.array([0.0, 0.301], dtype=float),
+        )
+        marker_cm = np.asarray(genetic_map.cm_at(positions), dtype=float)
+        left, right, marker_weights = RUNNER._physical_voronoi(positions, genetic_map)
+        segments = {
+            sample: (
+                [CORE.TruthSegment(100, 250, "AFR"), CORE.TruthSegment(250, 401, "EUR")],
+                [CORE.TruthSegment(100, 250, "AFR"), CORE.TruthSegment(250, 401, "EUR")],
+            )
+            for sample in samples
+        }
+        truth_markers = CORE.truth_at_markers(segments, samples, positions)
+        probabilities = np.full((len(positions), len(samples), 2, 3), 1.0 / 3.0, dtype=float)
+        boundary_rows = RUNNER._truth_boundary_rows(segments, samples, marker_cm, genetic_map, 0.2)
+
+        class Root:
+            @staticmethod
+            def support(_arm, _replicate):
+                return np.empty((0, 3)), np.empty(0, dtype=bool)
+
+            @staticmethod
+            def features(sample_index, _arm, _replicate=None):
+                if sample_index == fail_index:
+                    raise RuntimeError("synthetic worker failure")
+                target = truth_markers[:, sample_index].reshape(-1, 3)
+                marker = np.repeat(np.linspace(-1.0, 1.0, len(positions)), 2)[:, None]
+                hap = np.tile([0.0, 1.0], len(positions))[:, None]
+                base = np.column_stack([target, marker, hap])
+                padding = np.zeros((len(base), RUNNER.PILOT_FEATURE_COUNTS["C"] - base.shape[1]))
+                return np.asarray(np.column_stack([base, padding]), dtype=np.float32)
+
+        root = Root()
+        root.name = "root17"
+        root.seed = 20260817
+        root.flare = SimpleNamespace(probabilities=probabilities)
+        root.marker_positions = positions
+        root.marker_cm = marker_cm
+        root.marker_weights_cm = marker_weights
+        root.cell_left_bp = left
+        root.cell_right_bp = right
+        root.samples = samples
+        root.genetic_map = genetic_map
+        truth = RUNNER.TruthBundle("root17", segments, truth_markers, boundary_rows)
+        return root, truth
+
+    def test_workers1_and4_are_exact_for_stats_selection_metrics_model_and_predictions(self):
+        root, truth = self._fixture()
+        kwargs = dict(
+            root=root, truth=truth, arm="C", replicate=None,
+            alphas=CORE.EXPECTED_ALPHAS,
+            boundary_weights=CORE.EXPECTED_BOUNDARY_WEIGHTS,
+            cv_seed=71,
+        )
+        serial = RUNNER.fit_arm_streaming(**kwargs, workers=1)
+        with mock.patch.dict(RUNNER.os.environ, {name: "1" for name in RUNNER.THREAD_LIMIT_ENV}), \
+                mock.patch.object(RUNNER, "_threadpool_runtime", return_value=_mock_threadpool_runtime()):
+            parallel = RUNNER.fit_arm_streaming(**kwargs, workers=4)
+
+        self.assertEqual(serial.sufficient_stats_sha256, parallel.sufficient_stats_sha256)
+        self.assertEqual(serial.fold_stats_sha256, parallel.fold_stats_sha256)
+        self.assertEqual(serial.alpha, parallel.alpha)
+        self.assertEqual(serial.boundary_weight, parallel.boundary_weight)
+        self.assertEqual(serial.f0_cv_metrics, parallel.f0_cv_metrics)
+        self.assertEqual(serial.candidate_table, parallel.candidate_table)
+        self.assertEqual(serial.guard_failures, parallel.guard_failures)
+        self.assertEqual(len(parallel.candidate_table), 18)
+        self.assertEqual(sum(bool(row["selected"]) for row in parallel.candidate_table), 1)
+        for row in parallel.candidate_table:
+            self.assertIn("guard_failures", row)
+            self.assertIn("guarded", row)
+        for name in ("feature_mean", "feature_scale", "residual_intercept", "coefficients"):
+            np.testing.assert_array_equal(getattr(serial.model, name), getattr(parallel.model, name))
+        serial_artifact = RUNNER.prepare_predictions(root, serial, "C", None)
+        parallel_artifact = RUNNER.prepare_predictions(root, parallel, "C", None)
+        self.assertEqual(serial_artifact.sha256, parallel_artifact.sha256)
+        for left_array, right_array in zip(serial_artifact.arrays, parallel_artifact.arrays):
+            np.testing.assert_array_equal(left_array, right_array)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = RUNNER._write_prediction_checkpoint(
+                Path(tmp), parallel_artifact, parallel, "c" * 64,
+            )
+            fit = checkpoint["fit"]
+            self.assertEqual(len(fit["candidate_table"]), 18)
+            self.assertEqual(fit["f0_cv_metrics"], parallel.f0_cv_metrics)
+            self.assertEqual(fit["guard_failures"], list(parallel.guard_failures))
+            self.assertEqual(fit["sufficient_stats_sha256"], parallel.sufficient_stats_sha256)
+            self.assertEqual(fit["fold_stats_sha256"], parallel.fold_stats_sha256)
+
+    def test_workers_validation_and_worker_failure_are_fail_closed(self):
+        root, truth = self._fixture(fail_index=2)
+        with self.assertRaisesRegex(RUNNER.RunnerError, ">=1"):
+            RUNNER.fit_arm_streaming(
+                root, truth, "C", None, (0.1,), (1.0,), cv_seed=71, workers=0,
+            )
+        with mock.patch.dict(RUNNER.os.environ, {}, clear=True), self.assertRaisesRegex(
+            RUNNER.RunnerError, "environment limits"
+        ):
+            RUNNER.fit_arm_streaming(
+                root, truth, "C", None, (0.1,), (1.0,), cv_seed=71, workers=4,
+            )
+        with mock.patch.dict(RUNNER.os.environ, {name: "1" for name in RUNNER.THREAD_LIMIT_ENV}), \
+                mock.patch.object(RUNNER, "_threadpool_runtime", return_value=_mock_threadpool_runtime()), \
+                self.assertRaisesRegex(RUNNER.RunnerError, "parallel individual worker failed.*worker failure"):
+            RUNNER.fit_arm_streaming(
+                root, truth, "C", None, (0.1,), (1.0,), cv_seed=71, workers=4,
+            )
+
+    def test_threadpoolctl_runtime_is_required_normalized_and_effectively_single_threaded(self):
+        good = SimpleNamespace(
+            __version__="3.6.0",
+            threadpool_info=lambda: [
+                {"user_api": "blas", "internal_api": "openblas", "prefix": "z", "version": "2",
+                 "num_threads": 1, "threading_layer": "pthreads", "architecture": "zen",
+                 "filepath": "/nonportable/z.so"},
+                {"user_api": "blas", "internal_api": "mkl", "prefix": "a", "version": "1",
+                 "num_threads": 1, "threading_layer": "intel", "architecture": "x86",
+                 "filepath": "/nonportable/a.so"},
+            ],
+        )
+        with mock.patch.object(RUNNER.importlib, "import_module", return_value=good):
+            runtime = RUNNER._threadpool_runtime(4)
+        self.assertEqual(runtime["status"], "VERIFIED_ALL_POOLS_SINGLE_THREAD")
+        self.assertEqual(runtime["controller_version"], "3.6.0")
+        self.assertEqual([pool["internal_api"] for pool in runtime["pools"]], ["mkl", "openblas"])
+        self.assertTrue(all("filepath" not in pool for pool in runtime["pools"]))
+
+        with mock.patch.object(RUNNER.importlib, "import_module", side_effect=ImportError("absent")), \
+                self.assertRaisesRegex(RUNNER.RunnerError, "importable threadpoolctl"):
+            RUNNER._threadpool_runtime(4)
+        for pools, pattern in (([], "at least one"), ([{"num_threads": 2}], "num_threads=1")):
+            fake = SimpleNamespace(__version__="3.6.0", threadpool_info=lambda pools=pools: pools)
+            with self.subTest(pools=pools), \
+                    mock.patch.object(RUNNER.importlib, "import_module", return_value=fake), \
+                    self.assertRaisesRegex(RUNNER.RunnerError, pattern):
+                RUNNER._threadpool_runtime(4)
+
+    def test_fail_closed_cli_boundary_reports_worker_error_and_exit_two(self):
+        stderr = io.StringIO()
+        with mock.patch.object(RUNNER, "main", side_effect=RUNNER.RunnerError("worker exploded")), \
+                mock.patch.object(RUNNER.sys, "stderr", stderr):
+            self.assertEqual(RUNNER.fail_closed_main(["fit-predict"]), 2)
+        self.assertEqual(stderr.getvalue(), "M31_FAIL_CLOSED: worker exploded\n")
+
+
 class ScoringAndBootstrapTest(unittest.TestCase):
     def test_boundary_f1_uses_global_counts_not_mean_individual_f1(self):
         counts = [
@@ -307,23 +509,20 @@ class DecisionTableTest(unittest.TestCase):
                 observed = RUNNER.decide(self._metrics(expected))
                 self.assertEqual(observed["label"], expected)
 
-    def test_real_D_or_H_must_be_guarded_but_unguarded_sham_stays_conservative(self):
+    def test_any_unguarded_real_or_sham_blocks_go_fail_closed(self):
         metrics = self._metrics("GO_NEW_ROOTS")
         for row in metrics:
             if row["arm"] == "D" and row["sham_replicate"] == "":
                 row["inner_cv_guarded"] = False
-        # An unguarded real D cannot claim GO; the already-improving L remains
-        # the narrow descriptive outcome.
-        self.assertEqual(RUNNER.decide(metrics)["label"], "LOAD_ONLY")
+        self.assertEqual(RUNNER.decide(metrics)["label"], "NO_GUARDED_CONFIG")
 
         metrics = self._metrics("GO_NEW_ROOTS")
         for row in metrics:
             if row["arm"] == "DSHAM" and row["sham_replicate"] == 7:
                 row["inner_cv_guarded"] = False
                 row["boundary_f1_0.2cM"] = 0.90
-        # The poor sham fit is not dropped post hoc: its larger null gain blocks
-        # D and therefore leaves only the load result.
-        self.assertEqual(RUNNER.decide(metrics)["label"], "LOAD_ONLY")
+        # The poor sham fit is retained, and its unguarded status also blocks GO.
+        self.assertEqual(RUNNER.decide(metrics)["label"], "NO_GUARDED_CONFIG")
 
     def test_requires_exact_32_unique_shams_and_reports_exact_p_resolution(self):
         metrics = self._metrics("GO_NEW_ROOTS")
@@ -427,6 +626,16 @@ class PredictionBoundaryAndScopeTest(unittest.TestCase):
                 choices.update(action.choices)
         self.assertTrue({"dry-run", "known-answer"}.issubset(choices))
         self.assertFalse({"valid", "validation", "test", "holdout"} & choices)
+        subparsers = next(
+            action for action in parser._actions
+            if isinstance(getattr(action, "choices", None), dict)
+            and "fit-predict" in action.choices
+        )
+        fit_predict_parser = subparsers.choices["fit-predict"]
+        fit_predict_actions = {action.dest: action for action in fit_predict_parser._actions}
+        self.assertEqual(fit_predict_actions["workers"].default, 1)
+        self.assertIs(fit_predict_actions["workers"].type, int)
+        self.assertNotIn("eval_root18_truth", fit_predict_actions)
 
         contract = REPO / "conf" / "m31_ordered_linear_preregistration.json"
         with tempfile.TemporaryDirectory() as tmp:
@@ -507,7 +716,7 @@ class DurableCheckpointAndProvenanceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             outdir = Path(tmp)
             with mock.patch.object(RUNNER.os, "fsync", wraps=RUNNER.os.fsync) as fsync:
-                checkpoint = RUNNER._write_prediction_checkpoint(outdir, artifact, None, context)
+                checkpoint = RUNNER._write_prediction_checkpoint(outdir, artifact, _valid_fitted("D"), context)
             # File data and both containing-directory entries are flushed.
             self.assertGreaterEqual(fsync.call_count, 4)
             checkpoint_path = outdir / checkpoint["checkpoint_file"]
@@ -527,6 +736,69 @@ class DurableCheckpointAndProvenanceTest(unittest.TestCase):
                 np.save(handle, stacked, allow_pickle=False)
             with self.assertRaisesRegex(RUNNER.RunnerError, "SHA-256"):
                 RUNNER._load_prediction_checkpoint(outdir, "D", context)
+
+    def test_resume_rejects_manipulated_fit_audit_payloads(self):
+        artifact = self._artifact()
+        context = "c" * 64
+
+        def mutate_duplicate_candidate(payload):
+            payload["fit"]["candidate_table"][1]["boundary_weight"] = \
+                payload["fit"]["candidate_table"][0]["boundary_weight"]
+            payload["fit"]["candidate_table"][1]["alpha"] = payload["fit"]["candidate_table"][0]["alpha"]
+
+        def mutate_wrong_selection(payload):
+            for row in payload["fit"]["candidate_table"]:
+                row["selected"] = False
+            payload["fit"]["candidate_table"][0]["selected"] = True
+
+        mutations = {
+            "fit_null": lambda payload: payload.__setitem__("fit", None),
+            "feature_count": lambda payload: payload["fit"].__setitem__("feature_count", 170),
+            "candidate_count": lambda payload: payload["fit"]["candidate_table"].pop(),
+            "duplicate_candidate": mutate_duplicate_candidate,
+            "wrong_selection": mutate_wrong_selection,
+            "nonfinite_metric": lambda payload: payload["fit"]["candidate_table"][0].__setitem__(
+                "haplotype_brier", float("nan")
+            ),
+            "guard_mismatch": lambda payload: payload["fit"]["candidate_table"][0].__setitem__(
+                "guarded", False
+            ),
+            "summary_guarded_mismatch": lambda payload: payload["fit"].__setitem__("guarded", False),
+            "selection_status_mismatch": lambda payload: payload["fit"].__setitem__(
+                "selection_status", "NO_GUARDED_CONFIG"
+            ),
+            "selected_metric_mismatch": lambda payload: payload["fit"].__setitem__("cv_brier", 0.31),
+            "missing_f0_metric": lambda payload: payload["fit"]["f0_cv_metrics"].pop("haplotype_brier"),
+            "bad_total_hash": lambda payload: payload["fit"]["sufficient_stats_sha256"].__setitem__(
+                "5", "not-a-sha"
+            ),
+            "bad_fold_hash": lambda payload: payload["fit"]["fold_stats_sha256"].__setitem__(
+                "fold2:20", "A" * 64
+            ),
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                outdir = Path(tmp)
+                checkpoint = RUNNER._write_prediction_checkpoint(
+                    outdir, artifact, _valid_fitted("D"), context,
+                )
+                checkpoint_path = outdir / checkpoint["checkpoint_file"]
+                payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+                mutation(payload)
+                checkpoint_path.write_text(json.dumps(payload, allow_nan=True), encoding="utf-8")
+                with self.assertRaisesRegex(RUNNER.RunnerError, "checkpoint"):
+                    RUNNER._load_prediction_checkpoint(outdir, "D", context)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            outdir = Path(tmp)
+            f0_artifact = replace(artifact, arm="F0")
+            checkpoint = RUNNER._write_prediction_checkpoint(outdir, f0_artifact, None, context)
+            checkpoint_path = outdir / checkpoint["checkpoint_file"]
+            payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            payload["fit"] = {"tampered": True}
+            checkpoint_path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(RUNNER.RunnerError, "F0 fit must be null"):
+                RUNNER._load_prediction_checkpoint(outdir, "F0", context)
 
     def test_provenance_never_labels_an_unverified_HEAD_as_verified(self):
         contract = REPO / "conf" / "m31_ordered_linear_preregistration.json"
@@ -565,12 +837,7 @@ class PilotProcessBoundaryTest(unittest.TestCase):
 
     @staticmethod
     def _fitted(arm):
-        return SimpleNamespace(
-            arm=arm, alpha=1.0, boundary_weight=5.0,
-            cv_boundary_f1=0.7, cv_false_transitions_per_cm=0.1,
-            cv_macro_ancestry_dose_mae=0.2, cv_brier=0.3,
-            guarded=True, selection_status="GUARDED_CONFIG", feature_count=59,
-        )
+        return _valid_fitted(arm)
 
     @staticmethod
     def _path_bundles(tmp):
@@ -597,7 +864,7 @@ class PilotProcessBoundaryTest(unittest.TestCase):
             train_paths, evaluation_paths = self._path_bundles(tmp)
             args = SimpleNamespace(
                 contract=contract_path, genetic_map=root / "map.tsv", outdir=outdir,
-                resume=False, container_digest="sha256:" + "a" * 64,
+                resume=False, workers=1, container_digest="sha256:" + "a" * 64,
                 invocation=("python3", "runner.py", "fit-predict"),
             )
             train_features = SimpleNamespace(name="root17", seed=20260817, samples=("S0", "S1"))
@@ -624,6 +891,7 @@ class PilotProcessBoundaryTest(unittest.TestCase):
                 mock.patch.object(RUNNER.core, "load_genetic_map", return_value=object()),
                 mock.patch.object(RUNNER, "load_feature_root", side_effect=fake_load_feature),
                 mock.patch.object(RUNNER, "load_truth_bundle", side_effect=fake_load_truth),
+                mock.patch.object(RUNNER, "_threadpool_runtime", return_value=_mock_threadpool_runtime()),
                 mock.patch.object(RUNNER, "fit_arm_streaming",
                                   side_effect=lambda _r, _t, arm, *_a, **_k: self._fitted(arm)) as fit,
                 mock.patch.object(RUNNER, "prepare_predictions", side_effect=fake_prepare),
@@ -637,14 +905,62 @@ class PilotProcessBoundaryTest(unittest.TestCase):
             self.assertEqual(manifest["context"]["train_root"], "root17")
             self.assertEqual(manifest["context"]["evaluation_root"], "root18")
             self.assertEqual(manifest["context"]["fitted_arms"], ["C", "L", "D"])
+            self.assertEqual(manifest["context"]["workers"], 1)
             self.assertEqual(set(manifest["checkpoints"]), {"F0", "C", "L", "D"})
             self.assertNotIn("H", manifest["checkpoints"])
             self.assertEqual([call.args[2] for call in fit.call_args_list], ["C", "L", "D"])
+            self.assertEqual([call.kwargs["workers"] for call in fit.call_args_list], [1, 1, 1])
             self.assertEqual(loaded_truth_paths, [train_paths])
             self.assertNotIn("truth", evaluation_paths.as_dict())
             provenance = json.loads((outdir / "pilot.fit_predict.provenance.json").read_text(encoding="utf-8"))
             self.assertFalse(provenance["evaluation_truth_was_accepted_or_read"])
             self.assertEqual(provenance["scientific_decision"], "NO_SCIENTIFIC_DECISION")
+            self.assertEqual(provenance["workers"], 1)
+            self.assertEqual(manifest["context"]["threadpool_runtime"], _mock_threadpool_runtime())
+            self.assertEqual(provenance["threadpool_runtime"], _mock_threadpool_runtime())
+
+    def test_fit_worker_failure_never_publishes_that_arm_checkpoint_or_manifest(self):
+        contract_path = REPO / "conf" / "m31_ordered_linear_preregistration.json"
+        contract = CORE.load_contract(contract_path)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outdir = root / "producer"
+            train_paths, evaluation_paths = self._path_bundles(tmp)
+            args = SimpleNamespace(
+                contract=contract_path, genetic_map=root / "map.tsv", outdir=outdir,
+                resume=False, workers=4, container_digest="sha256:" + "a" * 64,
+                invocation=("python3", "runner.py", "fit-predict"),
+            )
+            train_features = SimpleNamespace(name="root17", seed=20260817, samples=("S0", "S1"))
+            evaluation_features = SimpleNamespace(name="root18", seed=20260818, samples=("S0", "S1"))
+
+            def fake_load_feature(name, *_args, **_kwargs):
+                return train_features if name == "root17" else evaluation_features
+
+            with (
+                mock.patch.dict(RUNNER.os.environ, {name: "1" for name in RUNNER.THREAD_LIMIT_ENV}),
+                mock.patch.object(RUNNER, "_verify_code_contract_and_commit",
+                                  return_value=(contract, "b" * 40,
+                                                {"contract": "c", "runner": "r", "core": "k"})),
+                mock.patch.object(RUNNER, "_pilot_paths_from_args",
+                                  return_value=(train_paths, evaluation_paths)),
+                mock.patch.object(RUNNER, "_pilot_input_hashes", return_value={"genetic_map": "g"}),
+                mock.patch.object(RUNNER.core, "load_genetic_map", return_value=object()),
+                mock.patch.object(RUNNER, "load_feature_root", side_effect=fake_load_feature),
+                mock.patch.object(RUNNER, "load_truth_bundle", return_value=object()),
+                mock.patch.object(RUNNER, "_threadpool_runtime", return_value=_mock_threadpool_runtime()),
+                mock.patch.object(RUNNER, "fit_arm_streaming",
+                                  side_effect=RUNNER.RunnerError("parallel individual worker failed: synthetic")),
+                mock.patch.object(RUNNER, "prepare_predictions",
+                                  side_effect=lambda *_args: self._artifact("F0")),
+                self.assertRaisesRegex(RUNNER.RunnerError, "worker failed"),
+            ):
+                RUNNER.fit_predict_pilot(args)
+
+            self.assertTrue((outdir / "pilot.F0.checkpoint.json").exists())
+            self.assertFalse((outdir / "pilot.C.checkpoint.json").exists())
+            self.assertFalse((outdir / "pilot.C.predictions.npy").exists())
+            self.assertFalse((outdir / "pilot.fit_predict.manifest.json").exists())
 
     def _producer_fixture(self, directory, code_hashes, commit):
         context = {

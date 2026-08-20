@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+from concurrent.futures import ThreadPoolExecutor
 import gzip
 import hashlib
+import importlib
 import json
 import math
 import os
@@ -43,6 +45,18 @@ OUTPUT_NAMES = {
     "provenance": "m31_ordered_linear.provenance.json",
 }
 FITTED_ARMS = ("C", "L", "D", "H")
+THREAD_LIMIT_ENV = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS")
+PILOT_FEATURE_COUNTS = {"C": 59, "L": 99, "D": 171}
+AUDIT_METRIC_NAMES = (
+    "boundary_f1_0.2cM",
+    "false_transitions_per_cM_0.2cM",
+    "macro_ancestry_dose_mae",
+    "haplotype_brier",
+)
+GUARD_FAILURE_NAMES = (
+    "macro_ancestry_dose_mae_gt_f0",
+    "false_transitions_per_cM_0.2cM_gt_f0",
+)
 
 
 class RunnerError(RuntimeError):
@@ -298,6 +312,17 @@ def sample_stats(x: np.ndarray, residual: np.ndarray, weights: np.ndarray) -> Ra
                          x64.T @ weighted_x, x64.T @ (weights[:, None] * residual), 1)
 
 
+def _raw_stats_sha256(stats: RawRidgeStats) -> str:
+    digest = hashlib.sha256()
+    digest.update(np.asarray([stats.weight_sum], dtype="<f8").tobytes())
+    digest.update(np.asarray([stats.individuals], dtype="<i8").tobytes())
+    for array in (stats.sum_x, stats.sum_y, stats.sum_xx, stats.sum_xy):
+        canonical = np.ascontiguousarray(array, dtype="<f8")
+        digest.update(np.asarray(canonical.shape, dtype="<i8").tobytes())
+        digest.update(canonical.tobytes())
+    return digest.hexdigest()
+
+
 def fit_from_stats(stats: RawRidgeStats, alpha: float) -> core.WeightedStandardizedRidgeResidual:
     require(stats.weight_sum > 0 and stats.individuals > 0, "ridge sufficient statistics are empty")
     mean_x = stats.sum_x / stats.weight_sum
@@ -332,6 +357,88 @@ class FittedArm:
     selection_status: str
     model: core.WeightedStandardizedRidgeResidual
     feature_count: int
+    f0_cv_metrics: Mapping[str, float] = field(default_factory=dict)
+    candidate_table: tuple[Mapping[str, Any], ...] = ()
+    guard_failures: tuple[str, ...] = ()
+    sufficient_stats_sha256: Mapping[str, str] = field(default_factory=dict)
+    fold_stats_sha256: Mapping[str, str] = field(default_factory=dict)
+
+
+def _validate_workers(workers: int) -> int:
+    require(isinstance(workers, int) and not isinstance(workers, bool) and workers >= 1,
+            "workers must be an integer >=1")
+    if workers > 1:
+        drift = {name: os.environ.get(name) for name in THREAD_LIMIT_ENV if os.environ.get(name) != "1"}
+        require(not drift, f"workers>1 requires all BLAS/thread environment limits to equal 1: {drift}")
+    return workers
+
+
+def _threadpool_runtime(workers: int) -> dict[str, Any]:
+    """Return a path-independent runtime inventory and verify effective BLAS limits."""
+    require(workers >= 1, "threadpool runtime inspection requires workers >=1")
+    try:
+        threadpoolctl = importlib.import_module("threadpoolctl")
+    except ImportError:
+        require(workers == 1, "workers>1 requires importable threadpoolctl runtime verification")
+        return {
+            "controller": "threadpoolctl",
+            "controller_version": None,
+            "status": "NOT_REQUIRED_SINGLE_WORKER_CONTROLLER_UNAVAILABLE",
+            "pools": [],
+        }
+    try:
+        raw_pools = threadpoolctl.threadpool_info()
+    except Exception as error:
+        if workers > 1:
+            raise RunnerError(
+                f"workers>1 threadpoolctl inspection failed: {type(error).__name__}: {error}"
+            ) from error
+        return {
+            "controller": "threadpoolctl",
+            "controller_version": str(getattr(threadpoolctl, "__version__", "UNKNOWN")),
+            "status": f"NOT_REQUIRED_SINGLE_WORKER_INSPECTION_FAILED_{type(error).__name__}",
+            "pools": [],
+        }
+    require(isinstance(raw_pools, list), "threadpoolctl returned a non-list pool inventory")
+    normalized = []
+    for raw in raw_pools:
+        require(isinstance(raw, Mapping), "threadpoolctl returned a non-mapping pool entry")
+        num_threads = raw.get("num_threads")
+        require(isinstance(num_threads, int) and not isinstance(num_threads, bool) and num_threads >= 1,
+                "threadpoolctl pool has invalid num_threads")
+        normalized.append({
+            "user_api": None if raw.get("user_api") is None else str(raw.get("user_api")),
+            "internal_api": None if raw.get("internal_api") is None else str(raw.get("internal_api")),
+            "prefix": None if raw.get("prefix") is None else str(raw.get("prefix")),
+            "version": None if raw.get("version") is None else str(raw.get("version")),
+            "num_threads": num_threads,
+            "threading_layer": None if raw.get("threading_layer") is None else str(raw.get("threading_layer")),
+            "architecture": None if raw.get("architecture") is None else str(raw.get("architecture")),
+        })
+    normalized.sort(key=lambda pool: tuple("" if pool[key] is None else str(pool[key]) for key in (
+        "user_api", "internal_api", "prefix", "version", "threading_layer", "architecture", "num_threads",
+    )))
+    if workers > 1:
+        require(bool(normalized), "workers>1 requires at least one BLAS pool reported by threadpoolctl")
+        offenders = [
+            f"{pool['internal_api'] or pool['user_api'] or pool['prefix']}={pool['num_threads']}"
+            for pool in normalized if pool["num_threads"] != 1
+        ]
+        require(not offenders, f"workers>1 requires every effective BLAS pool num_threads=1: {offenders}")
+        status = "VERIFIED_ALL_POOLS_SINGLE_THREAD"
+    else:
+        status = "OBSERVED_SINGLE_WORKER" if normalized else "NOT_REQUIRED_SINGLE_WORKER_NO_POOLS"
+    return {
+        "controller": "threadpoolctl",
+        "controller_version": str(getattr(threadpoolctl, "__version__", "UNKNOWN")),
+        "status": status,
+        "pools": normalized,
+    }
+
+
+def _validate_worker_runtime(workers: int) -> tuple[int, dict[str, Any]]:
+    workers = _validate_workers(workers)
+    return workers, _threadpool_runtime(workers)
 
 
 def fit_arm_streaming(
@@ -342,83 +449,162 @@ def fit_arm_streaming(
     alphas: Sequence[float],
     boundary_weights: Sequence[float],
     cv_seed: int,
+    workers: int = 1,
 ) -> FittedArm:
-    """Fit from sufficient statistics with one float32 cache per individual."""
+    """Fit with individual-only concurrency and serial, index-ordered reductions."""
+    workers, _runtime = _validate_worker_runtime(workers)
     fold_ids = core.grouped_three_fold_ids(root.samples, seed=cv_seed)
-    per_sample: list[dict[float, RawRidgeStats]] = []
-    feature_count: int | None = None
+    # Populate the only mutable truth-blind feature cache before threads start.
+    if hasattr(root, "support"):
+        root.support(arm, replicate)
+    base_weight = np.repeat(root.marker_weights_cm, 2)
     with tempfile.TemporaryDirectory(prefix=f"m31-{root.name}-{arm}-") as cache_text:
         cache_dir = Path(cache_text)
-        for sample_index, _sample in enumerate(root.samples):
+
+        def materialize_and_measure(sample_index: int) -> tuple[int, int, dict[float, RawRidgeStats]]:
             x = root.features(sample_index, arm, replicate)
-            feature_count = x.shape[1] if feature_count is None else feature_count
-            require(x.shape[1] == feature_count, "feature count changed across individuals")
+            require(x.ndim == 2, "individual feature cache is not a matrix")
+            # Each worker owns one unique temporary-cache path. Durable
+            # checkpoints/manifests remain parent-only operations.
             np.save(cache_dir / f"sample-{sample_index}.npy", x.astype(np.float32), allow_pickle=False)
             residual = (truth.markers[:, sample_index] - root.flare.probabilities[:, sample_index]).reshape(-1, 3)
-            base_weight = np.repeat(root.marker_weights_cm, 2)
-            per_sample.append({
+            stats = {
                 float(boundary_weight): sample_stats(
                     x, residual,
                     base_weight * np.where(truth.boundary_rows[sample_index], float(boundary_weight), 1.0),
                 )
                 for boundary_weight in boundary_weights
-            })
-        assert feature_count is not None
-        fold_models: dict[tuple[int, float, float], core.WeightedStandardizedRidgeResidual] = {}
-        for fold in range(3):
-            for boundary_weight in boundary_weights:
-                combined = RawRidgeStats.zero(feature_count)
-                for sample_index, stats_by_weight in enumerate(per_sample):
-                    if fold_ids[sample_index] != fold:
-                        combined.add(stats_by_weight[float(boundary_weight)])
-                for alpha in alphas:
-                    fold_models[(fold, float(boundary_weight), float(alpha))] = fit_from_stats(combined, float(alpha))
+            }
+            return sample_index, x.shape[1], stats
 
-        # Predictions are fully materialized before the truth-aware scorer runs.
-        f0_predictions = [np.array(root.flare.probabilities[:, index], copy=True) for index in range(len(root.samples))]
-        f0_metrics = summarize_counts([
-            score_sample(root, truth, index, prediction)[1] for index, prediction in enumerate(f0_predictions)
-        ])
-        candidates: list[tuple[tuple[float, ...], float, float, dict[str, Any]]] = []
-        guarded_candidates: list[tuple[tuple[float, ...], float, float, dict[str, Any]]] = []
-        for boundary_weight in boundary_weights:
-            for alpha in alphas:
-                predictions = []
-                for sample_index in range(len(root.samples)):
-                    x = np.load(cache_dir / f"sample-{sample_index}.npy", mmap_mode="r")
-                    baseline = root.flare.probabilities[:, sample_index]
-                    fold = int(fold_ids[sample_index])
-                    predictions.append(fold_models[(fold, float(boundary_weight), float(alpha))].predict(
-                        x, baseline.reshape(-1, 3)
-                    ).reshape(baseline.shape))
-                metrics = summarize_counts([
-                    score_sample(root, truth, index, prediction)[1] for index, prediction in enumerate(predictions)
-                ])
-                key = (-metrics["boundary_f1_0.2cM"], metrics["false_transitions_per_cM_0.2cM"],
-                       metrics["macro_ancestry_dose_mae"], metrics["haplotype_brier"],
-                       float(boundary_weight), -float(alpha))
-                candidate = (key, float(boundary_weight), float(alpha), metrics)
-                candidates.append(candidate)
-                if (
-                    metrics["macro_ancestry_dose_mae"] <= f0_metrics["macro_ancestry_dose_mae"] + 1e-15
-                    and metrics["false_transitions_per_cM_0.2cM"]
-                    <= f0_metrics["false_transitions_per_cM_0.2cM"] + 1e-15
-                ):
-                    guarded_candidates.append(candidate)
-        guarded = bool(guarded_candidates)
-        selection_status = "GUARDED_CONFIG" if guarded else "NO_GUARDED_CONFIG"
-        selection_pool = guarded_candidates if guarded else candidates
-        _key, selected_weight, selected_alpha, selected_metrics = min(selection_pool, key=lambda item: item[0])
-        total = RawRidgeStats.zero(feature_count)
-        for stats_by_weight in per_sample:
-            total.add(stats_by_weight[selected_weight])
-        model = fit_from_stats(total, selected_alpha)
+        try:
+            executor = (
+                ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"m31-{arm}")
+                if workers > 1 else None
+            )
+        except Exception as error:
+            raise RunnerError(
+                f"parallel individual executor failed for {root.name}/{arm}: "
+                f"{type(error).__name__}: {error}"
+            ) from error
+
+        def ordered_map(function: Any, indexes: Iterable[int]) -> list[Any]:
+            values = tuple(indexes)
+            if executor is None:
+                return [function(index) for index in values]
+            # executor.map yields in input order regardless of completion order.
+            try:
+                return list(executor.map(function, values))
+            except Exception as error:
+                raise RunnerError(
+                    f"parallel individual worker failed for {root.name}/{arm}: "
+                    f"{type(error).__name__}: {error}"
+                ) from error
+
+        try:
+            materialized = ordered_map(materialize_and_measure, range(len(root.samples)))
+            require([item[0] for item in materialized] == list(range(len(root.samples))),
+                    "parallel individual materialization changed sample order")
+            feature_counts = {item[1] for item in materialized}
+            require(len(feature_counts) == 1, "feature count changed across individuals")
+            feature_count = feature_counts.pop()
+            per_sample = [item[2] for item in materialized]
+
+            fold_models: dict[tuple[int, float, float], core.WeightedStandardizedRidgeResidual] = {}
+            fold_stats_hashes: dict[str, str] = {}
+            for fold in range(3):
+                for boundary_weight in boundary_weights:
+                    combined = RawRidgeStats.zero(feature_count)
+                    for sample_index, stats_by_weight in enumerate(per_sample):
+                        if fold_ids[sample_index] != fold:
+                            combined.add(stats_by_weight[float(boundary_weight)])
+                    fold_stats_hashes[
+                        f"fold{fold}:{format(float(boundary_weight), '.17g')}"
+                    ] = _raw_stats_sha256(combined)
+                    for alpha in alphas:
+                        fold_models[(fold, float(boundary_weight), float(alpha))] = fit_from_stats(combined, float(alpha))
+
+            def score_f0(sample_index: int) -> ScoreCounts:
+                prediction = np.array(root.flare.probabilities[:, sample_index], copy=True)
+                return score_sample(root, truth, sample_index, prediction)[1]
+
+            f0_counts = ordered_map(score_f0, range(len(root.samples)))
+            f0_metrics_all = summarize_counts(f0_counts)
+            f0_metrics = {name: float(f0_metrics_all[name]) for name in AUDIT_METRIC_NAMES}
+            candidates: list[tuple[tuple[float, ...], float, float, dict[str, float], tuple[str, ...]]] = []
+            guarded_candidates: list[tuple[tuple[float, ...], float, float, dict[str, float], tuple[str, ...]]] = []
+            candidate_rows: list[dict[str, Any]] = []
+            for boundary_weight in boundary_weights:
+                for alpha in alphas:
+                    fold_models_for_candidate = fold_models
+
+                    def predict_and_score(sample_index: int) -> ScoreCounts:
+                        x = np.load(cache_dir / f"sample-{sample_index}.npy", mmap_mode="r")
+                        baseline = root.flare.probabilities[:, sample_index]
+                        fold = int(fold_ids[sample_index])
+                        prediction = fold_models_for_candidate[(fold, float(boundary_weight), float(alpha))].predict(
+                            x, baseline.reshape(-1, 3)
+                        ).reshape(baseline.shape)
+                        return score_sample(root, truth, sample_index, prediction)[1]
+
+                    counts = ordered_map(predict_and_score, range(len(root.samples)))
+                    metrics_all = summarize_counts(counts)
+                    metrics = {name: float(metrics_all[name]) for name in AUDIT_METRIC_NAMES}
+                    failures: list[str] = []
+                    if metrics["macro_ancestry_dose_mae"] > f0_metrics["macro_ancestry_dose_mae"] + 1e-15:
+                        failures.append("macro_ancestry_dose_mae_gt_f0")
+                    if metrics["false_transitions_per_cM_0.2cM"] > f0_metrics["false_transitions_per_cM_0.2cM"] + 1e-15:
+                        failures.append("false_transitions_per_cM_0.2cM_gt_f0")
+                    guard_failures = tuple(failures)
+                    key = (-metrics["boundary_f1_0.2cM"], metrics["false_transitions_per_cM_0.2cM"],
+                           metrics["macro_ancestry_dose_mae"], metrics["haplotype_brier"],
+                           float(boundary_weight), -float(alpha))
+                    candidate = (key, float(boundary_weight), float(alpha), metrics, guard_failures)
+                    candidates.append(candidate)
+                    if not guard_failures:
+                        guarded_candidates.append(candidate)
+                    candidate_rows.append({
+                        "boundary_weight": float(boundary_weight),
+                        "alpha": float(alpha),
+                        **metrics,
+                        "guarded": not guard_failures,
+                        "guard_failures": list(guard_failures),
+                        "selected": False,
+                    })
+            guarded = bool(guarded_candidates)
+            selection_status = "GUARDED_CONFIG" if guarded else "NO_GUARDED_CONFIG"
+            selection_pool = guarded_candidates if guarded else candidates
+            _key, selected_weight, selected_alpha, selected_metrics, selected_failures = min(
+                selection_pool, key=lambda item: item[0]
+            )
+            selected_matches = 0
+            for row in candidate_rows:
+                if row["boundary_weight"] == selected_weight and row["alpha"] == selected_alpha:
+                    row["selected"] = True
+                    selected_matches += 1
+            require(selected_matches == 1, "candidate audit table does not identify exactly one selected configuration")
+            totals_by_weight: dict[float, RawRidgeStats] = {}
+            for boundary_weight in boundary_weights:
+                total_for_weight = RawRidgeStats.zero(feature_count)
+                for stats_by_weight in per_sample:
+                    total_for_weight.add(stats_by_weight[float(boundary_weight)])
+                totals_by_weight[float(boundary_weight)] = total_for_weight
+            stats_hashes = {
+                format(weight, ".17g"): _raw_stats_sha256(total_for_weight)
+                for weight, total_for_weight in totals_by_weight.items()
+            }
+            total = totals_by_weight[selected_weight]
+            model = fit_from_stats(total, selected_alpha)
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=True, cancel_futures=True)
     return FittedArm(
         arm, replicate, selected_alpha, selected_weight,
         selected_metrics["boundary_f1_0.2cM"],
         selected_metrics["false_transitions_per_cM_0.2cM"],
         selected_metrics["macro_ancestry_dose_mae"],
         selected_metrics["haplotype_brier"], guarded, selection_status, model, feature_count,
+        f0_metrics, tuple(candidate_rows), selected_failures, stats_hashes, fold_stats_hashes,
     )
 
 
@@ -695,10 +881,10 @@ def decide(metrics: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     d_pass = all(d_direction_pass.values()) and not any(ancestry_worse_both.values())
     h_pass = all(h_direction_pass.values())
     l_pass = all(l_direction_pass.values())
-    real_d_guarded = all(real(direction, "D").get("inner_cv_guarded") is True for direction in directions)
-    real_h_guarded = all(real(direction, "H").get("inner_cv_guarded") is True for direction in directions)
-    if not real_d_guarded and not real_h_guarded:
+    if unguarded:
         label = "NO_GUARDED_CONFIG"
+        d_pass = False
+        h_pass = False
     elif d_pass:
         label = "GO_NEW_ROOTS"
     elif h_pass and not d_pass:
@@ -855,6 +1041,136 @@ def _payload_sha256(payload: Mapping[str, Any]) -> str:
     ).hexdigest()
 
 
+def _checkpoint_float(value: Any, label: str) -> float:
+    require(isinstance(value, (int, float)) and not isinstance(value, bool),
+            f"checkpoint {label} is not numeric")
+    result = float(value)
+    require(math.isfinite(result), f"checkpoint {label} is not finite")
+    return result
+
+
+def _valid_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _validate_fit_checkpoint(arm: str, fit: Any) -> None:
+    """Reject incomplete or internally inconsistent fit audit payloads."""
+    if arm == "F0":
+        require(fit is None, "checkpoint F0 fit must be null")
+        return
+    require(arm in PILOT_FEATURE_COUNTS, f"checkpoint fit validation does not support arm {arm}")
+    require(isinstance(fit, Mapping), f"checkpoint fit missing for {arm}")
+    required_fit_keys = {
+        "alpha", "boundary_weight", "cv_boundary_f1_0.2cM",
+        "cv_false_transitions_per_cM_0.2cM", "cv_macro_ancestry_dose_mae", "cv_brier",
+        "guarded", "selection_status", "feature_count", "f0_cv_metrics", "candidate_table",
+        "guard_failures", "sufficient_stats_sha256", "fold_stats_sha256",
+    }
+    require(set(fit) == required_fit_keys, f"checkpoint fit fields mismatch for {arm}")
+    require(fit["feature_count"] == PILOT_FEATURE_COUNTS[arm]
+            and isinstance(fit["feature_count"], int) and not isinstance(fit["feature_count"], bool),
+            f"checkpoint feature_count mismatch for {arm}")
+
+    f0 = fit["f0_cv_metrics"]
+    require(isinstance(f0, Mapping) and set(f0) == set(AUDIT_METRIC_NAMES),
+            f"checkpoint F0 OOF metrics mismatch for {arm}")
+    f0_metrics = {name: _checkpoint_float(f0[name], f"{arm}.f0_cv_metrics.{name}")
+                  for name in AUDIT_METRIC_NAMES}
+
+    rows = fit["candidate_table"]
+    require(isinstance(rows, list) and len(rows) == 18,
+            f"checkpoint candidate table must contain exactly 18 rows for {arm}")
+    expected_fields = {
+        "alpha", "boundary_weight", *AUDIT_METRIC_NAMES,
+        "guarded", "guard_failures", "selected",
+    }
+    expected_pairs = {
+        (float(weight), float(alpha))
+        for weight in core.EXPECTED_BOUNDARY_WEIGHTS
+        for alpha in core.EXPECTED_ALPHAS
+    }
+    observed_pairs: set[tuple[float, float]] = set()
+    normalized_rows = []
+    for index, row in enumerate(rows):
+        require(isinstance(row, Mapping) and set(row) == expected_fields,
+                f"checkpoint candidate fields mismatch for {arm} row {index}")
+        weight = _checkpoint_float(row["boundary_weight"], f"{arm}.candidate[{index}].boundary_weight")
+        alpha = _checkpoint_float(row["alpha"], f"{arm}.candidate[{index}].alpha")
+        require((weight, alpha) in expected_pairs, f"checkpoint candidate grid mismatch for {arm}")
+        require((weight, alpha) not in observed_pairs, f"checkpoint duplicate candidate for {arm}")
+        observed_pairs.add((weight, alpha))
+        metrics = {
+            name: _checkpoint_float(row[name], f"{arm}.candidate[{index}].{name}")
+            for name in AUDIT_METRIC_NAMES
+        }
+        failures = []
+        if metrics["macro_ancestry_dose_mae"] > f0_metrics["macro_ancestry_dose_mae"] + 1e-15:
+            failures.append(GUARD_FAILURE_NAMES[0])
+        if (
+            metrics["false_transitions_per_cM_0.2cM"]
+            > f0_metrics["false_transitions_per_cM_0.2cM"] + 1e-15
+        ):
+            failures.append(GUARD_FAILURE_NAMES[1])
+        require(isinstance(row["guard_failures"], list) and row["guard_failures"] == failures,
+                f"checkpoint candidate guard failures mismatch for {arm}")
+        require(isinstance(row["guarded"], bool) and row["guarded"] is (not failures),
+                f"checkpoint candidate guarded flag mismatch for {arm}")
+        require(isinstance(row["selected"], bool), f"checkpoint candidate selected flag invalid for {arm}")
+        key = (-metrics["boundary_f1_0.2cM"], metrics["false_transitions_per_cM_0.2cM"],
+               metrics["macro_ancestry_dose_mae"], metrics["haplotype_brier"], weight, -alpha)
+        normalized_rows.append((key, weight, alpha, metrics, tuple(failures), row))
+    require(observed_pairs == expected_pairs, f"checkpoint candidate grid is incomplete for {arm}")
+    selected_rows = [row for row in normalized_rows if row[-1]["selected"]]
+    require(len(selected_rows) == 1, f"checkpoint must select exactly one candidate for {arm}")
+    guarded_rows = [row for row in normalized_rows if not row[4]]
+    expected_selected = min(guarded_rows if guarded_rows else normalized_rows, key=lambda row: row[0])
+    selected = selected_rows[0]
+    require(selected[1:3] == expected_selected[1:3], f"checkpoint selected candidate is incoherent for {arm}")
+
+    fit_alpha = _checkpoint_float(fit["alpha"], f"{arm}.alpha")
+    fit_weight = _checkpoint_float(fit["boundary_weight"], f"{arm}.boundary_weight")
+    require((fit_weight, fit_alpha) == selected[1:3], f"checkpoint fit hyperparameters mismatch for {arm}")
+    fit_metrics = {
+        "boundary_f1_0.2cM": _checkpoint_float(fit["cv_boundary_f1_0.2cM"], f"{arm}.cv_boundary_f1"),
+        "false_transitions_per_cM_0.2cM": _checkpoint_float(
+            fit["cv_false_transitions_per_cM_0.2cM"], f"{arm}.cv_false_transitions"
+        ),
+        "macro_ancestry_dose_mae": _checkpoint_float(
+            fit["cv_macro_ancestry_dose_mae"], f"{arm}.cv_macro_ancestry_dose_mae"
+        ),
+        "haplotype_brier": _checkpoint_float(fit["cv_brier"], f"{arm}.cv_brier"),
+    }
+    require(fit_metrics == selected[3], f"checkpoint selected metrics mismatch for {arm}")
+    require(isinstance(fit["guard_failures"], list) and tuple(fit["guard_failures"]) == selected[4],
+            f"checkpoint selected guard failures mismatch for {arm}")
+    any_guarded = bool(guarded_rows)
+    require(isinstance(fit["guarded"], bool) and fit["guarded"] is any_guarded,
+            f"checkpoint guarded summary mismatch for {arm}")
+    expected_status = "GUARDED_CONFIG" if any_guarded else "NO_GUARDED_CONFIG"
+    require(fit["selection_status"] == expected_status,
+            f"checkpoint selection status mismatch for {arm}")
+
+    total_hashes = fit["sufficient_stats_sha256"]
+    expected_total_keys = {format(float(weight), ".17g") for weight in core.EXPECTED_BOUNDARY_WEIGHTS}
+    require(isinstance(total_hashes, Mapping) and set(total_hashes) == expected_total_keys,
+            f"checkpoint total sufficient-stat hashes mismatch for {arm}")
+    require(all(_valid_sha256(value) for value in total_hashes.values()),
+            f"checkpoint total sufficient-stat SHA-256 invalid for {arm}")
+    fold_hashes = fit["fold_stats_sha256"]
+    expected_fold_keys = {
+        f"fold{fold}:{format(float(weight), '.17g')}"
+        for fold in range(3) for weight in core.EXPECTED_BOUNDARY_WEIGHTS
+    }
+    require(isinstance(fold_hashes, Mapping) and set(fold_hashes) == expected_fold_keys,
+            f"checkpoint fold sufficient-stat hashes mismatch for {arm}")
+    require(all(_valid_sha256(value) for value in fold_hashes.values()),
+            f"checkpoint fold sufficient-stat SHA-256 invalid for {arm}")
+
+
 def _write_prediction_checkpoint(
     outdir: Path,
     artifact: PredictionArtifact,
@@ -865,6 +1181,25 @@ def _write_prediction_checkpoint(
     prediction_path = outdir / f"pilot.{token}.predictions.npy"
     checkpoint_path = outdir / f"pilot.{token}.checkpoint.json"
     require(not prediction_path.exists() and not checkpoint_path.exists(), f"refusing to overwrite checkpoint for {token}")
+    if fitted is not None:
+        require(fitted.arm == token, f"fitted/checkpoint arm mismatch for {token}")
+    fit_payload = None if fitted is None else {
+        "alpha": fitted.alpha,
+        "boundary_weight": fitted.boundary_weight,
+        "cv_boundary_f1_0.2cM": fitted.cv_boundary_f1,
+        "cv_false_transitions_per_cM_0.2cM": fitted.cv_false_transitions_per_cm,
+        "cv_macro_ancestry_dose_mae": fitted.cv_macro_ancestry_dose_mae,
+        "cv_brier": fitted.cv_brier,
+        "guarded": fitted.guarded,
+        "selection_status": fitted.selection_status,
+        "feature_count": fitted.feature_count,
+        "f0_cv_metrics": dict(fitted.f0_cv_metrics),
+        "candidate_table": list(fitted.candidate_table),
+        "guard_failures": list(fitted.guard_failures),
+        "sufficient_stats_sha256": dict(fitted.sufficient_stats_sha256),
+        "fold_stats_sha256": dict(fitted.fold_stats_sha256),
+    }
+    _validate_fit_checkpoint(token, fit_payload)
     stacked = np.stack(artifact.arrays, axis=0).astype(np.float64, copy=False)
     _atomic_npy_fsync(prediction_path, stacked)
     checkpoint = {
@@ -880,17 +1215,7 @@ def _write_prediction_checkpoint(
         "prediction_semantic_sha256": artifact.sha256,
         "prediction_file": prediction_path.name,
         "prediction_file_sha256": core.sha256_file(prediction_path),
-        "fit": None if fitted is None else {
-            "alpha": fitted.alpha,
-            "boundary_weight": fitted.boundary_weight,
-            "cv_boundary_f1_0.2cM": fitted.cv_boundary_f1,
-            "cv_false_transitions_per_cM_0.2cM": fitted.cv_false_transitions_per_cm,
-            "cv_macro_ancestry_dose_mae": fitted.cv_macro_ancestry_dose_mae,
-            "cv_brier": fitted.cv_brier,
-            "guarded": fitted.guarded,
-            "selection_status": fitted.selection_status,
-            "feature_count": fitted.feature_count,
-        },
+        "fit": fit_payload,
     }
     _atomic_json_fsync(checkpoint_path, checkpoint)
     checkpoint["checkpoint_file"] = checkpoint_path.name
@@ -906,6 +1231,8 @@ def _load_prediction_checkpoint(outdir: Path, arm: str, context_sha256: str) -> 
             f"checkpoint context/status mismatch for {arm}")
     require(checkpoint.get("arm") == arm and checkpoint.get("replicate") is None,
             f"checkpoint identity mismatch for {arm}")
+    require("fit" in checkpoint, f"checkpoint fit field missing for {arm}")
+    _validate_fit_checkpoint(arm, checkpoint["fit"])
     prediction_path = outdir / str(checkpoint.get("prediction_file"))
     require(prediction_path.is_file() and core.sha256_file(prediction_path) == checkpoint.get("prediction_file_sha256"),
             f"prediction file SHA-256 mismatch for {arm}")
@@ -1173,12 +1500,13 @@ def dry_run_estimate(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-PILOT_FITTED_ARMS = ("C", "L", "D")
+PILOT_FITTED_ARMS = tuple(PILOT_FEATURE_COUNTS)
 PILOT_OUTPUT_ARMS = ("F0", *PILOT_FITTED_ARMS)
 
 
 def fit_predict_pilot(args: argparse.Namespace) -> dict[str, Any]:
     """Train on root17 truth and durably predict root18 without accepting its truth."""
+    workers, threadpool_runtime = _validate_worker_runtime(getattr(args, "workers", 1))
     contract, commit, code_hashes = _verify_code_contract_and_commit(args)
     train_paths, evaluation_paths = _pilot_paths_from_args(args)
     input_hashes = _pilot_input_hashes(args.genetic_map, train_paths, evaluation_paths)
@@ -1192,6 +1520,9 @@ def fit_predict_pilot(args: argparse.Namespace) -> dict[str, Any]:
         "code_sha256": code_hashes,
         "git_commit": commit,
         "container_digest": args.container_digest,
+        "workers": workers,
+        "thread_limit_environment": {name: os.environ.get(name) for name in THREAD_LIMIT_ENV},
+        "threadpool_runtime": threadpool_runtime,
     }
     context_sha256 = _payload_sha256(context)
     outdir = args.outdir
@@ -1243,7 +1574,7 @@ def fit_predict_pilot(args: argparse.Namespace) -> dict[str, Any]:
         require(not prediction_path.exists(), f"orphan prediction without checkpoint for {arm}")
         fitted = None if arm == "F0" else fit_arm_streaming(
             train_features, train_truth, arm, None,
-            contract.alphas, contract.boundary_weights, cv_seed=train_features.seed,
+            contract.alphas, contract.boundary_weights, cv_seed=train_features.seed, workers=workers,
         )
         artifact = prepare_predictions(evaluation_features, fitted, arm, None)
         checkpoints[arm] = _write_prediction_checkpoint(outdir, artifact, fitted, context_sha256)
@@ -1257,6 +1588,9 @@ def fit_predict_pilot(args: argparse.Namespace) -> dict[str, Any]:
         "context_sha256": context_sha256,
         "evaluation_truth_was_accepted_or_read": False,
         "scientific_decision": "NO_SCIENTIFIC_DECISION",
+        "workers": workers,
+        "thread_limit_environment": {name: os.environ.get(name) for name in THREAD_LIMIT_ENV},
+        "threadpool_runtime": threadpool_runtime,
     })
     provenance_path = outdir / "pilot.fit_predict.provenance.json"
     _atomic_json_fsync(provenance_path, provenance)
@@ -1453,6 +1787,8 @@ def build_parser() -> argparse.ArgumentParser:
         add_verified_runtime(item)
         item.add_argument("--outdir", type=Path, required=True)
         item.add_argument("--resume", action="store_true")
+        item.add_argument("--workers", type=int, default=1,
+                          help="individual-only worker threads; >1 requires BLAS/OMP/MKL/NUMEXPR thread limits=1")
         for key in ("sites", "target", "tree", "pools", "truth", "flare-vcf", "flare-audit"):
             item.add_argument(f"--train-root17-{key}", dest=f"train_root17_{key.replace('-', '_')}", type=Path, required=True)
         for key in ("sites", "target", "tree", "pools", "flare-vcf", "flare-audit"):
@@ -1499,9 +1835,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
+def fail_closed_main(argv: Sequence[str] | None = None) -> int:
     try:
-        raise SystemExit(main())
+        return main(argv)
     except (RunnerError, core.ContractError, ValueError) as error:
         sys.stderr.write(f"M31_FAIL_CLOSED: {error}\n")
-        raise SystemExit(2)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(fail_closed_main())
