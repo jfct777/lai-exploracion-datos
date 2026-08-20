@@ -1,0 +1,204 @@
+{
+  "schema_version": "2.0.0",
+  "experiment_id": "M31_ORDERED_LINEAR_DEV_PRE2",
+  "status": "PREREGISTERED_NOT_RUN",
+  "protocol_class": "DEVELOPMENT_PRE2_ADAPTIVE_TO_PRE1",
+  "scope": "chr22_root17_development_root18_one_way_evaluation_no_validation",
+  "estimand": "if_L_is_guarded_predictive_increment_of_D_over_F0_and_L; otherwise_combined_D_candidate_vs_F0_only",
+  "prior_evidence": {
+    "pre1_status": "CLOSED_NO_GUARDED_CONFIG_AFTER_F0_C",
+    "pre1_contract_sha256": "49adeb88f08d6af96f1af7520207786484ab30ae2d638aa78f2fe443ff6afec0",
+    "pre1_c_checkpoint_sha256": "dc1c8747d81b0aaedfe949f46188eca5759e99e2d70972493891438fbac29ab7",
+    "pre1_c_prediction_sha256": "923d67cc0af29d641a67b166b35e89cf7f1a71eebc18d35d056ba2f493975f7c",
+    "pre1_c_known_answer": {
+      "alpha": 0.01,
+      "boundary_weight": 1.0,
+      "cv_boundary_F1_at_0.2cM": 0.7245508982035928,
+      "cv_false_transitions_per_cM_at_0.2cM": 0.02252698375310415,
+      "cv_macro_ancestry_dose_MAE": 0.02700018795763942,
+      "cv_Brier": 0.020907216102530986,
+      "selection_status": "NO_GUARDED_CONFIG"
+    },
+    "pre1_is_immutable": true,
+    "root17_is_adaptive_development": true,
+    "root18_not_observed_by_m31": true,
+    "root18_used_by_prior_m29r_m30": true,
+    "root18_role": "single_one_way_M31_development_evaluation_not_independent_validation"
+  },
+  "implementation": {
+    "implementation_basis_commit": "99433ab69067a74da9320d60a588a9a095c0c2d6",
+    "implementation_basis_sha256": {
+      "bin/m31_ordered_linear.py": "50e4c070ee39fb5581cbc31dc46640de61fd4853d852dccc32f224b4957bae01",
+      "bin/run_m31_ordered_linear.py": "ffc50255f227cc66d338476ca9a6b4dc085a1824e0bdf0c8fbc5737eae26da51",
+      "tests/test_run_m31_ordered_linear.py": "dfef060695d2d10d214fc84e6488f77126109d1cff09026c822b94ce460c0d09"
+    },
+    "final_execution_commit_and_source_hashes": "REQUIRED_IN_HASH_BOUND_RECEIPT_BEFORE_AUTHORIZATION",
+    "container_digest": "sha256:2c30d018028636ac1b7a4890641e04b3e15be8c79d991dfade35b90db0e17bd1",
+    "contract_only": true,
+    "real_run_authorized": false,
+    "nextflow_execution_contract": "REQUIRED_BEFORE_REAL_RUN",
+    "prediction_manifest_must_be_fsynced_before_truth_mount": true
+  },
+  "roots": {
+    "development": {"label": "root17", "seed": 20260817},
+    "one_way_evaluation": {"label": "root18", "seed": 20260818},
+    "reciprocal_direction_forbidden": true,
+    "after_root18_open_forbidden": [
+      "retraining",
+      "hyperparameter_reselection",
+      "gate_redefinition",
+      "reverse_direction",
+      "repeat_inference_on_same_roots"
+    ]
+  },
+  "input_sha256": {
+    "genetic_map": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+    "root17.sites": "f23686f123abec9bfe14fcf3d88e3954e32fa6206707d0cc2d2b68bb9d360c4e",
+    "root17.target": "d9ad299ea7f5cc0b0a92b5397b743b03b1300fd8e59fa71b247b6959eb3837ec",
+    "root17.tree": "566946ec93cbc28c7f36d27878e12d091f1c87ebdd6fb6423b940f4f778391f7",
+    "root17.pools": "56f9891bfb7f77d63ec3328107fc8e89b919c34ad16fda2c0c72dc3fde24f0e4",
+    "root17.truth": "bf059f94ba40b033a75bb2d4ea782ce2d8f6cb86098a77e4812ee019f07da303",
+    "root17.flare_vcf": "85dfd76df2c14cb8fe0a753910f25c49c88d38edc5708ec6d641053d95cc74e8",
+    "root17.flare_audit": "4273247ff352effc0ffb09797d3d634cde338519c1f858e2deab1e0adcbf8a5d",
+    "root18.sites": "eec6a6a3cfbe0f832618c69451a6bf588b4d60a5b734e05fc8acc343849f1f9b",
+    "root18.target": "c6622c0bbaa6657187f6488a6fcfd523ab90b7d628da4cac03adc9476a9ca6d5",
+    "root18.tree": "780800c1f3d279746ace8631fa1b1ccd57782e9bf697a3dacc2cc983523f5f54",
+    "root18.pools": "046c6e903ca4b3beea8ac468836d28bb953d32b4e731c13be86f42d7c110a4ff",
+    "root18.truth": "e5e2895b8316673afb6796795a2724d167c1bf2e98b2122ef0f7645b985e296a",
+    "root18.flare_vcf": "edc4bcdc62f5ce0ffe04bd27e9d6d6ee892e03282a1474639fc3082fbc3832c9",
+    "root18.flare_audit": "ff328cab1fc77fd8b503f5782e9886e60b3c10aa8d52650b7fec5e209a9a7342"
+  },
+  "baseline": {
+    "F0": "frozen_FLARE_v0.6.0_haplotype_posterior_M30",
+    "historical_context_only": "frozen_Gnomix_M29",
+    "marker_count": 79791,
+    "coordinate": "genetic_cM",
+    "evaluation_grid": "exact_M30_FLARE_markers_no_interpolation"
+  },
+  "rare_universe": {
+    "selector": "FREQ_only",
+    "definition": "minor allele with MAC>=2, MAF<0.01 and at least two FREQ carrier individuals",
+    "minor_presence": "I(observed_state == minor_code)",
+    "unsupported_in_REF_LAI": "retain_FREQ_selected_locus_with_explicit_no_support_and_callability_masks",
+    "missing_call_policy": "missing_is_never_encoded_as_zero_ancestry_support",
+    "forbidden_selectors": ["REF_LAI", "DONOR", "TARGET", "truth", "FLARE_prediction", "Gnomix_prediction"]
+  },
+  "representation": {
+    "signed_half_open_rings_cM": [[0.0, 0.1], [0.1, 0.2], [0.2, 0.5], [0.5, 1.0]],
+    "sides": ["left", "right"],
+    "normalization": ["genetic_length", "callable_or_observed_site_count"],
+    "edge_masks": true,
+    "frequency_weighting": "none_no_inverse_MAF"
+  },
+  "arms": {
+    "ancestries": ["AFR", "EUR", "ASIA"],
+    "ASIA_is_not_NAM": true,
+    "scientific": ["F0", "L", "D"],
+    "F0": "frozen FLARE posterior without fitted corrector",
+    "L": "F0 plus ordered common context and local diploid rare load without reference ancestry labels",
+    "D": "L plus ancestry-specific REF_LAI rare support with diploid target dose shared across haplotypes",
+    "C": "PRE1 exact known-answer integration control only",
+    "C_is_scientific_comparator": false,
+    "excluded": ["H", "DSHAM", "HSHAM"]
+  },
+  "model": {
+    "estimator": "multivariate_L2_ridge_residual",
+    "prediction": "simplex_projection(FLARE_haplotype_posterior + X_beta)",
+    "posthoc_smoothing": false,
+    "alphas": [0.0001, 0.001, 0.01, 0.1, 1.0, 10.0],
+    "boundary_training_weights": [1.0, 5.0, 20.0],
+    "boundary_definition_cM": 0.2,
+    "row_weight": "Voronoi_genetic_cM * haplotype_specific_boundary_multiplier",
+    "weight_normalization": "sum_to_number_of_diploid_individuals",
+    "feature_standardization": "fit_on_root17_training_individuals_only",
+    "inner_cv": "three_deterministic_folds_grouped_by_complete_diploid_individual"
+  },
+  "selection": {
+    "tau": 1e-15,
+    "tau_role": "computational_tolerance_only_not_SESOI",
+    "guarded_set": "G_A={h:MAE_A(h)<=MAE_F0+tau and FT_A(h)<=FT_F0+tau}, A in {L,D}",
+    "empty_guarded_set": "NO_FALLBACK",
+    "lexicographic_order": ["-F1", "FT", "MAE", "Brier", "boundary_weight", "-alpha"],
+    "primary_metric": "OOF_boundary_F1_at_0.2_cM",
+    "guardrails": ["macro_ancestry_dose_MAE", "false_transitions_per_cM_at_0.2_cM"],
+    "development_minimum_delta_F1": 0.01,
+    "development_minimum_delta_F1_role": "pragmatic_decision_threshold_not_published_biological_standard",
+    "development_minimum_delta_F1_sensitivities": [0.005, 0.02]
+  },
+  "root18_open_gate": {
+    "technical_requirements": [
+      "contract_code_input_container_hashes_match",
+      "known_answers_pass",
+      "workers_1_4_8_exact_equality_pass",
+      "C_exactly_reproduces_PRE1_known_answer_configuration_metrics_and_semantic_prediction_hash",
+      "truth_blind_prediction_manifest_fsynced"
+    ],
+    "scientific_requirements": [
+      "G_D_nonempty",
+      "F1_D_root17>=F1_F0_root17+0.01",
+      "if_G_L_nonempty_then_F1_D_root17>=F1_L_root17+0.01",
+      "MAE_AFR_EUR_ASIA_D_not_worse_than_each_applicable_comparator+tau",
+      "MAE_conditioned_on_ancestry_present_AFR_EUR_ASIA_D_not_worse_than_each_applicable_comparator+tau"
+    ],
+    "if_G_L_empty_and_D_passes": "CANDIDATE_RARE_COMBINED_ONLY",
+    "if_any_requirement_fails": "STOP_PRE2_BEFORE_ROOT18"
+  },
+  "root18_decision": {
+    "comparators": ["F0", "L_if_G_L_nonempty"],
+    "required": [
+      "F1_D>=F1_each_applicable_comparator+0.01",
+      "MAE_D<=MAE_each_applicable_comparator+tau",
+      "FT_D<=FT_each_applicable_comparator+tau",
+      "MAE_AFR_D<=MAE_AFR_each_applicable_comparator+tau",
+      "MAE_EUR_D<=MAE_EUR_each_applicable_comparator+tau",
+      "MAE_ASIA_D<=MAE_ASIA_each_applicable_comparator+tau",
+      "MAE_truth_present_AFR_D<=MAE_truth_present_AFR_each_applicable_comparator+tau",
+      "MAE_truth_present_EUR_D<=MAE_truth_present_EUR_each_applicable_comparator+tau",
+      "MAE_truth_present_ASIA_D<=MAE_truth_present_ASIA_each_applicable_comparator+tau"
+    ],
+    "required_descriptive_by_ancestry": ["boundary_F1", "false_transitions_per_cM", "matched_boundary_distance"],
+    "success_if_G_L_nonempty": "CANDIDATE_D_FOR_NEW_PROSPECTIVE_ROOTS",
+    "success_if_G_L_empty": "CANDIDATE_RARE_COMBINED_ONLY_VS_F0",
+    "failure_label": "STOP_PRE2_ON_THESE_ROOTS"
+  },
+  "uncertainty": {
+    "unit": "complete_diploid_individual",
+    "bootstrap_replicates": 10000,
+    "bootstrap_type": "paired_resample_individual_count_bundles_then_reconstruct_global_metrics",
+    "role": "descriptive_only_not_gate"
+  },
+  "parallelism": {
+    "workers_primary": 4,
+    "workers_screen": [1, 4, 8],
+    "parallel_unit": "complete_diploid_individual_only",
+    "exact_equality_required": ["sufficient_statistics", "selected_configuration", "metrics", "coefficients", "predictions", "semantic_hashes"],
+    "thread_limits": {"OMP_NUM_THREADS": 1, "OPENBLAS_NUM_THREADS": 1, "MKL_NUM_THREADS": 1, "NUMEXPR_NUM_THREADS": 1, "BLIS_NUM_THREADS": 1}
+  },
+  "claims_excluded": [
+    "confirmatory_validation",
+    "independent_replication",
+    "rare_support_mechanism_without_DSHAM",
+    "haplotype_specific_rare_effect",
+    "phase_resolved_boundary_mechanism",
+    "ancestry_label_mapping_effect_without_DSHAM",
+    "capacity_controlled_increment_without_capacity_matched_control",
+    "ancestry_specific_boundary_improvement",
+    "multiplicity_controlled_significance",
+    "family_wise_error_control",
+    "p_value_claims",
+    "DNABR_generalization",
+    "Native_American_LAI",
+    "Brazil_novel_variant_effect",
+    "deep_learning_benefit"
+  ],
+  "stop_rules": [
+    "any contract, code, input, container or prior-evidence hash mismatch",
+    "any worker screen mismatch",
+    "C known-answer mismatch",
+    "root18 truth accessible before a sealed truth-blind manifest",
+    "G_D empty or D not superior on root17",
+    "any root18 primary or guardrail failure",
+    "any retraining, retuning, reverse direction or gate change after root18 opens",
+    "any VALID, TEST, DNABR or NAM input access"
+  ]
+}
