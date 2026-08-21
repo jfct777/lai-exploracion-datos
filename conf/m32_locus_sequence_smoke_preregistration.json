@@ -1,0 +1,125 @@
+{
+  "stage": "M32_LOCUS_SEQUENCE_SMOKE",
+  "version": 1,
+  "status": "CONTRACT_AND_SYNTHETIC_SMOKE_ONLY_NOT_SCIENTIFIC_EVIDENCE",
+  "chromosome": "chr22",
+  "allele_orientation": "FREQ_defined_minor_allele",
+  "representation": {
+    "preserve_each_locus": true,
+    "preserve_genetic_order": true,
+    "full_flare_grid": true,
+    "primary": {
+      "name": "P_PHASE_INVARIANT_DIPLOID",
+      "target_channels": [
+        "minor_dosage_0_1_2",
+        "callable_mask",
+        "heterozygous_phase_ambiguity"
+      ],
+      "reference_channels": [
+        "same_locus_minor_support_by_ancestry",
+        "same_locus_support_observed_mask"
+      ],
+      "coordinate_channels": ["genetic_cm", "delta_cm"],
+      "baseline_channels": ["flare_posteriors", "flare_entropy"],
+      "missing_value_policy": "explicit_mask_never_encode_as_zero",
+      "phase_invariant": true,
+      "transfer_candidate": true
+    },
+    "upper_bound": {
+      "name": "H_PHASE_AWARE_SIMULATION_UPPER_BOUND",
+      "target_channels": ["minor_presence_h0", "minor_presence_h1"],
+      "phase_invariant": false,
+      "simulation_only": true,
+      "transfer_candidate": false
+    }
+  },
+  "context_occupancy_screen": {
+    "definition": "symmetric_radius_cm_around_each_flare_marker",
+    "radii_cm": [0.05, 0.1, 0.2, 0.5],
+    "total_width_multiplier": 2,
+    "selection_allowed": false,
+    "uses_truth": false
+  },
+  "controls": {
+    "frozen_baseline": "FLARE_F0",
+    "rare_channel_disabled_ablation": {
+      "same_architecture": true,
+      "same_parameter_count": true,
+      "same_optimizer": true,
+      "same_budget": true,
+      "same_receptive_field": true,
+      "only_rare_channel_disabled": true
+    },
+    "matched_common_locus_control": {
+      "same_architecture": true,
+      "same_parameter_count": true,
+      "same_optimizer": true,
+      "same_budget": true,
+      "same_receptive_field": true,
+      "same_tensor_slots": true,
+      "matching_variables": [
+        "genetic_position",
+        "callability",
+        "local_locus_density"
+      ],
+      "multiple_matched_sets_required": true,
+      "construction_frozen": false,
+      "scientific_pilot_blocked_until_frozen": true
+    },
+    "primary_sham": {
+      "operation": "permute_complete_diploid_REF_LAI_ancestry_labels",
+      "preserves": [
+        "reference_genotype_matrices",
+        "reference_missingness",
+        "reference_LD_and_locus_order",
+        "ancestry_group_sizes",
+        "target_data"
+      ],
+      "breaks_only": "reference_genotype_to_ancestry_label_association"
+    },
+    "phase_diagnostic": "swap_h0_h1_at_heterozygous_target_loci_preserving_diploid_dosage"
+  },
+  "future_split_contract": {
+    "independent_unit": "complete_diploid_individual",
+    "roles": ["TRAIN", "CAL", "DEV", "EVAL"],
+    "root17_root18": "consumed_known_answer_only",
+    "eval_sealed": true,
+    "truth_access": {
+      "tensor_producer": "never",
+      "TRAIN": "supervised_fit_and_inner_train_selection_only",
+      "CAL": "calibration_after_model_freeze_only",
+      "DEV": "sealed_scorer_after_prediction_manifest_only",
+      "EVAL": "sealed_final_scorer_after_prediction_manifest_only"
+    },
+    "role_disjunction_required": ["simulation_root", "donor", "family", "IBD_component"],
+    "prospective_root_count_frozen": false,
+    "scientific_pilot_blocked_until_root_count_frozen": true
+  },
+  "future_model_screen": {
+    "models": ["residual_linear_local", "small_residual_cnn_1d"],
+    "transformers_or_diffusion": false,
+    "maximum_cnn_configurations": 8,
+    "initial_training_seeds": 3,
+    "hyperparameters_frozen": false,
+    "freeze_only_after_occupancy_and_memory_screen": true
+  },
+  "future_metrics": {
+    "primary": "paired_boundary_F1_at_0.2_cM",
+    "minimum_relevant_delta_F1": 0.01,
+    "required_contrasts": ["F0", "rare_channel_disabled", "matched_common_loci", "REF_label_sham"],
+    "boundary_tolerance_sensitivity_cm": [0.1, 0.2, 0.5],
+    "guardrails": [
+      "macro_dose_MAE",
+      "per_ancestry_MAE",
+      "ancestry_present_MAE",
+      "false_transitions_per_cM",
+      "Brier_score",
+      "calibration"
+    ],
+    "bootstrap_unit": "complete_diploid_individual",
+    "bootstrap_method": "resample_people_then_recompute_TP_FP_FN_and_metrics",
+    "no_retuning_after_DEV": true,
+    "stop_rule": "phase_invariant_arm_must_improve_delta_F1_by_at_least_0.01_on_each_prospective_DEV_root_without_worsening_MAE_or_false_transitions",
+    "scientific_run_authorized": false
+  }
+}
