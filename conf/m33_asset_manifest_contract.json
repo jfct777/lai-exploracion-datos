@@ -1,0 +1,133 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_ASSET_MANIFEST_CONTRACT",
+  "status": "CONTRACT_ONLY_NO_ASSET_READ_NO_GENERATION_NO_FORWARD_NO_TRAINING",
+  "base_contract": {
+    "experiment_id": "M33_PRE4_ORDERED_RARE_LAI",
+    "git_commit": "9f2214f5eaa2c5ab02e5df89528282569cffac4d",
+    "sha256": "4308bbf33ae28f554f701da33efdc185264f9f407d62661e7048e0345687eb8b"
+  },
+  "mode": "DEVELOPMENT_ASSETS",
+  "root_seeds": [386357765, 2024931463, 1324432253],
+  "forbidden_root_seeds": [20260817, 20260818, 1341407242, 2049644864, 693524843, 1896826422, 166187460],
+  "root_is_primary_inference_unit": true,
+  "canonical_prefix_template": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m33/{contract_sha256}/DEVELOPMENT/{root_seed}/{asset_set_id}/",
+  "asset_set_id_derivation": "sha256(base_contract_sha256|DEVELOPMENT|root_seed|generator_receipt_sha256)",
+  "creation_precondition": "ifGenerationMatch=0",
+  "assembly": "GRCh38",
+  "chromosome": "chr22",
+  "shared_assets": {
+    "genetic_map_uri": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/maps/genetic.map.chr22",
+    "genetic_map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+    "genetic_map_gcs_generation": "1673955700088022",
+    "genetic_map_size_bytes": 984992,
+    "genetic_map_crc32c": "1jTiNw==",
+    "genetic_map_media_type": "application/octet-stream",
+    "genetic_map_compression": "none",
+    "genetic_map_schema_version": "dnabr_genetic_map_chr_bp_cm_v1",
+    "genetic_map_record_count": 45141,
+    "legacy_read_only_exception": "This authenticated map predates the current datalake prefix; only this exact URI#generation descriptor is allowed and no outputs may be written beside it.",
+    "generator_source_auth_prefix": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m33/4308bbf33ae28f554f701da33efdc185264f9f407d62661e7048e0345687eb8b/shared/source-auth/"
+  },
+  "generator_anchors": {
+    "repository": "jfct777/lai-exploracion-datos",
+    "source_commit": "1b88ab16bfa6a19807cf74689cd5476e05d3d2b4",
+    "oci_image_digest": "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/m28-lai-sim@sha256:06e7b70a2484de19c73a18a6fc9ddefbfa1599e43cbcdcd60fd185495dfb9a19",
+    "runtime": {"nextflow": "26.04.6", "python": "3.11.16", "stdpopsim": "0.3.0", "msprime": "1.4.2", "tskit": "1.0.3", "numpy": "2.4.6"},
+    "source_sha256": {
+      "bin/m28_simulation_preflight.py": "89c792458ef5132840676f415c4cb14f9eaca1a12fdc37c2339647a0b6dc1d4a",
+      "bin/write_stage_manifest.py": "1c0bbb95832cbbd5e586064e34a9ac781162ba99fdffdb7feca9f9fdbd84f432",
+      "conf/m28_lai_simulation_preflight_preregistration.v2.json": "b1d11afbcc2d740ff4b88753d6bcca7d7a345dc1a05eb9cc83a268e2ec403438",
+      "conf/m28_lai_simulation_reproducibility_amendment.json": "794104ae1261fe287e5d4eb955038206c0e28e92808572515bfb3de50a5600f3",
+      "conf/m28_lai_simulation_preflight.config": "d82b4422e1a03c57d8cdd3946550590549f454c72c3d91aec48f46aaa8e56fd7",
+      "modules/28_LAI_SIMULATION_PREFLIGHT.nf": "87af147c00e52da8b3dbc99c4c4f53b3d3df0b0d00add8075398e8bc05fae371",
+      "workflows/m28_lai_simulation_preflight.nf": "593773eadbd03d6e5666d8b4717cab30d48215df3140fe8c03d298ca2d790980",
+      "containers/m28-lai-sim/Dockerfile": "5abd60ae65f901bd3a1d532cedf9f0918ca6dffaee3c58fc15018577683dfdaa",
+      "containers/m28-lai-sim/requirements.lock": "984ef6654ac437c491905646ce1ea4d2a06ad1400a3165beaa51ae3f84e86112"
+    },
+    "required_runtime_fields": ["git_commit", "clean_source_auth_sha256", "nextflow_version", "oci_image_digest", "python_version", "stdpopsim_version", "msprime_version", "tskit_version", "numpy_version"]
+  },
+  "asset_inventory": {
+    "required": ["sites", "targets", "truth", "flare", "map", "roles", "generator_source_auth", "generator_manifest", "tree_sequence"],
+    "shareable_between_roots": ["map", "generator_source_auth"],
+    "private": ["targets", "truth", "flare", "roles", "generator_manifest", "tree_sequence"],
+    "public": ["sites", "map", "generator_source_auth"],
+    "required_fields": ["logical_id", "gcs_uri", "gcs_generation", "size_bytes", "sha256_raw", "crc32c", "media_type", "compression", "schema_version", "record_count"]
+  },
+  "role_contract": {
+    "allocation_unit": "complete_diploid_person",
+    "expected_people": {"FREQ": 300, "REF_LAI": 90, "DONOR": 768, "TARGET": 30},
+    "expected_source_ancestry_counts": {
+      "FREQ": {"AFR": 50, "EUR": 100, "ASIA": 150},
+      "REF_LAI": {"AFR": 30, "EUR": 30, "ASIA": 30},
+      "DONOR": {"AFR": 256, "EUR": 256, "ASIA": 256}
+    },
+    "haplotypes_per_person": 2,
+    "allowed_source_ancestries": ["AFR", "EUR", "ASIA"],
+    "target_ancestry_label": "MOSAIC",
+    "source_person_fingerprint": "sha256(ancestry|sorted_pair_of_root_independent_source_haplotype_sha256)",
+    "target_derivation": "every_TARGET_haplotype_must_reference_one_or_more_DONOR_haplotypes_from_the_same_root"
+  },
+  "rng_contract": {
+    "algorithm": "numpy.random.SeedSequence",
+    "components": ["ancestry", "mutation", "pool", "mosaic"],
+    "derivation": "SeedSequence(root_seed).spawn(4); uint32 child state in component order",
+    "root_streams": {
+      "386357765": {
+        "ancestry": {"entropy": 386357765, "spawn_key": [0], "state_uint32x4": [3431294212, 456364399, 1745615539, 2912301570]},
+        "mutation": {"entropy": 386357765, "spawn_key": [1], "state_uint32x4": [2403337511, 1075286817, 1429542220, 1431640456]},
+        "pool": {"entropy": 386357765, "spawn_key": [2], "state_uint32x4": [91267918, 2359235966, 2515715734, 179844728]},
+        "mosaic": {"entropy": 386357765, "spawn_key": [3], "state_uint32x4": [3637514110, 2518922542, 4068006375, 1729343706]}
+      },
+      "2024931463": {
+        "ancestry": {"entropy": 2024931463, "spawn_key": [0], "state_uint32x4": [896554850, 1551404250, 4101487288, 2483226360]},
+        "mutation": {"entropy": 2024931463, "spawn_key": [1], "state_uint32x4": [362424703, 1681902743, 1349312228, 1606307235]},
+        "pool": {"entropy": 2024931463, "spawn_key": [2], "state_uint32x4": [2930982255, 1710888460, 2989752886, 1431699761]},
+        "mosaic": {"entropy": 2024931463, "spawn_key": [3], "state_uint32x4": [323202223, 225028593, 3812024646, 1102375582]}
+      },
+      "1324432253": {
+        "ancestry": {"entropy": 1324432253, "spawn_key": [0], "state_uint32x4": [2884219918, 2811505497, 4088708922, 2665961001]},
+        "mutation": {"entropy": 1324432253, "spawn_key": [1], "state_uint32x4": [601921278, 1964911311, 1981524540, 35523092]},
+        "pool": {"entropy": 1324432253, "spawn_key": [2], "state_uint32x4": [3606772614, 2254304712, 3501731858, 870248356]},
+        "mosaic": {"entropy": 1324432253, "spawn_key": [3], "state_uint32x4": [2730671726, 2801595165, 2715614037, 4293186267]}
+      }
+    },
+    "all_component_stream_ids_must_be_unique_across_roots": true,
+    "new_tree_sequence_per_root": true
+  },
+  "semantic_fingerprints": {
+    "required": ["normalized_variant_sha256", "normalized_target_genotype_sha256", "normalized_truth_segment_sha256", "normalized_tree_tables_sha256", "normalized_flare_probability_sha256"],
+    "founder_definition": "sha256(ancestry|normalized_phased_haplotype_over_all_tree_sites); deliberately independent of root namespace, tree byte encoding and node ID",
+    "founder_hashes_must_be_pairwise_disjoint_across_roots": true,
+    "rare_site_and_flare_grid_overlap_must_be_reported": true,
+    "primary_incremental_channel": "rare_sites_not_present_on_the_frozen_FLARE_grid",
+    "overlapping_rare_sites": "reported_separately_as_already_visible_to_F0_not_counted_as_new_locus_information"
+  },
+  "future_semantic_checks_required_before_PASS_ASSETS": [
+    "map_is_monotone_and_exact_GRCh38_chr22",
+    "source_genotypes_are_phased_and_biallelic",
+    "truth_is_haplotype_level_half_open_complete_without_gaps_or_overlaps",
+    "target_people_match_exactly_across_tree_target_genotypes_truth_and_FLARE",
+    "rare_sites_are_recomputed_from_FREQ_only_with_minor_orientation_MAC_ge_2_MAF_lt_0.01_and_at_least_two_carrier_people",
+    "TARGET_REF_LAI_DONOR_truth_and_FLARE_do_not_select_or_rank_rare_sites",
+    "FLARE_probabilities_are_finite_simplex_and_generated_without_truth_input",
+    "rare_site_and_FLARE_grid_overlap_is_recomputed_on_canonical_CHROM_POS_REF_ALT_and_separated_from_the_primary_incremental_channel",
+    "generator_receipt_is_opened_and_authenticated_not_accepted_as_an_unverified_digest",
+    "tree_tables_and_role_manifests_are_recomputed_to_verify_a_new_genealogy_and_root_independent_founder_hashes",
+    "DONOR_to_TARGET_genotypes_segments_and_boundaries_are_recomputed_from_the_map_and_mosaic_events"
+  ],
+  "privacy": {
+    "private_manifest_contains": ["gcs_uris", "person_ids", "haplotype_ids", "founder_hashes", "truth_link", "target_genotypes", "FLARE_probabilities"],
+    "predict_receipt_forbids": ["truth", "truth_uri", "truth_path", "person_ids", "haplotype_ids", "genotypes", "probabilities", "private_gcs_uri"],
+    "public_receipt_contains_only": ["status", "base_contract_sha256", "asset_contract_sha256", "root_seeds", "aggregate_counts", "private_manifest_sha256", "generator_receipt_sha256", "failure_reasons"]
+  },
+  "authorized_output_status": "PASS_MANIFEST_SCHEMA_FIXTURES_ONLY_NO_ASSET_READ_NO_FORWARD_NO_TRAINING",
+  "execution_authorization": {
+    "contract_and_fixture_tests": true,
+    "real_asset_read": false,
+    "asset_generation": false,
+    "no_gradient_forward": false,
+    "training": false,
+    "EVAL_open": false
+  }
+}
