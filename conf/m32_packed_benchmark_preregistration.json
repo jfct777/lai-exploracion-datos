@@ -1,0 +1,121 @@
+{
+  "stage": "M32_PACKED_CHR22_BENCHMARK",
+  "version": 1,
+  "status": "TRUTH_FREE_TENSOR_IO_BENCHMARK_ONLY",
+  "scope": "chr22_consumed_roots_technical_only",
+  "chromosome": "chr22",
+  "radii_cm": [0.05, 0.1, 0.2, 0.5],
+  "person_batches": [1, 4, 8],
+  "token_budgets": [65536, 262144, 1048576],
+  "token_definition": "one_valid_diploid_person_by_marker_by_rare_locus_cell",
+  "backends": ["contiguous_packed", "length_sorted_packed"],
+  "performance_marker_sample": 512,
+  "performance_marker_sampling": "deterministic_even_ranks_of_context_length_including_minimum_and_maximum",
+  "timing": {"warmups": 1, "repetitions": 3, "cold_io_claimed": false},
+  "memory": {
+    "warning_fraction": 0.7,
+    "stop_fraction": 0.8,
+    "denominator": "process_cgroup_limit",
+    "expected_limit_bytes": 8589934592
+  },
+  "container_image_id": "sha256:2c30d018028636ac1b7a4890641e04b3e15be8c79d991dfade35b90db0e17bd1",
+  "dtypes": {
+    "target_haplotype_presence": "int8_missing_minus_one",
+    "target_minor_dosage": "int8_missing_minus_one",
+    "target_observed_mask": "bool_not_biological_callability",
+    "interval_start_stop": "int32",
+    "ref_minor_count": "uint16_with_overflow_check",
+    "ref_callable_alleles": "uint16_with_overflow_check",
+    "ref_person_level_minor_dosage": "int8_missing_minus_one",
+    "ref_person_level_observed_mask": "bool",
+    "ref_person_level_ancestry_label": "int8_AFR0_EUR1_ASIA2",
+    "ref_support": "float32",
+    "ref_support_observed_mask": "bool_separate_from_minor_allele_presence",
+    "ref_minor_supported": "bool_minor_count_greater_than_zero",
+    "flare_probabilities_raw": "float32",
+    "coordinates_cm": "float64"
+  },
+  "axes": {
+    "flare": ["marker", "person", "haplotype", "ancestry"],
+    "target_haplotype": ["locus", "person", "haplotype"],
+    "target_diploid": ["locus", "person"],
+    "reference": ["locus", "ancestry"],
+    "ancestry_order": ["AFR", "EUR", "ASIA"],
+    "haplotype_order": ["h0", "h1"]
+  },
+  "interval_definition": {
+    "start": "bisect_left(rare_cm, marker_cm - radius_cm)",
+    "stop": "bisect_right(rare_cm, marker_cm + radius_cm)",
+    "bounds": "inclusive_in_cm_represented_as_half_open_index_interval",
+    "independent_oracle": "streaming_two_pointer_all_markers"
+  },
+  "truth_policy": {
+    "truth_access": false,
+    "boundary_access": false,
+    "lai_performance_access": false,
+    "selects_radius": false,
+    "training_authorized": false,
+    "scientific_run_authorized": false
+  },
+  "simulation_limitations": {
+    "target_missing_expected": 0,
+    "reference_missing_expected": 0,
+    "missing_semantics_checked_only_by_separate_synthetic_fixture": true,
+    "roots_are_not_independent_validation": true
+  },
+  "reference_support_policy": {
+    "freq_role": "defines_the_minor_allele_in_the_M31_rare_locus_catalog",
+    "ref_role": "measures_observed_minor_allele_support_in_parental_reference_people",
+    "freq_and_ref_counts_are_not_required_to_match": true,
+    "zero_ref_minor_count_with_nonzero_ref_callable_alleles": "observed_absence_not_missingness",
+    "filter_freq_loci_by_ref_support": false,
+    "retain_person_level_ref_dosage_labels_and_observed_mask": true
+  },
+  "stop_conditions": [
+    "input_or_source_sha256_mismatch",
+    "truth_or_boundary_input_present",
+    "sample_marker_locus_or_haplotype_axis_mismatch",
+    "locus_loss_duplication_or_reordering",
+    "interval_or_streaming_two_pointer_oracle_mismatch",
+    "missing_converted_to_zero",
+    "flare_haplotype_axis_changed",
+    "reference_numerator_or_denominator_missing",
+    "truncation_nonzero",
+    "semantic_checksum_changes_across_operational_parameters",
+    "single_context_exceeds_token_budget",
+    "peak_rss_fraction_greater_than_or_equal_to_0_8",
+    "output_exists",
+    "source_not_in_git_commit"
+  ],
+  "genetic_map": {
+    "sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9"
+  },
+  "roots": {
+    "root17": {
+      "root_seed": 20260817,
+      "role": "consumed_technical_only",
+      "sha256": {
+        "grid_coordinates": "6389fdfb9066f5f944c8dc0a0e0630f7c7cbff87608d78afcc91ec063395e7cc",
+        "rare_coordinates": "2b73ae41b346e69e820e4bd5b36e64c94bf880d63d958e25875235e37c332f4b",
+        "sites": "f23686f123abec9bfe14fcf3d88e3954e32fa6206707d0cc2d2b68bb9d360c4e",
+        "target": "d9ad299ea7f5cc2b0a92b5397b743b03b1300fd8e59fa71b247b6959eb3837ec",
+        "tree": "566946ec93cbc28c7f36d27878e12d091f1c87ebdd6fb6423b940f4f778391f7",
+        "pools": "56f9891bfb7f77d63ec3328107fc8e89b919c34ad16fda2c0c72dc3fde24f0e4",
+        "flare_vcf": "85dfd76df2c14cb8fe0a753910f25c49c88d38edc5708ec6d641053d95cc74e8"
+      }
+    },
+    "root18": {
+      "root_seed": 20260818,
+      "role": "consumed_technical_only",
+      "sha256": {
+        "grid_coordinates": "90786d339d002ea747779d5eaf370bd9cb3856b281cb310e8aac4d67c563e89b",
+        "rare_coordinates": "5c1865083aac838e3e32a2f759b8597bb51041259c10bc6f8202bef4db7d385d",
+        "sites": "eec6a6a3cfbe0f832618c69451a6bf588b4d60a5b734e05fc8acc343849f1f9b",
+        "target": "c6622c0bbaa6657187f6488a6fcfd523ab90b7d628da4cac03adc9476a9ca6d5",
+        "tree": "780800c1f3d279746ace8631fa1b1ccd57782e9bf697a3dacc2cc983523f5f54",
+        "pools": "046c6e903ca4b3beea8ac468836d28bb953d32b4e731c13be86f42d7c110a4ff",
+        "flare_vcf": "edc4bcdc62f5ce0ffe04bd27e9d6d6ee892e03282a1474639fc3082fbc3832c9"
+      }
+    }
+  }
+}
