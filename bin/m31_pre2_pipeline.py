@@ -560,6 +560,37 @@ def _worker4_inputs(directory: Path) -> tuple[dict[str, Any], dict[str, Any], di
     return manifest, audits, metrics
 
 
+def _authorized_sources_from_manifest(manifest: Mapping[str, Any]) -> dict[str, str]:
+    """Recompose the source set authorized before the truth-blind fit.
+
+    Worker manifests keep the orchestrator hash in ``verified_code_sha256``
+    and the remaining staged execution sources in ``source_sha256``.  The
+    external authorization intentionally binds their union.  Keeping this
+    composition in one function prevents a five-versus-six comparison at the
+    root17 gate while preserving exact hash equality.
+    """
+    context = manifest.get("context")
+    require(isinstance(context, Mapping), "worker context is absent")
+    staged = context.get("source_sha256")
+    verified = context.get("verified_code_sha256")
+    require(isinstance(staged, Mapping), "worker execution source hashes are absent")
+    require(isinstance(verified, Mapping), "worker verified code hashes are absent")
+    orchestrator = verified.get("orchestrator")
+    require(
+        isinstance(orchestrator, str) and len(orchestrator) == 64
+        and all(character in "0123456789abcdef" for character in orchestrator),
+        "worker orchestrator SHA-256 is invalid",
+    )
+    orchestrator_name = Path(__file__).name
+    require(orchestrator_name not in staged,
+            "worker execution sources duplicate the PRE2 orchestrator")
+    sources = {str(name): str(value) for name, value in staged.items()}
+    sources[orchestrator_name] = orchestrator
+    require(len(sources) == len(staged) + 1,
+            "authorized PRE2 execution source names are not unique")
+    return dict(sorted(sources.items()))
+
+
 def _binding(args: argparse.Namespace, manifest: Mapping[str, Any]) -> dict[str, str]:
     source = manifest["context"]["source_sha256"]
     for path in (
@@ -585,7 +616,7 @@ def _binding(args: argparse.Namespace, manifest: Mapping[str, Any]) -> dict[str,
         contract_sha256=verified_code["contract"],
         git_commit=str(manifest["context"]["git_commit"]),
         container_digest=str(manifest["context"]["container_digest"]),
-        execution_source_sha256=source,
+        execution_source_sha256=_authorized_sources_from_manifest(manifest),
     )
     require(
         core.sha256_file(args.execution_authorization)

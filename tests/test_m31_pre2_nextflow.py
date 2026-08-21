@@ -165,6 +165,42 @@ class Pre2PairedBootstrapTest(unittest.TestCase):
 
 
 class Pre2AuthorizationTest(unittest.TestCase):
+    def test_manifest_recomposes_the_full_authorized_source_set(self):
+        staged = {
+            "31_ORDERED_LINEAR_PRE2.nf": "a" * 64,
+            "m31_ordered_linear_pre2.config": "b" * 64,
+            "m31_ordered_linear_pre2.nf": "c" * 64,
+            "m31_pre2_contract.py": "d" * 64,
+            "m31_pre2_receipt.py": "e" * 64,
+        }
+        manifest = {
+            "context": {
+                "source_sha256": staged,
+                "verified_code_sha256": {"orchestrator": "f" * 64},
+            }
+        }
+        observed = PRE2._authorized_sources_from_manifest(manifest)
+        self.assertEqual(set(observed), {*staged, "m31_pre2_pipeline.py"})
+        self.assertEqual(observed["m31_pre2_pipeline.py"], "f" * 64)
+
+    def test_manifest_authorized_sources_reject_orchestrator_duplication_or_drift(self):
+        duplicate = {
+            "context": {
+                "source_sha256": {"m31_pre2_pipeline.py": "a" * 64},
+                "verified_code_sha256": {"orchestrator": "b" * 64},
+            }
+        }
+        with self.assertRaisesRegex(PRE2.Pre2Error, "duplicate"):
+            PRE2._authorized_sources_from_manifest(duplicate)
+        invalid = {
+            "context": {
+                "source_sha256": {"m31_pre2_contract.py": "a" * 64},
+                "verified_code_sha256": {"orchestrator": "not-a-sha"},
+            }
+        }
+        with self.assertRaisesRegex(PRE2.Pre2Error, "orchestrator SHA-256"):
+            PRE2._authorized_sources_from_manifest(invalid)
+
     def test_authorization_is_run_commit_container_and_cost_bound(self):
         contract = REPO / "conf" / "m31_ordered_linear_pre2_preregistration.json"
         with tempfile.TemporaryDirectory() as temporary:
