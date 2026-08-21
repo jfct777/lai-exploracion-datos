@@ -1,0 +1,287 @@
+{
+  "schema_version": "2.0.0",
+  "experiment_id": "M33_PRE4_ORDERED_RARE_LAI",
+  "status": "CONTRACT_ONLY_NO_ASSETS_NO_FORWARD_NO_TRAINING",
+  "scope": "prospective_chr22_AFR_EUR_ASIA_simulation_DEVELOPMENT_plus_sealed_EVAL",
+  "scientific_question": "Does locus-ordered rare-allele information improve boundary localization over frozen FLARE, with equal capacity among learnable arms?",
+  "claims_excluded": [
+    "confirmed_LAI_improvement",
+    "DNABR_generalization",
+    "Native_American_LAI",
+    "Brazil_novel_variant_effect",
+    "phase_resolved_effect_in_DNABR",
+    "biological_origin_of_rare_alleles"
+  ],
+  "execution_authorization": {
+    "contract_tests": true,
+    "prospective_asset_generation": false,
+    "no_gradient_forward": false,
+    "training": false,
+    "DEVELOPMENT_truth_outside_frozen_rotations": false,
+    "EVAL_truth_opening": false
+  },
+  "baseline": {
+    "name": "FLARE_0.6.0_F0",
+    "input": "ANP1_ANP2_renormalized_only_for_probability_operations",
+    "marker_grid": "exact_root_specific_FLARE_grid",
+    "historical_comparator_only": "Gnomix",
+    "posthoc_smoothing": false
+  },
+  "root_registry": {
+    "seed_derivation": "uint31(first_4_bytes_sha256('DNABR_M33_PRE4|ROLE|INDEX'))",
+    "consumed_technical_only": [20260817, 20260818],
+    "DEVELOPMENT": [386357765, 2024931463, 1324432253],
+    "EVAL_reserved_not_generated": [1341407242, 2049644864, 693524843, 1896826422, 166187460],
+    "development_rotations": [
+      {"rotation": "R0", "fit_roots": [2024931463, 1324432253], "score_only_root": 386357765},
+      {"rotation": "R1", "fit_roots": [386357765, 1324432253], "score_only_root": 2024931463},
+      {"rotation": "R2", "fit_roots": [386357765, 2024931463], "score_only_root": 1324432253}
+    ],
+    "development_use": "out_of_root_predictions_from_all_three_rotations_are_used_for_candidate_selection_not_for_unbiased_claims",
+    "final_refit": "one_selected_candidate_refit_on_all_DEVELOPMENT_roots_then_prediction_manifest_sealed_before_EVAL_open",
+    "prospective_rule": "roles_seeds_and_generator_parameters_frozen_before_asset_generation_or_truth_access",
+    "independent_genealogy_required_not_assumed": true,
+    "target_diploid_people_per_root": 30,
+    "EVAL_open_policy": "one_atomic_open_of_all_five_roots_after_fsynced_prediction_hash_manifest"
+  },
+  "asset_manifest_gate": {
+    "status": "BLOCKED_PENDING_MANIFESTS",
+    "required_per_root": ["sites_uri_sha256", "targets_uri_sha256", "truth_uri_sha256", "FLARE_uri_sha256", "map_uri_sha256", "role_manifest_uri_sha256", "generator_manifest_uri_sha256", "tree_sequence_sha256"],
+    "within_root_disjunction": ["FREQ_people", "REF_LAI_people", "DONOR_people", "TARGET_people"],
+    "between_root_disjunction": ["root_namespace", "generator_RNG_stream", "person_global_ids", "founder_haplotype_sha256", "tree_sequence_sha256", "output_prefixes"],
+    "verification": "separate_fail_closed_asset_validator_required_before_any_scientific_authorization"
+  },
+  "simulation_contract": {
+    "generator": "M28_v2_individual_safe",
+    "demographic_model": "stdpopsim_HomSap_AmericanAdmixture_4B18",
+    "ancestries": ["AFR", "EUR", "ASIA"],
+    "ASIA_is_not_NAM": true,
+    "rare_selector": "FREQ_only_minor_allele_MAC_ge_2_MAF_lt_0.01_and_at_least_two_carrier_people",
+    "forbidden_selectors": ["REF_LAI", "DONOR", "TARGET", "truth", "FLARE_prediction"],
+    "role_unit": "complete_diploid_person",
+    "truth": "haplotype_local_ancestry_half_open_segments",
+    "missingness": "none_in_main_simulation_plus_separate_adversarial_missing_fixture"
+  },
+  "packed_loader": {
+    "mode": "contiguous_packed",
+    "person_batch": 8,
+    "token_budget": 262144,
+    "radii_cm": [0.05, 0.1, 0.2, 0.5],
+    "radius_is_inside_total_candidate_budget": true,
+    "global_padding": false,
+    "warning_memory_fraction": 0.7,
+    "stop_memory_fraction": 0.8
+  },
+  "reference_semantics": {
+    "ref_minor_count": "AC_of_FREQ_defined_minor_allele_among_callable_REF_haplotypes_per_ancestry",
+    "ref_callable_alleles": "AN_callable_REF_haplotypes_per_ancestry",
+    "ref_minor_af": "AC_div_AN_if_AN_gt_0_else_0",
+    "ref_observed_mask": "1_if_AN_gt_0_else_0",
+    "ref_no_support": "1_if_AN_gt_0_and_AC_eq_0_else_0",
+    "forbidden_ambiguous_name": "reference_support",
+    "forbidden_dosage_mean_as_af": true,
+    "normalization_fit_scope": "FIT_people_only_within_each_DEVELOPMENT_rotation"
+  },
+  "primary_transferable_input": {
+    "shape": "rare_tokens_B_M_K_13_mask_B_M_K_F0_B_2_M_3",
+    "phase_policy": "diploid_rare_dosage_with_shared_haplotype_head",
+    "rare_haplotype_phase_used": false,
+    "channels": [
+      "target_minor_dosage_div_2_float32_clip_0_1",
+      "target_observed_mask_float32_0_1",
+      "ref_minor_af_AFR_float32_clip_0_1", "log1p_ref_callable_AFR_div_log1p_maxAN_AFR_FIT", "ref_observed_AFR_float32_0_1",
+      "ref_minor_af_EUR_float32_clip_0_1", "log1p_ref_callable_EUR_div_log1p_maxAN_EUR_FIT", "ref_observed_EUR_float32_0_1",
+      "ref_minor_af_ASIA_float32_clip_0_1", "log1p_ref_callable_ASIA_div_log1p_maxAN_ASIA_FIT", "ref_observed_ASIA_float32_0_1",
+      "relative_cM_minus_marker_cM_div_radius_clip_minus1_1",
+      "delta_cM_from_previous_ordered_locus_div_radius_clip_0_2"
+    ],
+    "channel_count": 13,
+    "rare_order": ["cM", "bp", "locus_id"],
+    "padding": "right_zero_padding_with_mask_reapplied_after_every_layer_and_excluded_from_pooling",
+    "missing_policy": "zero_numeric_value_plus_explicit_mask_never_interpret_as_hom_ref",
+    "F0_formula": "p_norm=p_div_max(sum_over_ancestry_p,1e-7); corrected=softmax(log(max(p_norm,1e-7))+delta_logits)"
+  },
+  "phase_ceiling": {
+    "name": "H_SIMULATION_ONLY",
+    "screen_or_promotion_eligible": false,
+    "uses_certified_simulated_haplotypes": true,
+    "transferable_to_DNABR": false,
+    "required_diagnostic": "joint_TARGET_and_F0_h0_h1_swap_must_swap_outputs_with_tolerance_1e-6"
+  },
+  "controls": {
+    "F0": "frozen_FLARE_probabilities_no_corrector_zero_trainable_parameters",
+    "rare_disabled": {
+      "operation": "same_model_with_channels_0_2_3_5_6_8_9_zeroed_and_geometry_masks_channels_1_4_7_10_11_12_retained",
+      "estimand": "rare_enabled_minus_rare_disabled_is_carrier_and_REF_value_information_conditional_on_rare_site_geometry_and_masks"
+    },
+    "rare_enabled": "real_FREQ_selected_ordered_minor_allele_channels",
+    "target_same_locus_sham": {
+      "replicates": 3,
+      "seed_derivation": "uint31(first_4_bytes_sha256('DNABR_M33_PRE4|TARGET_SHAM|INDEX'))",
+      "seeds": [1277457345, 943666774, 1858042568],
+      "operation": "permute_complete_joint_dosage_observed_vectors_across_TARGET_people_within_locus_root_and_split",
+      "preserves": ["loci", "positions", "joint_dosage_mask_multiset_per_locus", "per_locus_AC", "per_locus_missing_count", "local_density"],
+      "does_not_preserve": ["per_person_dosage", "per_person_burden", "person_specific_LD"],
+      "breaks": "person_specific_carrier_and_local_LD_association"
+    },
+    "REF_label_sham": {
+      "replicates": 3,
+      "seed_derivation": "uint31(first_4_bytes_sha256('DNABR_M33_PRE4|REF_SHAM|INDEX'))",
+      "seeds": [79351217, 202307732, 1737132171],
+      "operation": "non_identity_group_size_preserving_permutation_of_complete_diploid_REF_labels_then_recompute_AC_AN_AF",
+      "preserves": ["REF_genotypes", "REF_missingness", "locus_order", "LD", "ancestry_group_sizes", "TARGET"],
+      "breaks": "REF_genotype_to_ancestry_label_association"
+    },
+    "common_matched": {
+      "replicates": 3,
+      "seed_derivation": "uint31(first_4_bytes_sha256('DNABR_M33_PRE4|COMMON_MATCH|INDEX'))",
+      "seeds": [689276869, 1695229269, 1642010334],
+      "eligibility": "FREQ_minor_MAF_ge_0.01_le_0.5_biallelic_callable_in_FREQ_and_REF_absent_from_FLARE_grid",
+      "selection_uses_truth_DONOR_or_TARGET": false,
+      "matching": "one_to_one_without_replacement_minimum_cost_then_locus_id_tiebreak",
+      "variables": ["cM", "FREQ_call_rate", "REF_AFR_call_rate", "REF_EUR_call_rate", "REF_ASIA_call_rate", "candidate_count_within_plusminus_0.1cM"],
+      "cost": "sum_squared_z_differences_using_FIT_candidate_pool_location_scale",
+      "calipers": {"absolute_cM": 0.01, "each_call_rate": 0.0, "local_density_relative": 0.2},
+      "pass_invariants": ["complete_1_to_1_cardinality", "no_replacement_within_replicate", "no_FLARE_overlap", "wasserstein_cM_le_0.005", "absolute_SMD_each_matching_variable_le_0.1"],
+      "failure_interpretation": "common_control_unavailable_main_same_locus_estimand_remains_testable",
+      "same_locus_count_tensor_slots_phase_policy_architecture_and_updates": true,
+      "interpretation": "incremental_information_under_equal_marker_budget_not_causal_effect_of_rarity"
+    },
+    "diagnostic_rule": "real_must_exceed_max_of_three_shams_or_controls_no_permutation_p_value",
+    "inferential_permutation_minimum_if_ever_added": 19
+  },
+  "model_screen": {
+    "families": ["local_linear", "small_residual_cnn_1d"],
+    "design_basis": "local_linear_tests_additivity; residual_CNN_tests_short_and_multiscale_ordered_context; four_radii_inherit_M32_memory_validated_screen; boundary_weights_compare_uniform_vs_transition_focused_loss; total_16_candidates_is_a_small_exhaustive_screen",
+    "input_output": "tokens_B_M_K_13_mask_B_M_K_plus_F0_B_2_M_3_to_corrected_B_2_M_3",
+    "local_linear": "masked_mean_and_max_of_13_channels_concat_each_haplotype_F0_3_then_shared_Linear29x3_90_parameters",
+    "small_residual_cnn_1d": "reshape_B_M_as_batch; mask_input; stem_Conv1d13to16_k1_same_bias_then_GELU_mask; block1_depthwise16_k5_dilation1_padding2_bias_then_pointwise16_k1_bias_then_GN4_GELU_dropout0.1_residual_add_mask; block2_same_with_dilation4_padding8; masked_mean_and_masked_max32_with_all_zero_if_K0; concat_each_haplotype_F0_3; shared_head_Linear35to16_GELU_dropout0.1_Linear16to3; restore_B_2_M_3; 1651_parameters",
+    "output": "shared_haplotype_head_delta_logits_with_zero_initialized_final_layer_reproduces_F0",
+    "candidate_grid": {
+      "cartesian_product": ["family_2", "radius_cM_4", "boundary_loss_weight_2"],
+      "families": ["local_linear", "small_residual_cnn_1d"],
+      "radius_cM": [0.05, 0.1, 0.2, 0.5],
+      "boundary_loss_weight": [0.0, 1.0],
+      "total_candidates": 16,
+      "training_seeds": [1103, 2207, 3301]
+    },
+    "training": {
+      "loss": "weighted_per_marker_cross_entropy_defined_by_loss_normalization",
+      "optimizer": "AdamW",
+      "learning_rate": {"local_linear": 0.001, "small_residual_cnn_1d": 0.0003},
+      "weight_decay": 0.0001,
+      "batch_people": 8,
+      "marker_block_length": 256,
+      "sampler": "deterministic_seeded_permutation_of_complete_person_by_contiguous_256_marker_blocks_each_epoch_drop_last_false_with_radius_context_loaded_but_loss_on_central_block_only",
+      "loss_normalization": "per_haplotype_marker_cross_entropy_weight_1_plus_beta_if_truth_transition_at_left_adjacent_marker_boundary_then_sum_div_sum_weights",
+      "max_updates": 2000,
+      "warmup_updates": 100,
+      "schedule": "linear_warmup_then_cosine_to_zero",
+      "gradient_clip_norm": 1.0,
+      "inner_validation": "deterministic_hash_split_complete_people_80_20_within_two_FIT_roots_no_shared_donor",
+      "checkpoint_rule": "RD_only_selects_earliest_minimum_inner_validation_loss_among_updates_200_to_2000_every_50_with_tie_epsilon_1e-12; identical_selected_update_reused_by_RE_all_shams_and_common_controls",
+      "arm_training": "no_arm_specific_early_stopping_and_no_seed_shopping",
+      "final_refit_updates": "per_seed_median_of_three_rotation_RD_selected_updates_rounded_down_to_nearest_50_then_reused_by_every_arm",
+      "temperature_scaling": "per_rotation_and_arm_average_three_seed_probabilities_on_FIT_inner_validation_then_fit_one_positive_temperature; never_use_score_only_root; final_refit_uses_median_of_three_rotation_temperatures",
+      "deterministic_algorithms": true
+    },
+    "selection": {
+      "score_only_roots": "one_per_rotation_never_used_for_updates_early_stopping_or_temperature",
+      "seed_aggregation": "pair_same_three_seeds_across_all_arms_and_average_their_probability_tensors_before_temperature_and_metrics_no_individual_seed_is_selectable",
+      "candidate_key": ["eligible_only_if_RE_beats_F0_and_RD_with_all_guardrails_in_each_root", "maximize_min_root_delta_F1_at_0.2_RE_minus_F0", "maximize_min_root_delta_F1_at_0.2_RE_minus_RD", "maximize_mean_root_delta_F1_at_0.2_RE_minus_F0", "minimize_mean_false_transitions_difference_RE_minus_F0", "minimize_mean_macro_MAE_difference_RE_minus_F0", "minimize_parameter_count", "candidate_id_lexical"],
+      "one_candidate_then_refit_all_DEVELOPMENT": true,
+      "DEVELOPMENT_scores_are_selection_biased_screening_not_confirmatory": true,
+      "EVAL_model_shopping": false
+    },
+    "capacity_receipt_per_arm": ["parameter_count", "parameter_name_shape_sha256", "receptive_field_cM", "optimizer_update_count", "sampler_sha256"],
+    "capacity_rule": "exact_equality_within_family_between_rare_enabled_rare_disabled_shams_and_common_controls",
+    "transformer_diffusion_autoencoder": false,
+    "training_blocked_until_T0_T1_POST": true
+  },
+  "truth_barrier": {
+    "T0_no_gradient": "accepts_no_truth_path_or_argument",
+    "FIT": "truth_mounted_only_for_loss_inside_current_DEVELOPMENT_rotation",
+    "PREDICT_SCORE_ONLY_ROOT": "truth_not_mounted_prediction_hash_fsynced_before_separate_scoring_process",
+    "PREDICT_EVAL": "no_EVAL_truth_mounted_or_addressable",
+    "SCORE_EVAL": "requires_atomic_OPEN_receipt_and_fsynced_prediction_hash_manifest",
+    "retune_after_score_only_DEVELOPMENT_or_EVAL": false
+  },
+  "metrics": {
+    "primary": "paired_boundary_F1_at_0.2_cM_RE_minus_RD_per_simulation_root",
+    "root_aggregation": "within_each_root_pool_TP_FP_FN_after_per_haplotype_one_to_one_matching_then_F1_equals_2TP_div_2TP_plus_FP_plus_FN",
+    "sensitivity_only": ["paired_boundary_F1_at_0.1_cM", "paired_boundary_F1_at_0.5_cM", "delta_F1_at_0.2_cM_ge_0.01"],
+    "boundary_matching": "transition_aware_maximum_cardinality_then_minimum_distance_one_to_one",
+    "hard_calls": "argmax_renormalized_probability_with_fixed_tie_order_AFR_then_EUR_then_ASIA_separately_per_haplotype",
+    "predicted_boundary": "midpoint_cM_between_adjacent_FLARE_markers_whose_hard_calls_differ_excluding_chromosome_ends",
+    "truth_boundary": "half_open_truth_segment_breakpoint_mapped_to_cM_by_linear_interpolation_on_the_frozen_map_excluding_chromosome_ends",
+    "transition_identity": "ordered_left_ancestry_to_right_ancestry_must_match_exactly_within_the_same_haplotype",
+    "matching_algorithm": "for_each_haplotype_and_transition_pair_maximum_cardinality_within_tolerance_then_minimum_total_absolute_cM_distance_then_lexical_marker_index_tiebreak",
+    "F1_formula": "2TP_div_2TP_plus_FP_plus_FN; if_denominator_zero_return_1_only_when_truth_and_prediction_both_have_zero_boundaries_else_0",
+    "guardrails": ["false_transitions_per_cM_pooled_within_root", "macro_ancestry_dose_MAE_mean_over_complete_people_within_root", "MAE_each_truth_ancestry_present_mean_over_complete_people_within_root"],
+    "secondary": ["matched_boundary_median_cM", "matched_boundary_p90_cM", "haplotype_Brier", "diploid_macro_F1"],
+    "primary_inference_unit": "simulation_root",
+    "person_uncertainty": "secondary_nested_bootstrap_within_root",
+    "marker_is_not_independent_unit": true,
+    "numeric_tie_epsilon": 1e-12,
+    "NaN_rule": "automatic_failure"
+  },
+  "promotion_rule": {
+    "DEVELOPMENT_GO": [
+      "for_each_root_RE_minus_F0_F1_at_0.2_gt_1e-12",
+      "for_each_root_RE_minus_RD_F1_at_0.2_gt_1e-12",
+      "for_each_root_RE_minus_F0_false_transitions_per_cM_le_1e-12",
+      "for_each_root_RE_minus_RD_false_transitions_per_cM_le_1e-12",
+      "for_each_root_RE_minus_F0_macro_MAE_le_1e-12",
+      "for_each_root_RE_minus_RD_macro_MAE_le_1e-12",
+      "for_each_root_and_each_truth_ancestry_present_RE_minus_F0_MAE_le_1e-12",
+      "for_each_root_and_each_truth_ancestry_present_RE_minus_RD_MAE_le_1e-12",
+      "for_each_root_RE_delta_F1_at_0.2_exceeds_max_three_TARGET_shams",
+      "REF_claim_only_if_real_exceeds_max_three_REF_label_shams",
+      "rare_specific_claim_only_if_real_exceeds_best_of_three_feasible_common_controls"
+    ],
+    "EVAL_open_gate": "single_candidate_and_all_code_container_asset_model_sampler_prediction_hashes_plus_design_sensitivity_receipt_sha256_sealed_after_DEVELOPMENT_GO",
+    "EVAL_controls": "run_F0_RD_RE_three_TARGET_shams_three_REF_shams_and_three_feasible_common_controls_with_the_same_frozen_candidate_seeds_ensemble_updates_and_temperature_rules",
+    "EVAL_directional_pass": "five_of_five_independent_roots_pass_same_RE_vs_F0_and_RE_vs_RD_primary_and_guardrails_and_real_exceeds_max_diagnostic_controls; ties_and_NaN_fail",
+    "sign_resolution": "one_sided_1_div_32_only_for_one_frozen_candidate_if_roots_are_verified_independent_and_signs_exchangeable_symmetric",
+    "two_sided_significance_claim": false,
+    "SESOI_MDE": "design_sensitivity_and_any_practical_SESOI_must_be_frozen_in_separate_receipt_before_EVAL; without_a_defensible_SESOI_the_maximum_claim_is_directional_replication_with_effect_sizes_not_practical_significance",
+    "failure": "STOP_THIS_ORDERED_RARE_CORRECTOR_REPRESENTATION_WITHOUT_GENERALIZING_TO_ALL_RARE_VARIANT_METHODS"
+  },
+  "technical_gates": {
+    "T0_inference_only": {
+      "status": "BLOCKED_PENDING_PINNED_PYTORCH_IMAGE_AND_IMPLEMENTATION",
+      "inputs": "technical_roots_20260817_20260818_plus_truth_free_synthetic_stress",
+      "stress_people": [30, 256, 1024, 2619],
+      "stress_loci": 512,
+      "checks": ["no_truth_interface", "torch_inference_mode", "finite_simplex", "zero_residual_reproduces_F0_max_abs_le_1e-6", "joint_haplotype_swap_equivariance_max_abs_le_1e-6", "person_permutation_equivariance_max_abs_le_1e-6", "padding_batch_chunk_invariance_max_abs_le_1e-6", "parameter_and_shape_hashes", "full_chr22_forward_technical_roots", "peak_RSS_le_0.7_host_RAM", "peak_VRAM_le_0.7_device_RAM", "private_tensors_not_published"]
+    },
+    "T1_backward_dry_run": {
+      "status": "BLOCKED_UNTIL_T0_POST",
+      "operation": "one_forward_backward_without_optimizer_step_on_synthetic_stress",
+      "checks": ["finite_loss", "finite_gradients", "peak_RSS_le_0.8_host_RAM", "peak_VRAM_le_0.8_device_RAM", "no_checkpoint_written"]
+    }
+  },
+  "stop_rules": [
+    "contract_code_container_or_input_hash_mismatch",
+    "asset_manifest_or_disjunction_gate_not_PASS",
+    "consumed_root_used_for_scientific_selection_or_claim",
+    "truth_available_to_T0_T1_or_prediction_process",
+    "normalization_matching_or_early_stopping_uses_score_only_DEVELOPMENT_EVAL_TARGET_or_truth",
+    "common_control_reuses_a_FLARE_marker",
+    "sham_changes_a_declared_preserved_quantity",
+    "ambiguous_REF_support_semantics",
+    "missing_encoded_as_hom_ref",
+    "phase_ceiling_enters_screen_promotion_or_DNABR_claim",
+    "capacity_parameter_update_sampler_or_receptive_field_differs_within_family",
+    "nonfinite_or_nonsimplex_prediction",
+    "peak_memory_fraction_reaches_gate",
+    "training_requested_before_T0_T1_POST_PASS",
+    "retuning_after_score_only_DEVELOPMENT_or_EVAL_opening",
+    "optimizer_grid_candidate_table_or_tiebreak_hash_drift"
+  ],
+  "external_evidence": [
+    "Browning_et_al_AJHG_2023_FLARE_DOI_10.1016/j.ajhg.2022.12.010",
+    "Mas-Sandoval_et_al_Nature_Communications_2025_DOI_10.1038/s41467-025-59936-3",
+    "Yang_et_al_Nature_Communications_2025_DOI_10.1038/s41467-025-57601-3"
+  ]
+}
