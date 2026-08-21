@@ -127,6 +127,9 @@ class M32LocusSequenceSmokeTest(unittest.TestCase):
             names = ["m32_locus_sequence.occupancy_and_invariants.json", "m32_locus_sequence.provenance.json", "m32_locus_sequence.manifest.json", "m32_locus_sequence.receipt.json"]
             for name in names:
                 self.assertEqual((base / "a" / "same" / name).read_bytes(), (base / "b" / "same" / name).read_bytes())
+            receipt = json.loads((base / "a" / "same" / "m32_locus_sequence.receipt.json").read_text())
+            self.assertEqual(receipt["git_commit"], head)
+            self.assertEqual(receipt["authenticated_source_count"], 8)
             result = subprocess.run(commands[0], text=True, capture_output=True)
             self.assertNotEqual(result.returncode, 0)
 
