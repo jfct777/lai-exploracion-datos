@@ -1,0 +1,48 @@
+{
+  "stage": "M32_REAL_CHR22_OCCUPANCY_SCREEN",
+  "version": 1,
+  "status": "TRUTH_FREE_COORDINATE_SCREEN_ONLY_NOT_SCIENTIFIC_EVIDENCE",
+  "chromosome": "chr22",
+  "radii_cm": [0.05, 0.1, 0.2, 0.5],
+  "radius_definition": "symmetric_radius_cm_around_each_FLARE_marker",
+  "select_radius": false,
+  "allowed_fields": ["chrom", "bp", "cm", "locus_id"],
+  "prohibited_inputs": ["truth", "target_genotypes", "FLARE_posteriors", "predicted_boundaries", "true_boundaries"],
+  "genetic_map": {
+    "uri": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/maps/genetic.map.chr22",
+    "generation": "1673955700088022",
+    "sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9"
+  },
+  "roots": {
+    "root17": {
+      "root_seed": 20260817,
+      "role": "consumed_technical_known_answer_only",
+      "rare_sites_uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m31-ordered-rare-preflight-20260820a/root17-preflight/m31_ordered_rare.sites.tsv.gz",
+      "rare_sites_generation": "1787246083380131",
+      "rare_sites_sha256": "f23686f123abec9bfe14fcf3d88e3954e32fa6206707d0cc2d2b68bb9d360c4e",
+      "flare_grid_uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m30-flare-baseline-20260819b/30_flare_baseline/root17/flare/root17.flare.anc.vcf.gz",
+      "flare_grid_generation": "1787175566795248",
+      "flare_grid_sha256": "85dfd76df2c14cb8fe0a753910f25c49c88d38edc5708ec6d641053d95cc74e8"
+    },
+    "root18": {
+      "root_seed": 20260818,
+      "role": "consumed_technical_known_answer_only",
+      "rare_sites_uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m31-ordered-rare-preflight-20260820a/root18-preflight/m31_ordered_rare.sites.tsv.gz",
+      "rare_sites_generation": "1787246085420984",
+      "rare_sites_sha256": "eec6a6a3cfbe0f832618c69451a6bf588b4d60a5b734e05fc8acc343849f1f9b",
+      "flare_grid_uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m30-flare-baseline-20260819b/30_flare_baseline/root18/flare/root18.flare.anc.vcf.gz",
+      "flare_grid_generation": "1787175916753131",
+      "flare_grid_sha256": "edc4bcdc62f5ce0ffe04bd27e9d6d6ee892e03282a1474639fc3082fbc3832c9"
+    }
+  },
+  "stop_conditions": [
+    "input_sha256_mismatch",
+    "chromosome_not_chr22",
+    "bp_not_unique_or_not_strictly_increasing",
+    "cm_decreasing_or_nonfinite",
+    "coordinate_identity_loss",
+    "output_exists",
+    "source_not_in_git_commit"
+  ],
+  "scientific_run_authorized": false
+}
