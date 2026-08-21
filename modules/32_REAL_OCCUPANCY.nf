@@ -2,6 +2,7 @@ nextflow.enable.dsl=2
 
 process M32_MATERIALIZE_COORDINATES {
     tag { "m32_coordinates_${root_label}" }
+    publishDir { "${params.m32_occ_results_dir}/${params.m32_occ_run_id}" }, mode: 'copy', overwrite: false
     cpus params.m32_occ_cpus
     memory params.m32_occ_memory
     time params.m32_occ_time

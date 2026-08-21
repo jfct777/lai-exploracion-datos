@@ -115,7 +115,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     write_json_atomic(receipt_path, {
         "stage": contract["stage"], "root_label": args.root_label,
         "status": "PASS_TRUTH_FREE_OCCUPANCY_ONLY", "git_commit": git_commit,
-        "manifest_sha256": sha256_file(manifest_path), "scientific_run_authorized": False,
+        "manifest_sha256": sha256_file(manifest_path),
+        "provenance_sha256": sha256_file(provenance_path),
+        "authenticated_source_count": len(source_hashes),
+        "scientific_run_authorized": False,
     })
     return 0
 

@@ -53,6 +53,7 @@ class M32RealOccupancyTest(unittest.TestCase):
             self.assertNotIn(prohibited, module)
             self.assertNotIn(prohibited, workflow)
         self.assertIn("overwrite: false", module)
+        self.assertEqual(module.count("publishdir"), 2)
         self.assertIn("m32_occ_cpus = 1", config)
         self.assertIn("m32_occ_memory = '2 GB'", config)
         self.assertIn("maxForks = 2", config)

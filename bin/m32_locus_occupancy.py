@@ -40,7 +40,7 @@ def occupancy_report(grid_cm: Sequence[float], rare_cm: Sequence[float], radii_c
     grid = validate_positions(grid_cm, "FLARE grid")
     rare = validate_positions(rare_cm, "rare loci")
     reports = []
-    quantiles = (("q0", 0.0), ("q25", 0.25), ("q50", 0.5), ("q75", 0.75), ("q95", 0.95), ("q100", 1.0))
+    quantiles = (("q0", 0.0), ("q25", 0.25), ("q50", 0.5), ("q75", 0.75), ("q90", 0.90), ("q95", 0.95), ("q99", 0.99), ("q100", 1.0))
     for radius_value in radii_cm:
         radius = float(radius_value)
         counts = context_counts(grid, rare, radius)
@@ -53,6 +53,8 @@ def occupancy_report(grid_cm: Sequence[float], rare_cm: Sequence[float], radii_c
             "marker_count": len(grid),
             "rare_locus_count": len(rare),
             "count_quantiles": {name: _nearest_quantile(ordered, probability) for name, probability in quantiles},
+            "mean_loci": sum(counts) / len(counts),
+            "total_context_locus_assignments": sum(counts),
             "empty_fraction": sum(value == 0 for value in counts) / len(counts),
             "maximum_total_loci": max(counts),
             "maximum_loci_left": max(left_counts),

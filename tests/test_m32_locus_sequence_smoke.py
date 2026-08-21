@@ -58,6 +58,8 @@ class M32LocusSequenceSmokeTest(unittest.TestCase):
         self.assertEqual(report["grid_marker_count"], 4)
         self.assertFalse(report["selects_radius"])
         self.assertEqual([row["radius_cm"] for row in report["contexts"]], list(EXPECTED_RADII))
+        self.assertEqual(report["contexts"][0]["total_context_locus_assignments"], 4)
+        self.assertEqual(report["contexts"][0]["mean_loci"], 1.0)
 
     def test_occupancy_accepts_cm_ties_but_rejects_bad_coordinates(self):
         self.assertEqual(validate_positions([0.1, 0.1, 0.2], "ties"), [0.1, 0.1, 0.2])
