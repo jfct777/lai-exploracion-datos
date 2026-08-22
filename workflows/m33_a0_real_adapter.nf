@@ -11,8 +11,9 @@ workflow {
     def missing = required.findAll { !params["m33_a0_${it}"] }
     if (missing) error "M33 A0 requires explicit parameters: ${missing.join(', ')}"
     if (!(params.m33_a0_git_commit ==~ /[0-9a-f]{40}/)) error 'M33 A0 requires an exact Git commit'
-    if (params.m33_a0_root_label != 'root17' || (params.m33_a0_root_seed as int) != 20260817) {
-        error 'This add-only A0 registry currently authorizes root17/20260817 only'
+    def allowedTechnicalRoots = [root17: 20260817, root18: 20260818]
+    if (allowedTechnicalRoots[params.m33_a0_root_label] != (params.m33_a0_root_seed as int)) {
+        error 'A0 requires an exact registered technical root label/seed pair'
     }
 
     def repo = projectDir.resolve('..')

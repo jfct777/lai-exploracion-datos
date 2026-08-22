@@ -35,6 +35,39 @@
         "genetic_map": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
         "flare_anc_tbi": null
       }
+    },
+    "root18": {
+      "root_seed": 20260818,
+      "expected_counts": {
+        "catalog_sites": 94996,
+        "selected_rare_sites": 94703,
+        "excluded_single_carrier_sites": 293,
+        "minor_code_zero_sites": 541,
+        "incremental_rare_sites": 94703,
+        "rare_overlap_flare_sites": 0,
+        "freq_people": 300,
+        "ref_people": 90,
+        "donor_people": 768,
+        "target_people": 30,
+        "flare_loci": 79791
+      },
+      "sha256": {
+        "tree_sequence": "780800c1f3d279746ace8631fa1b1ccd57782e9bf697a3dacc2cc983523f5f54",
+        "pools": "046c6e903ca4b3beea8ac468836d28bb953d32b4e731c13be86f42d7c110a4ff",
+        "rare_catalog": "7a12195c18db5d4bfd5a1cee43ed4f04eccc5cd21d9fb7ed01e8c24f2a00c3b3",
+        "rare_haplotypes": "29c562da4cdf24a680b617fc155f0ee09546e8dbd4b23cd8dd4a75d5daeb9827",
+        "m31_sites": "eec6a6a3cfbe0f832618c69451a6bf588b4d60a5b734e05fc8acc343849f1f9b",
+        "m31_target": "c6622c0bbaa6657187f6488a6fcfd523ab90b7d628da4cac03adc9476a9ca6d5",
+        "ref_vcf": "6bcf0ccfbc06e82bb89677848d2a5a9e61e56d18019dff95a4949e39ec4cb05d",
+        "ref_tbi": "d602322e07c04e98c81bcf2d48cba3b8237e4b64d28bf8727154e234dc88c72c",
+        "target_vcf": "9cc8f5625b7096b1cf5b180fdf1186af05309ea0460dc8e091b502b7b493de8b",
+        "target_tbi": "f58dedca176e53824c4659069304fea946147a0c91caa6cad5ebc98754420836",
+        "ref_pairs": "89f90f8be99e452098bf2afd8a18f8110ae00f2a2d96c140f2ace75cc855b058",
+        "panel_map": "1ae29789a2d793957a367b77b78300ddba6d7537c10bb5cda318ef3fdd547647",
+        "flare_anc": "edc4bcdc62f5ce0ffe04bd27e9d6d6ee892e03282a1474639fc3082fbc3832c9",
+        "genetic_map": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+        "flare_anc_tbi": null
+      }
     }
   },
   "root18_policy": "ADD_ONLY_AFTER_ROOT17_PASS_AND_EXACT_HASH_RECONCILIATION",

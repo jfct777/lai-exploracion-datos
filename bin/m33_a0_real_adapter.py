@@ -37,7 +37,7 @@ INPUT_NAMES = {
 }
 ANCESTRIES = ("AFR", "EUR", "ASIA")
 EXPECTED_PREREGISTRATION_SHA256 = "c99f890e00c383df25bbdfbb94e9fba3bb181adbfa4db1e1301e4648cfa3d70d"
-EXPECTED_ASSET_REGISTRY_SHA256 = "44311fe8ef9238c81f630343857439ac16e52b7569c1348a52fb65d744ad93cd"
+EXPECTED_ASSET_REGISTRY_SHA256 = "649993d6e098b3cf92260a95d5bfcf8a89a529f8438f753dce368598958773de"
 REQUIRED_SOURCE_PATHS = {
     "bin/m33_a0_real_adapter.py", "bin/m33_a0_source_auth.py", "bin/m33_a0_tabix_audit.py",
     "bin/m31_ordered_linear.py", "bin/m31_ordered_rare_preflight.py",

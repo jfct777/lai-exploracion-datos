@@ -18,11 +18,11 @@ class M33A0NextflowTests(unittest.TestCase):
         self.assertIn("path('m33_a0_index_audit.json')", MODULE)
         self.assertIn("overwrite:false", MODULE)
 
-    def test_root17_only_and_no_scientific_actions(self):
-        self.assertIn("root17", WORKFLOW)
-        self.assertIn("20260817", WORKFLOW)
+    def test_exact_consumed_root_pairs_and_no_scientific_actions(self):
+        for token in ("root17", "20260817", "root18", "20260818"):
+            self.assertIn(token, WORKFLOW)
         combined = "\n".join((MODULE, WORKFLOW, CONFIG)).lower()
-        for forbidden in ("root18/20260818", "truth", "gradient", "checkpoint", "optimizer", "train ", "gcloud", "gsutil"):
+        for forbidden in ("truth", "gradient", "checkpoint", "optimizer", "train ", "gcloud", "gsutil"):
             self.assertNotIn(forbidden, combined)
 
     def test_fail_closed_resources_and_pinned_container(self):

@@ -1,5 +1,6 @@
 import csv
 import gzip
+import hashlib
 import importlib.util
 import json
 import sys
@@ -50,22 +51,46 @@ class M33A0ContractTests(unittest.TestCase):
         ):
             self.assertIn(f'"{relative}"', source_auth)
 
-    def test_contract_is_technical_only_and_root17_registry_is_exact(self):
+    def test_contract_is_technical_only_and_registry_is_add_only(self):
         contract = json.loads((ROOT / "conf/m33_a0_real_adapter_preregistration.json").read_text())
         registry = json.loads((ROOT / "conf/m33_a0_legacy_assets.json").read_text())
         self.assertEqual(contract["status"], "TECHNICAL_COMPATIBILITY_ONLY")
-        self.assertEqual(set(registry["roots"]), {"root17"})
+        self.assertEqual(set(registry["roots"]), {"root17", "root18"})
+        root17_canonical = json.dumps(
+            registry["roots"]["root17"], sort_keys=True, separators=(",", ":")
+        ).encode()
+        self.assertEqual(
+            hashlib.sha256(root17_canonical).hexdigest(),
+            "4a9c6fe8d7cc9cddc9e44f1d8f0595c122d0b653774bef7813ca9f913f6067d8",
+        )
+        root18_canonical = json.dumps(
+            registry["roots"]["root18"], sort_keys=True, separators=(",", ":")
+        ).encode()
+        self.assertEqual(
+            hashlib.sha256(root18_canonical).hexdigest(),
+            "132e133031f81956ecb11fae5861c895b21108edeb03f823e57b4155833aa39a",
+        )
         self.assertEqual(registry["roots"]["root17"]["root_seed"], 20260817)
+        self.assertEqual(registry["roots"]["root18"]["root_seed"], 20260818)
         self.assertIsNone(registry["roots"]["root17"]["sha256"]["flare_anc_tbi"])
+        self.assertIsNone(registry["roots"]["root18"]["sha256"]["flare_anc_tbi"])
         self.assertFalse(contract["execution_authorization"]["write_READY"])
         for key in ("materialize_tensor", "forward", "backward", "training", "truth_scoring"):
             self.assertFalse(contract["execution_authorization"][key])
 
-    def test_contract_rejects_root18_until_add_only_reconciliation(self):
-        with self.assertRaisesRegex(ValueError, "not yet frozen"):
+    def test_contract_accepts_reconciled_root18(self):
+        _contract, root = A0.load_contract(
+            ROOT / "conf/m33_a0_real_adapter_preregistration.json",
+            ROOT / "conf/m33_a0_legacy_assets.json", "root18", 20260818,
+        )
+        self.assertEqual(root["expected_counts"]["selected_rare_sites"], 94703)
+        self.assertEqual(root["expected_counts"]["rare_overlap_flare_sites"], 0)
+
+    def test_contract_rejects_mismatched_root_seed_pair(self):
+        with self.assertRaisesRegex(ValueError, "not allowed"):
             A0.load_contract(
                 ROOT / "conf/m33_a0_real_adapter_preregistration.json",
-                ROOT / "conf/m33_a0_legacy_assets.json", "root18", 20260818,
+                ROOT / "conf/m33_a0_legacy_assets.json", "root18", 20260817,
             )
 
     def test_contract_drift_is_rejected_by_frozen_hash(self):
