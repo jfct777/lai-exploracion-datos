@@ -3,9 +3,9 @@
   "stage": "M33_I0_PUBLICATION_SOURCE_AUTH",
   "status": "AUTHORIZED_EXACT_PUBLICATION_SOURCES",
   "files": {
-    "bin/m33_i0_publish.py": "8c5ec628440ece8c8224eea00bcd7bd1c7379084b032ca864774006ec15c309a",
-    "conf/m33_i0_publication_authorization.json": "c27aa60c0b54b4ac2501e8e875ea27732726e43f9f1f2c4620fee7787850bc89",
+    "bin/m33_i0_publish.py": "c1085e179d090985c8844ad6bdc7890758a2908d41be339ea33c1712945053db",
+    "conf/m33_i0_publication_authorization.json": "9626a79d6415ef73dce53964fc6ff30b91b5ddaec574f01e1f593bda45b3ab1d",
     "conf/m33_storage_namespace_policy.json": "ff9143e29fe154cc5d793a7b36efe91cefc08ff012f8024ffa1c39b7b1adc1da",
-    "tests/test_m33_i0_publish.py": "73b19e3a37410a854242e38b1137ded8c6bef25031acf413628499baa85299df"
+    "tests/test_m33_i0_publish.py": "743adb168f9392ca6543702eaf929980ae52eb84364323a0abdcee86f4d06968"
   }
 }
