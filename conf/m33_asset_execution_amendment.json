@@ -57,10 +57,13 @@
   },
   "bundles": {
     "provenance_bundle": ["plan_manifest", "generator_source_auth", "generator_manifest", "flare_run_manifest", "flare_receipt", "final_manifest", "READY"],
-    "generator_private_bundle": ["tree_sequence", "roles", "panel_map", "mosaic_events"],
-    "predict_bundle": ["selected_sites_all", "selected_sites_incremental", "selected_sites_overlap_flare", "target_rare_incremental", "ref_vcf", "ref_tbi", "target_vcf", "target_tbi", "panel_map", "flare_anc", "flare_anc_tbi", "flare_global", "flare_model", "flare_log", "flare_audit", "genetic_map"],
+    "generator_private_bundle": ["tree_sequence", "roles", "panel_map", "mosaic_events", "freq_variant_genotypes", "selected_sites_all", "selected_sites_overlap_flare", "target_rare_incremental", "ref_rare_genotypes_incremental"],
+    "predict_bundle": ["selected_sites_incremental", "target_rare_diploid_incremental", "ref_rare_incremental", "flare_anc", "flare_anc_tbi", "genetic_map"],
     "flare_input_bundle": ["ref_vcf", "ref_tbi", "target_vcf", "target_tbi", "panel_map", "genetic_map"],
-    "rare_enabled_model_bundle": ["selected_sites_incremental", "target_rare_incremental", "flare_anc", "flare_anc_tbi", "genetic_map"],
+    "flare_output_bundle": ["flare_anc", "flare_anc_tbi", "flare_global", "flare_model", "flare_log", "flare_audit"],
+    "rare_enabled_model_bundle": ["selected_sites_incremental", "target_rare_diploid_incremental", "ref_rare_incremental", "flare_anc", "flare_anc_tbi", "genetic_map"],
+    "rare_screen_tensor_bundle": ["selected_sites_incremental", "target_rare_diploid_incremental", "ref_rare_incremental", "flare_anc", "flare_anc_tbi", "genetic_map"],
+    "H_SIMULATION_ONLY_bundle": ["target_rare_incremental"],
     "private_truth_bundle": ["tree_sequence", "mosaic_events", "truth", "donor_to_target_provenance"]
   },
   "publication_envelopes": {
@@ -77,10 +80,14 @@
     "mosaic_events": {"schema": "m33_mosaic_events_half_open_v1", "privacy": "private", "root_specific": true},
     "truth": {"schema": "m33_haplotype_truth_half_open_v1", "privacy": "private", "root_specific": true},
     "donor_to_target_provenance": {"schema": "m33_donor_target_provenance_v1", "privacy": "private", "root_specific": true},
+    "freq_variant_genotypes": {"schema": "m33_freq_variant_genotypes_all_candidates_json_v1", "privacy": "private", "root_specific": true},
     "selected_sites_all": {"schema": "m33_selected_sites_all_chrom_pos_ref_alt_v1", "privacy": "private", "root_specific": true},
     "selected_sites_incremental": {"schema": "m33_selected_sites_incremental_chrom_pos_ref_alt_v1", "privacy": "private", "root_specific": true},
     "selected_sites_overlap_flare": {"schema": "m33_selected_sites_overlap_flare_chrom_pos_ref_alt_v1", "privacy": "private", "root_specific": true},
     "target_rare_incremental": {"schema": "m33_target_rare_incremental_haplotype_minor_allele_json_v1", "privacy": "private", "root_specific": true},
+    "target_rare_diploid_incremental": {"schema": "m33_target_rare_diploid_incremental_json_v1", "privacy": "private", "root_specific": true},
+    "ref_rare_genotypes_incremental": {"schema": "m33_ref_rare_genotypes_incremental_haplotype_json_v1", "privacy": "private", "root_specific": true},
+    "ref_rare_incremental": {"schema": "m33_ref_rare_incremental_by_ancestry_json_v1", "privacy": "private", "root_specific": true},
     "ref_vcf": {"schema": "vcf_4_2_bgzip_phased_biallelic_GRCh38_chr22", "privacy": "private", "root_specific": true},
     "ref_tbi": {"schema": "tabix_v1", "privacy": "private", "root_specific": true},
     "target_vcf": {"schema": "vcf_4_2_bgzip_phased_biallelic_GRCh38_chr22", "privacy": "private", "root_specific": true},
@@ -95,7 +102,7 @@
     "flare_receipt": {"schema": "m33_flare_truth_blind_receipt_v3", "privacy": "private", "root_specific": true},
     "genetic_map": {"schema": "dnabr_genetic_map_chr_bp_cm_v1", "privacy": "private", "root_specific": false}
   },
-  "scientific_asset_types": ["tree_sequence", "roles", "panel_map", "mosaic_events", "truth", "donor_to_target_provenance", "selected_sites_all", "selected_sites_incremental", "selected_sites_overlap_flare", "target_rare_incremental", "ref_vcf", "ref_tbi", "target_vcf", "target_tbi", "flare_anc", "flare_anc_tbi", "flare_global", "flare_model", "flare_log", "flare_audit", "genetic_map"],
+  "scientific_asset_types": ["tree_sequence", "roles", "panel_map", "mosaic_events", "truth", "donor_to_target_provenance", "freq_variant_genotypes", "selected_sites_all", "selected_sites_incremental", "selected_sites_overlap_flare", "target_rare_incremental", "target_rare_diploid_incremental", "ref_rare_genotypes_incremental", "ref_rare_incremental", "ref_vcf", "ref_tbi", "target_vcf", "target_tbi", "flare_anc", "flare_anc_tbi", "flare_global", "flare_model", "flare_log", "flare_audit", "genetic_map"],
   "rare_selector": {
     "selection_population": "FREQ_only",
     "variant_key": ["CHROM", "POS", "REF", "ALT"],
@@ -111,6 +118,32 @@
       "overlap_is_reported_but_never_counted_as_new_locus_information": true
     },
     "forbidden_inputs": ["REF_LAI", "DONOR", "TARGET", "truth", "FLARE_prediction"]
+  },
+  "screen_tensor_contract": {
+    "input_bundle": "rare_screen_tensor_bundle",
+    "shape": "rare_tokens_B_M_K_13_mask_B_M_K_F0_B_2_M_3",
+    "channel_count": 13,
+    "channel_order": [
+      "target_minor_dosage_div_2_float32_clip_0_1",
+      "target_observed_mask_float32_0_1",
+      "ref_minor_af_AFR_float32_clip_0_1",
+      "log1p_ref_callable_AFR_div_log1p_maxAN_AFR_FIT",
+      "ref_observed_AFR_float32_0_1",
+      "ref_minor_af_EUR_float32_clip_0_1",
+      "log1p_ref_callable_EUR_div_log1p_maxAN_EUR_FIT",
+      "ref_observed_EUR_float32_0_1",
+      "ref_minor_af_ASIA_float32_clip_0_1",
+      "log1p_ref_callable_ASIA_div_log1p_maxAN_ASIA_FIT",
+      "ref_observed_ASIA_float32_0_1",
+      "relative_cM_minus_marker_cM_div_radius_clip_minus1_1",
+      "delta_cM_from_previous_ordered_locus_div_radius_clip_0_2"
+    ],
+    "rare_order": ["cM", "bp", "locus_id"],
+    "first_ordered_locus_delta_cM": 0.0,
+    "main_simulation_missingness": "none_FREQ_minor_AN_exactly_600_per_locus_and_REF_callable_AN_exactly_60_per_ancestry_locus",
+    "missingness_allowed_only_in_adversarial_contract_fixtures": true,
+    "materializer_status": "BLOCKED_NOT_IMPLEMENTED",
+    "training_status": "BLOCKED_NOT_IMPLEMENTED"
   },
   "semantic_fingerprints": {
     "normalized_full_tree": "sha256_of_deterministically_row_sorted_normalized_tskit_tables_and_sequence_length_and_time_units_including_sites_and_mutations_but_always_excluding_file_UUID_and_all_provenance_rows_or_other_nonscientific_serialization_metadata",
@@ -138,6 +171,8 @@
   },
   "reopened_json_contracts": {
     "roles": "strict_UTF8_JSON_complete_diploid_roles_validated_against_PRE4_counts_and_disjunction",
+    "tree_sequence_fixture_view": "strict_UTF8_JSON_authoritative_all_normalized_biallelic_chr22_candidates_by_exact_300_FREQ_people_contract_fixture_only",
+    "freq_variant_genotypes": "strict_UTF8_JSON_exact_view_of_tree_sequence_fixture_authority_for_all_chr22_biallelic_candidate_variants_by_exact_300_FREQ_people_with_diploid_0_1_null_homologues",
     "mosaic_events": "strict_UTF8_JSON_exact_60_TARGET_chr22_half_open_tiles_no_gaps_no_overlaps_and_global_DONOR_no_replacement",
     "truth": "strict_UTF8_JSON_exact_merge_of_mosaic_events",
     "donor_to_target_provenance": "strict_UTF8_JSON_exact_incremental_locus_alleles_reconstructed_from_allowed_DONOR_tiles",
@@ -147,15 +182,20 @@
     "flare_run_manifest": "strict_UTF8_JSON_m33_flare_run_manifest_v1_exact_keys_and_descriptor_hashes",
     "flare_audit": "strict_UTF8_JSON_m33_flare_truth_blind_audit_v1_exact_parity_finite_simplex_and_truth_accessed_false",
     "selected_sites_incremental": "strict_UTF8_JSON_rows_with_SELECTED_SITE_KEYS",
+    "selected_sites_all": "strict_UTF8_JSON_exhaustive_FREQ_minor_oriented_rows_with_SELECTED_SITE_KEYS",
     "selected_sites_overlap_flare": "strict_UTF8_JSON_rows_with_SELECTED_SITE_KEYS",
     "target_rare_incremental": "strict_UTF8_JSON_complete_60_TARGET_haplotype_by_selected_incremental_locus_product",
+    "target_rare_diploid_incremental": "strict_UTF8_JSON_exact_30_TARGET_person_by_incremental_locus_dosage_and_observed_mask_derived_from_their_two_role_haplotypes",
+    "ref_vcf_fixture_view": "strict_UTF8_JSON_exact_180_REF_LAI_haplotypes_and_exclusive_FLARE_grid_contract_fixture_only",
+    "ref_rare_genotypes_incremental": "strict_UTF8_JSON_exact_180_REF_LAI_haplotype_by_incremental_locus_0_1_null_product_separate_from_ref_vcf",
+    "ref_rare_incremental": "strict_UTF8_JSON_exact_incremental_locus_by_AFR_EUR_ASIA_minor_AC_callable_AN_minor_AF_ref_observed_ref_no_support_recomputed_from_REF_rare_genotypes",
     "opaque_direct_outputs": "TBI_magic_or_FLARE_versioned_header_and_nontrivial_size_for_ref_tbi_target_tbi_flare_anc_tbi_flare_model_flare_log",
     "real_format_adapter_status": "BLOCKED_NOT_IMPLEMENTED_AND_REAL_ASSET_EXECUTION_REMAINS_FORBIDDEN"
   },
   "truth_barrier": {
     "flare_receipt": "truth_blind_and_generated_before_any_truth_mount",
     "flare_forbidden_inputs": ["truth", "mosaic_events", "donor_to_target_provenance"],
-    "predict_bundle_forbidden": ["truth", "tree_sequence", "mosaic_events", "donor_to_target_provenance", "DONOR_people", "DONOR_haplotypes"],
+    "predict_bundle_forbidden": ["truth", "tree_sequence", "mosaic_events", "donor_to_target_provenance", "DONOR_people", "DONOR_haplotypes", "freq_variant_genotypes", "selected_sites_all", "selected_sites_overlap_flare", "target_rare_incremental", "ref_rare_genotypes_incremental"],
     "private_truth_bundle_never_mounted_in_prediction": true,
     "prediction_receipt_must_not_name_or_hash_truth_assets": true
   },
@@ -164,7 +204,7 @@
     "no_overwrite": true,
     "no_prefix_reuse": true,
     "preexisting_shared_inputs_not_written_under_root_prefix": ["generator_source_auth", "genetic_map"],
-    "root_objects_before_final_manifest": ["plan_manifest", "tree_sequence", "roles", "panel_map", "mosaic_events", "truth", "donor_to_target_provenance", "selected_sites_all", "selected_sites_incremental", "selected_sites_overlap_flare", "target_rare_incremental", "ref_vcf", "ref_tbi", "target_vcf", "target_tbi", "flare_anc", "flare_anc_tbi", "flare_global", "flare_model", "flare_log", "flare_audit", "flare_run_manifest", "flare_receipt", "generator_manifest"],
+    "root_objects_before_final_manifest": ["plan_manifest", "tree_sequence", "roles", "panel_map", "mosaic_events", "truth", "donor_to_target_provenance", "freq_variant_genotypes", "selected_sites_all", "selected_sites_incremental", "selected_sites_overlap_flare", "target_rare_incremental", "target_rare_diploid_incremental", "ref_rare_genotypes_incremental", "ref_rare_incremental", "ref_vcf", "ref_tbi", "target_vcf", "target_tbi", "flare_anc", "flare_anc_tbi", "flare_global", "flare_model", "flare_log", "flare_audit", "flare_run_manifest", "flare_receipt", "generator_manifest"],
     "terminal_write_order": ["final_manifest", "READY"],
     "READY_is_written_last": true,
     "final_manifest_members": "exactly_manifest_members_never_plan_manifest_final_manifest_or_READY",
@@ -174,6 +214,10 @@
     "publication_log_generation_must_equal_each_authenticated_descriptor_generation": true,
     "publication_log_lives_only_in_READY_or_external_receipt_never_inside_final_manifest": true,
     "partial_prefix_without_READY_is_invalid": true
+  },
+  "public_receipt": {
+    "allowed_fields": ["status", "root_count", "real_asset_read", "asset_generation", "forward", "training"],
+    "forbidden_content": ["person_ids", "haplotype_ids", "loci", "gcs_uris", "probabilities"]
   },
   "execution_authorization": {
     "contract_tests": true,

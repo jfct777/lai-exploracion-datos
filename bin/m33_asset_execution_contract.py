@@ -36,7 +36,7 @@ from m33_asset_manifest_contract import (
 )
 
 
-AMENDMENT_SHA256 = "65b4b3f0648cd813edbcf2aa053c549cccc72de243082718049788cec39e5a60"
+AMENDMENT_SHA256 = "d23844d97dc193d664925922cde362158658c8a49a486d9f603c5ba69f91fc1b"
 STATUS = "CONTRACT_ONLY_NO_REAL_ASSET_READ_NO_GENERATION_NO_FORWARD_NO_TRAINING"
 PASS_STATUS = "PASS_EXECUTION_CONTRACT_FIXTURES_ONLY_NO_REAL_ASSET_READ"
 EXPECTED_NEXTFLOW_VERSION = "26.04.6"
@@ -63,8 +63,9 @@ PLAN_KEYS = {
 MANIFEST_KEYS = {
     "schema_version", "stage", "mode", "root_seed", "plan_id", "asset_set_id",
     "output_prefix", "plan_manifest_sha256", "assets", "semantic_fingerprints",
-    "predict_bundle", "flare_input_bundle", "rare_enabled_model_bundle",
-    "private_truth_bundle", "flare_receipt", "final_manifest_sha256",
+    "predict_bundle", "flare_input_bundle", "flare_output_bundle", "rare_enabled_model_bundle",
+    "rare_screen_tensor_bundle", "H_SIMULATION_ONLY_bundle", "private_truth_bundle",
+    "flare_receipt", "final_manifest_sha256",
 }
 SEMANTIC_KEYS = {
     "normalized_full_tree_sha256", "normalized_genealogy_sha256",
@@ -107,6 +108,11 @@ TARGET_RARE_DOCUMENT_KEYS = {
 TARGET_RARE_ROW_KEYS = {
     "target_haplotype_id", "CHROM", "POS", "REF", "ALT", "minor_allele_presence",
 }
+FREQ_GENOTYPE_DOCUMENT_KEYS = {
+    "schema_version", "stage", "status", "chromosome", "freq_person_ids", "variants",
+}
+FREQ_VARIANT_KEYS = {"CHROM", "POS", "REF", "ALT", "genotypes"}
+TREE_FREQ_AUTHORITY_DOCUMENT_KEYS = FREQ_GENOTYPE_DOCUMENT_KEYS
 ROLES_DOCUMENT_KEYS = {"schema_version", "stage", "status", "roles"}
 MOSAIC_DOCUMENT_KEYS = {"schema_version", "stage", "status", "chromosome", "rows"}
 TRUTH_DOCUMENT_KEYS = {"schema_version", "stage", "status", "chromosome", "rows"}
@@ -125,6 +131,36 @@ FLARE_GLOBAL_DOCUMENT_KEYS = {
     "schema_version", "stage", "status", "ancestry_order", "rows",
 }
 FLARE_GLOBAL_ROW_KEYS = {"target_haplotype_id", "probabilities"}
+REF_VCF_FIXTURE_KEYS = {
+    "schema_version", "stage", "status", "chromosome", "haplotypes", "loci", "alleles",
+}
+REF_HAPLOTYPE_KEYS = {"haplotype_id", "ancestry"}
+REF_RARE_DOCUMENT_KEYS = {"schema_version", "stage", "status", "chromosome", "rows"}
+REF_RARE_ROW_KEYS = {
+    "CHROM", "POS", "REF", "ALT", "ancestry", "minor_allele_index", "minor_ac",
+    "callable_an", "minor_af", "ref_observed", "ref_no_support",
+}
+TARGET_DIPLOID_DOCUMENT_KEYS = {
+    "schema_version", "stage", "status", "target_person_ids", "rows",
+}
+TARGET_DIPLOID_ROW_KEYS = {
+    "person_id", "CHROM", "POS", "REF", "ALT", "dosage", "observed_mask",
+}
+SCREEN_CHANNEL_ORDER = [
+    "target_minor_dosage_div_2_float32_clip_0_1",
+    "target_observed_mask_float32_0_1",
+    "ref_minor_af_AFR_float32_clip_0_1",
+    "log1p_ref_callable_AFR_div_log1p_maxAN_AFR_FIT",
+    "ref_observed_AFR_float32_0_1",
+    "ref_minor_af_EUR_float32_clip_0_1",
+    "log1p_ref_callable_EUR_div_log1p_maxAN_EUR_FIT",
+    "ref_observed_EUR_float32_0_1",
+    "ref_minor_af_ASIA_float32_clip_0_1",
+    "log1p_ref_callable_ASIA_div_log1p_maxAN_ASIA_FIT",
+    "ref_observed_ASIA_float32_0_1",
+    "relative_cM_minus_marker_cM_div_radius_clip_minus1_1",
+    "delta_cM_from_previous_ordered_locus_div_radius_clip_0_2",
+]
 SELECTED_SITE_KEYS = {
     "CHROM", "POS", "REF", "ALT", "minor_allele_index", "minor_mac",
     "minor_an", "minor_maf", "carrier_people",
@@ -187,6 +223,8 @@ def validate_amendment(amendment: dict[str, Any]) -> None:
     flare = amendment["flare_contract"]
     require(amendment["bundles"]["flare_input_bundle"] == flare["input_logical_ids"],
             "FLARE input bundle drift")
+    require(amendment["bundles"]["flare_output_bundle"] == flare["output_logical_ids"],
+            "FLARE output bundle drift")
     require(flare["input_logical_ids"] ==
             ["ref_vcf", "ref_tbi", "target_vcf", "target_tbi", "panel_map", "genetic_map"],
             "FLARE input inventory is not exact")
@@ -210,8 +248,39 @@ def validate_amendment(amendment: dict[str, Any]) -> None:
             "FLARE command argv exposes truth")
     rare_bundle = amendment["bundles"]["rare_enabled_model_bundle"]
     validate_rare_enabled_inputs(rare_bundle)
+    require(amendment["bundles"]["rare_screen_tensor_bundle"] == rare_bundle,
+            "screen tensor and rare-enabled bundles differ")
+    require(amendment["bundles"]["predict_bundle"] == rare_bundle,
+            "predictor bundle is not the exact screened model interface")
+    require(amendment["bundles"]["H_SIMULATION_ONLY_bundle"] ==
+            ["target_rare_incremental"], "haplotypic ceiling bundle drift")
     require("target_rare_incremental" in manifest_members and "target_rare" not in manifest_members,
             "incremental rare target asset was not renamed fail-closed")
+    require("freq_variant_genotypes" not in predict and
+            "freq_variant_genotypes" not in amendment["bundles"]["flare_input_bundle"] and
+            "freq_variant_genotypes" not in rare_bundle,
+            "FREQ genotypes entered prediction, FLARE or the rare-enabled model")
+    forbidden_model_inputs = {
+        "tree_sequence", "truth", "mosaic_events", "donor_to_target_provenance",
+        "target_rare_incremental", "ref_rare_genotypes_incremental",
+        "selected_sites_all", "selected_sites_overlap_flare", "freq_variant_genotypes",
+    }
+    require(predict.isdisjoint(forbidden_model_inputs) and
+            set(rare_bundle).isdisjoint(forbidden_model_inputs),
+            "raw, truth or audit-only inputs entered a predictor bundle")
+    tensor = amendment["screen_tensor_contract"]
+    require(tensor["channel_count"] == 13 and tensor["channel_order"] == SCREEN_CHANNEL_ORDER,
+            "screen tensor channel count or order drift")
+    require(type(tensor["first_ordered_locus_delta_cM"]) in (int, float) and
+            not isinstance(tensor["first_ordered_locus_delta_cM"], bool) and
+            tensor["first_ordered_locus_delta_cM"] == 0.0,
+            "first ordered rare locus must have delta_cM=0")
+    require(tensor["materializer_status"] == "BLOCKED_NOT_IMPLEMENTED" and
+            tensor["training_status"] == "BLOCKED_NOT_IMPLEMENTED",
+            "tensor materialization or training was authorized")
+    require(amendment["public_receipt"]["allowed_fields"] == [
+        "status", "root_count", "real_asset_read", "asset_generation", "forward", "training"
+    ], "public receipt field contract drift")
     require(amendment["publication"]["terminal_write_order"] == ["final_manifest", "READY"],
             "READY is not last")
     require(amendment["publication"]["object_precondition"] == "ifGenerationMatch=0",
@@ -461,10 +530,12 @@ def recompute_freq_selected_sites(freq_variants: Iterable[Mapping[str, Any]],
                 "rare selector did not receive exactly FREQ people")
         called: list[tuple[int, int]] = []
         for genotype in genotypes.values():
-            if genotype is None:
-                continue
             require(isinstance(genotype, (list, tuple)) and len(genotype) == 2 and
-                    all(allele in (0, 1) for allele in genotype), "invalid diploid genotype")
+                    all(allele is None or
+                        (type(allele) is int and allele in (0, 1)) for allele in genotype),
+                    "invalid diploid genotype")
+            if any(allele is None for allele in genotype):
+                continue
             called.append((int(genotype[0]), int(genotype[1])))
         an = 2 * len(called)
         if an == 0:
@@ -537,8 +608,9 @@ def validate_selected_site_partition(selected_sites_all: Sequence[Mapping[str, A
 def validate_rare_enabled_inputs(input_logical_ids: Sequence[str]) -> None:
     """RE consumes only loci not already visible on the frozen FLARE grid."""
     expected = [
-        "selected_sites_incremental", "target_rare_incremental", "flare_anc", "flare_anc_tbi",
-        "genetic_map",
+        "selected_sites_incremental", "target_rare_diploid_incremental",
+        "ref_rare_incremental",
+        "flare_anc", "flare_anc_tbi", "genetic_map",
     ]
     require(list(input_logical_ids) == expected,
             "rare-enabled input bundle is not the exact minimal frozen interface")
@@ -928,15 +1000,20 @@ def validate_reopened_flare_run_and_audit(
 def parse_selected_sites_document(
     logical_id: str, descriptor: dict[str, Any], observation: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    require(logical_id in {"selected_sites_incremental", "selected_sites_overlap_flare"},
+    require(logical_id in {
+        "selected_sites_all", "selected_sites_incremental", "selected_sites_overlap_flare"
+    },
             "unsupported selected-sites document")
     verify_observed_bytes(
         descriptor, observation["payload"], observation["generation"], observation["crc32c"]
     )
     document = strict_json_bytes(observation["payload"], logical_id)
     exact_keys(document, SELECTED_SITES_DOCUMENT_KEYS, logical_id)
-    expected_stage = ("M33_SELECTED_SITES_INCREMENTAL" if logical_id ==
-                      "selected_sites_incremental" else "M33_SELECTED_SITES_OVERLAP_FLARE")
+    expected_stage = {
+        "selected_sites_all": "M33_SELECTED_SITES_ALL",
+        "selected_sites_incremental": "M33_SELECTED_SITES_INCREMENTAL",
+        "selected_sites_overlap_flare": "M33_SELECTED_SITES_OVERLAP_FLARE",
+    }[logical_id]
     require(document["schema_version"] == "1.0.0" and
             document["stage"] == expected_stage and document["status"] == "PASS",
             f"{logical_id} document schema, stage or status drift")
@@ -1031,6 +1108,70 @@ def validate_target_rare_incremental_observations(
     return document
 
 
+def validate_target_rare_diploid_incremental(
+    assets: Mapping[str, dict[str, Any]], observations: Mapping[str, Mapping[str, Any]],
+    roles: Mapping[str, list[dict[str, Any]]],
+    target_haplotype_document: Mapping[str, Any],
+    selected_incremental: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Recompute the transferable TARGET rare input from paired role haplotypes."""
+    expected_people = sorted(person["person_id"] for person in roles["TARGET"])
+    require(len(expected_people) == 30 and len(set(expected_people)) == 30,
+            "TARGET role does not contain exactly 30 people")
+    person_haplotypes: dict[str, tuple[str, str]] = {}
+    for person in roles["TARGET"]:
+        haplotypes = tuple(sorted(row["haplotype_id"] for row in person["haplotypes"]))
+        require(len(haplotypes) == 2 and len(set(haplotypes)) == 2,
+                "TARGET person is not exactly diploid")
+        person_haplotypes[person["person_id"]] = haplotypes
+    incremental_keys = {variant_key(row) for row in selected_incremental}
+    require(incremental_keys, "TARGET diploid incremental locus inventory is empty")
+    haplotype_presence = {
+        (row["target_haplotype_id"], variant_key(row)): row["minor_allele_presence"]
+        for row in target_haplotype_document["rows"]
+    }
+    expected_rows: list[dict[str, Any]] = []
+    for person_id in expected_people:
+        hap0, hap1 = person_haplotypes[person_id]
+        for locus in sorted(incremental_keys):
+            dosage = haplotype_presence[(hap0, locus)] + haplotype_presence[(hap1, locus)]
+            expected_rows.append({
+                "person_id": person_id, "CHROM": locus[0], "POS": locus[1],
+                "REF": locus[2], "ALT": locus[3], "dosage": dosage,
+                "observed_mask": 1,
+            })
+
+    document = reopen_strict_json_asset(
+        "target_rare_diploid_incremental", assets, observations
+    )
+    exact_keys(document, TARGET_DIPLOID_DOCUMENT_KEYS, "TARGET diploid rare document")
+    require(document["schema_version"] == "1.0.0" and
+            document["stage"] == "M33_TARGET_RARE_DIPLOID_INCREMENTAL" and
+            document["status"] == "PASS",
+            "TARGET diploid rare document schema, stage or status drift")
+    require(document["target_person_ids"] == expected_people,
+            "TARGET diploid rare people differ from exact TARGET role")
+    rows = document["rows"]
+    require(isinstance(rows, list) and len(rows) == len(expected_rows),
+            "TARGET diploid rare row inventory drift")
+    for observed, expected in zip(rows, expected_rows):
+        row = dict(observed)
+        exact_keys(row, TARGET_DIPLOID_ROW_KEYS, "TARGET diploid rare row")
+        variant_key(row)
+        require(type(row["observed_mask"]) is int and row["observed_mask"] in (0, 1),
+                "TARGET diploid observed mask is not strict 0/1")
+        require(row["dosage"] is None or
+                (type(row["dosage"]) is int and row["dosage"] in (0, 1, 2)),
+                "TARGET diploid dosage is not 0/1/2/null")
+        require((row["observed_mask"] == 0) == (row["dosage"] is None),
+                "TARGET diploid dosage and observed mask disagree")
+        require(row == expected,
+                "TARGET diploid rare input differs from paired TARGET haplotypes")
+    require(assets["target_rare_diploid_incremental"]["record_count"] == len(rows),
+            "TARGET diploid rare descriptor record count drift")
+    return document
+
+
 def reopen_strict_json_asset(
     logical_id: str, assets: Mapping[str, dict[str, Any]],
     observations: Mapping[str, Mapping[str, Any]],
@@ -1068,6 +1209,224 @@ def parse_roles_observation(
     require(set(donor_ancestry) == role_haplotypes["DONOR"],
             "DONOR ancestry registry differs from complete roles")
     return roles, role_haplotypes, donor_ancestry
+
+
+def validate_reopened_rare_selection(
+    assets: Mapping[str, dict[str, Any]], observations: Mapping[str, Mapping[str, Any]],
+    roles: Mapping[str, list[dict[str, Any]]],
+    flare_grid: Sequence[tuple[str, int, str, str]],
+) -> list[dict[str, Any]]:
+    """Recompute the exhaustive FREQ selector and its exact FLARE-grid partition."""
+    expected_people = sorted(person["person_id"] for person in roles["FREQ"])
+    require(len(expected_people) == 300 and len(set(expected_people)) == 300,
+            "FREQ role does not contain exactly 300 people")
+    authority = reopen_strict_json_asset("tree_sequence", assets, observations)
+    exact_keys(authority, TREE_FREQ_AUTHORITY_DOCUMENT_KEYS,
+               "tree-sequence FREQ authority fixture")
+    require(authority["schema_version"] == "1.0.0" and
+            authority["stage"] == "M33_TREE_SEQUENCE_FREQ_AUTHORITY_FIXTURE" and
+            authority["status"] == "PASS" and authority["chromosome"] == "chr22",
+            "tree-sequence FREQ authority fixture drift")
+    document = reopen_strict_json_asset("freq_variant_genotypes", assets, observations)
+    exact_keys(document, FREQ_GENOTYPE_DOCUMENT_KEYS, "FREQ genotype document")
+    require(document["schema_version"] == "1.0.0" and
+            document["stage"] == "M33_FREQ_VARIANT_GENOTYPES" and
+            document["status"] == "PASS" and document["chromosome"] == "chr22",
+            "FREQ genotype document schema, stage or chromosome drift")
+    require(document["freq_person_ids"] == expected_people,
+            "FREQ genotype people differ from the exact FREQ role")
+    require(authority["freq_person_ids"] == document["freq_person_ids"] and
+            authority["variants"] == document["variants"],
+            "FREQ genotype view is not exact to tree-sequence fixture authority")
+    variants = document["variants"]
+    require(isinstance(variants, list) and variants, "FREQ candidate variant inventory is empty")
+    previous_key: tuple[str, int, str, str] | None = None
+    for raw in variants:
+        row = dict(raw)
+        exact_keys(row, FREQ_VARIANT_KEYS, "FREQ candidate variant")
+        key = variant_key(row)
+        require(previous_key is None or previous_key < key,
+                "FREQ candidate variants are duplicated or noncanonical")
+        previous_key = key
+        genotypes = row["genotypes"]
+        require(isinstance(genotypes, dict) and set(genotypes) == set(expected_people),
+                "FREQ candidate lacks or adds a FREQ person")
+        for genotype in genotypes.values():
+            require(isinstance(genotype, list) and len(genotype) == 2 and
+                    all(allele is None or
+                        (type(allele) is int and allele in (0, 1)) for allele in genotype),
+                    "FREQ genotype is not diploid 0/1/null per homologue")
+            require(all(allele is not None for allele in genotype),
+                    "main simulation FREQ genotype contains missingness")
+    require(assets["tree_sequence"]["record_count"] == len(variants),
+            "tree-sequence authority descriptor record count drift")
+    require(assets["freq_variant_genotypes"]["record_count"] == len(variants),
+            "FREQ genotype descriptor record count drift")
+
+    selected_all = parse_selected_sites_document(
+        "selected_sites_all", assets["selected_sites_all"], observations["selected_sites_all"]
+    )
+    selected_incremental = parse_selected_sites_document(
+        "selected_sites_incremental", assets["selected_sites_incremental"],
+        observations["selected_sites_incremental"],
+    )
+    selected_overlap = parse_selected_sites_document(
+        "selected_sites_overlap_flare", assets["selected_sites_overlap_flare"],
+        observations["selected_sites_overlap_flare"],
+    )
+    validate_selected_sites_exhaustive(variants, set(expected_people), selected_all)
+    validate_selected_site_partition(
+        selected_all, selected_incremental, selected_overlap, set(flare_grid)
+    )
+    return selected_incremental
+
+
+def recompute_ref_rare_summary(
+    haplotype_ancestry: Mapping[str, str],
+    selected_incremental: Sequence[Mapping[str, Any]],
+    allele_matrix: Mapping[tuple[str, tuple[str, int, str, str]], int | None],
+) -> list[dict[str, Any]]:
+    """Compute AC/AN/AF and distinguish absent data from observed zero support."""
+    selected_by_locus = {variant_key(row): row for row in selected_incremental}
+    expected_rows: list[dict[str, Any]] = []
+    for locus in sorted(selected_by_locus):
+        minor_index = selected_by_locus[locus]["minor_allele_index"]
+        for ancestry in ("AFR", "EUR", "ASIA"):
+            ancestry_haplotypes = [
+                haplotype for haplotype, label in haplotype_ancestry.items()
+                if label == ancestry
+            ]
+            called = [
+                allele_matrix[(haplotype, locus)] for haplotype in ancestry_haplotypes
+                if allele_matrix[(haplotype, locus)] is not None
+            ]
+            callable_an = len(called)
+            minor_ac = sum(allele == minor_index for allele in called)
+            expected_rows.append({
+                "CHROM": locus[0], "POS": locus[1], "REF": locus[2], "ALT": locus[3],
+                "ancestry": ancestry, "minor_allele_index": minor_index,
+                "minor_ac": minor_ac, "callable_an": callable_an,
+                "minor_af": minor_ac / callable_an if callable_an else 0.0,
+                "ref_observed": 1 if callable_an else 0,
+                "ref_no_support": 1 if callable_an and minor_ac == 0 else 0,
+            })
+    return expected_rows
+
+
+def validate_reopened_ref_rare_incremental(
+    assets: Mapping[str, dict[str, Any]], observations: Mapping[str, Mapping[str, Any]],
+    roles: Mapping[str, list[dict[str, Any]]],
+    flare_grid: Sequence[tuple[str, int, str, str]],
+    selected_incremental: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Keep the FLARE grid exclusive and recompute REF rare summaries separately."""
+    expected_haplotype_ancestry = {
+        haplotype["haplotype_id"]: person["ancestry"]
+        for person in roles["REF_LAI"] for haplotype in person["haplotypes"]
+    }
+    require(len(expected_haplotype_ancestry) == 180,
+            "REF_LAI role does not contain exactly 180 haplotypes")
+    require({ancestry: list(expected_haplotype_ancestry.values()).count(ancestry)
+             for ancestry in ("AFR", "EUR", "ASIA")} ==
+            {"AFR": 60, "EUR": 60, "ASIA": 60},
+            "REF_LAI haplotype ancestry counts drift")
+
+    incremental_keys = {variant_key(row) for row in selected_incremental}
+    require(incremental_keys, "REF rare incremental locus inventory is empty")
+
+    def parse_reference_view(logical_id: str, expected_stage: str,
+                             expected_loci: set[tuple[str, int, str, str]]) -> dict[
+                                 tuple[str, tuple[str, int, str, str]], int | None
+                             ]:
+        reference = reopen_strict_json_asset(logical_id, assets, observations)
+        exact_keys(reference, REF_VCF_FIXTURE_KEYS, f"{logical_id} fixture view")
+        require(reference["schema_version"] == "1.0.0" and
+                reference["stage"] == expected_stage and
+                reference["status"] == "PASS" and reference["chromosome"] == "chr22",
+                f"{logical_id} fixture view schema, stage or chromosome drift")
+        haplotypes = reference["haplotypes"]
+        require(isinstance(haplotypes, list), f"{logical_id} haplotype registry absent")
+        observed_haplotype_ancestry: dict[str, str] = {}
+        for raw in haplotypes:
+            row = dict(raw)
+            exact_keys(row, REF_HAPLOTYPE_KEYS, f"{logical_id} haplotype")
+            haplotype = row["haplotype_id"]
+            require(haplotype not in observed_haplotype_ancestry,
+                    f"{logical_id} haplotype is duplicated")
+            require(haplotype in expected_haplotype_ancestry and
+                    row["ancestry"] == expected_haplotype_ancestry[haplotype],
+                    f"{logical_id} haplotype ancestry differs from REF_LAI roles")
+            observed_haplotype_ancestry[haplotype] = row["ancestry"]
+        require(observed_haplotype_ancestry == expected_haplotype_ancestry,
+                f"{logical_id} haplotype inventory differs from 180 REF_LAI haplotypes")
+        loci = parse_locus_rows(reference["loci"], logical_id)
+        require(loci == sorted(expected_loci), f"{logical_id} locus domain drift")
+        require(assets[logical_id]["record_count"] == len(loci),
+                f"{logical_id} descriptor record count drift")
+        alleles = reference["alleles"]
+        require(isinstance(alleles, list), f"{logical_id} phased allele matrix absent")
+        allele_matrix: dict[tuple[str, tuple[str, int, str, str]], int | None] = {}
+        for raw in alleles:
+            row = dict(raw)
+            exact_keys(row, ALLELE_ROW_KEYS, f"{logical_id} phased allele")
+            key = (row["haplotype_id"], variant_key(row))
+            require(key[0] in expected_haplotype_ancestry and key[1] in expected_loci,
+                    f"{logical_id} allele has an unknown haplotype or locus")
+            allele = row["allele"]
+            require(allele is None or (type(allele) is int and allele in (0, 1)),
+                    f"{logical_id} allele is not 0/1/null")
+            require(key not in allele_matrix, f"{logical_id} haplotype/locus allele duplicated")
+            allele_matrix[key] = allele
+        expected_product = {
+            (haplotype, locus) for haplotype in expected_haplotype_ancestry
+            for locus in expected_loci
+        }
+        require(set(allele_matrix) == expected_product,
+                f"{logical_id} is not the complete 180-haplotype by locus product")
+        return allele_matrix
+
+    parse_reference_view(
+        "ref_vcf", "M33_REF_VCF_FIXTURE_VIEW", set(flare_grid)
+    )
+    allele_matrix = parse_reference_view(
+        "ref_rare_genotypes_incremental", "M33_REF_RARE_GENOTYPES_INCREMENTAL",
+        incremental_keys,
+    )
+
+    summary = reopen_strict_json_asset("ref_rare_incremental", assets, observations)
+    exact_keys(summary, REF_RARE_DOCUMENT_KEYS, "REF rare incremental document")
+    require(summary["schema_version"] == "1.0.0" and
+            summary["stage"] == "M33_REF_RARE_INCREMENTAL" and
+            summary["status"] == "PASS" and summary["chromosome"] == "chr22",
+            "REF rare incremental document drift")
+    expected_rows = recompute_ref_rare_summary(
+        expected_haplotype_ancestry, selected_incremental, allele_matrix
+    )
+    rows = summary["rows"]
+    require(isinstance(rows, list) and len(rows) == len(expected_rows),
+            "REF rare incremental row inventory drift")
+    for observed, expected in zip(rows, expected_rows):
+        row = dict(observed)
+        exact_keys(row, REF_RARE_ROW_KEYS, "REF rare incremental row")
+        for integer_field in (
+            "minor_allele_index", "minor_ac", "callable_an", "ref_observed",
+            "ref_no_support",
+        ):
+            require(type(row[integer_field]) is int,
+                    f"REF rare {integer_field} is not a strict integer")
+        require(type(row["minor_af"]) in (int, float) and math.isfinite(row["minor_af"]),
+                "REF rare minor_AF is nonfinite")
+        require(0 <= row["minor_ac"] <= row["callable_an"] <= 60,
+                "REF rare AC/AN is outside the 60-haplotype ancestry domain")
+        require(row["callable_an"] == 60,
+                "main simulation REF callable_AN is not exactly 60")
+        require(row == expected,
+                "REF rare AC/AN/AF/observed/no-support differs from phased REF alleles")
+    require(all(allele is not None for allele in allele_matrix.values()),
+            "main simulation REF rare genotype contains missingness")
+    require(assets["ref_rare_incremental"]["record_count"] == len(rows),
+            "REF rare incremental descriptor record count drift")
+    return summary
 
 
 def parse_genetic_map_domain(
@@ -1137,8 +1496,8 @@ def validate_reopened_flare_outputs(
     target_ids = target["target_haplotype_ids"]
     require(isinstance(target_ids, list) and target_ids == sorted(expected_target_haplotypes),
             "TARGET VCF haplotypes differ from complete roles")
-    grid = parse_locus_rows(target["loci"], "FLARE target grid")
-    require(assets["target_vcf"]["record_count"] == len(grid),
+    target_grid = parse_locus_rows(target["loci"], "FLARE target grid")
+    require(assets["target_vcf"]["record_count"] == len(target_grid),
             "TARGET VCF fixture record count drift")
 
     anc = reopen_strict_json_asset("flare_anc", assets, observations)
@@ -1146,10 +1505,10 @@ def validate_reopened_flare_outputs(
     require(anc["schema_version"] == "1.0.0" and anc["stage"] == "M33_FLARE_ANC" and
             anc["status"] == "PASS" and anc["chromosome"] == "chr22",
             "FLARE ancestry document drift")
-    require(anc["target_haplotype_ids"] == target_ids and
-            parse_locus_rows(anc["loci"], "FLARE ancestry grid") == grid,
+    anc_grid = parse_locus_rows(anc["loci"], "FLARE ancestry grid")
+    require(anc["target_haplotype_ids"] == target_ids and anc_grid == target_grid,
             "FLARE ancestry IDs/loci differ from TARGET grid")
-    validate_flare_probability_tensor(anc["rows"], expected_target_haplotypes, grid)
+    validate_flare_probability_tensor(anc["rows"], expected_target_haplotypes, anc_grid)
     require(assets["flare_anc"]["record_count"] == len(anc["rows"]),
             "FLARE ancestry record count drift")
 
@@ -1176,7 +1535,7 @@ def validate_reopened_flare_outputs(
             "FLARE global record count drift")
     audit = strict_json_bytes(observations["flare_audit"]["payload"], "FLARE audit grid binding")
     require(audit["target_haplotype_count"] == len(expected_target_haplotypes) and
-            audit["locus_count"] == len(grid),
+            audit["locus_count"] == len(anc_grid),
             "FLARE audit counts differ from reopened TARGET/grid")
 
     for logical_id in ("ref_tbi", "target_tbi", "flare_anc_tbi"):
@@ -1191,7 +1550,7 @@ def validate_reopened_flare_outputs(
             b"flare version 0.6.0 [616fcc9d4 03-Nov-2025]" in log and
             b"Analysis finished" in log,
             "FLARE log lacks its exact version/completion markers")
-    return grid
+    return anc_grid
 
 
 def validate_reopened_mosaic_truth_provenance(
@@ -1340,13 +1699,22 @@ def validate_final_manifest(manifest: dict[str, Any], plan: dict[str, Any],
             "final genetic-map descriptor differs from the plan input")
     predict = manifest["predict_bundle"]
     flare_inputs = manifest["flare_input_bundle"]
+    flare_outputs = manifest["flare_output_bundle"]
     rare_inputs = manifest["rare_enabled_model_bundle"]
+    screen_inputs = manifest["rare_screen_tensor_bundle"]
+    haplotype_ceiling_inputs = manifest["H_SIMULATION_ONLY_bundle"]
     truth = manifest["private_truth_bundle"]
     require(predict == amendment["bundles"]["predict_bundle"], "predict bundle drift")
     require(flare_inputs == amendment["bundles"]["flare_input_bundle"],
             "FLARE input bundle drift")
+    require(flare_outputs == amendment["bundles"]["flare_output_bundle"],
+            "FLARE output bundle drift")
     require(rare_inputs == amendment["bundles"]["rare_enabled_model_bundle"],
             "rare-enabled model bundle drift")
+    require(screen_inputs == amendment["bundles"]["rare_screen_tensor_bundle"],
+            "rare screen tensor bundle drift")
+    require(haplotype_ceiling_inputs == amendment["bundles"]["H_SIMULATION_ONLY_bundle"],
+            "haplotypic simulation-only bundle drift")
     validate_rare_enabled_inputs(rare_inputs)
     require(truth == amendment["bundles"]["private_truth_bundle"], "private truth bundle drift")
     require(set(predict).isdisjoint(set(truth)), "truth entered predict bundle")
@@ -1452,18 +1820,28 @@ def validate_ready(ready: dict[str, Any], plan: dict[str, Any], manifest: dict[s
     validate_reopened_flare_run_and_audit(
         plan, manifest["assets"], asset_observations, manifest["flare_receipt"], amendment,
     )
-    _, role_haplotypes, allowed_donor_ancestry = parse_roles_observation(
+    roles, role_haplotypes, allowed_donor_ancestry = parse_roles_observation(
         plan["root_seed"], manifest["assets"], asset_observations, asset_contract,
     )
-    validate_reopened_flare_outputs(
+    flare_grid = validate_reopened_flare_outputs(
         manifest["assets"], asset_observations, role_haplotypes["TARGET"], amendment,
+    )
+    selected_incremental = validate_reopened_rare_selection(
+        manifest["assets"], asset_observations, roles, flare_grid,
     )
     target_rare_document = validate_target_rare_incremental_observations(
         manifest["assets"], asset_observations
     )
+    validate_reopened_ref_rare_incremental(
+        manifest["assets"], asset_observations, roles, flare_grid, selected_incremental,
+    )
     validate_reopened_mosaic_truth_provenance(
         plan, manifest["assets"], asset_observations, target_rare_document,
         role_haplotypes, allowed_donor_ancestry,
+    )
+    validate_target_rare_diploid_incremental(
+        manifest["assets"], asset_observations, roles, target_rare_document,
+        selected_incremental,
     )
     validate_write_log(ready["publication_log"], descriptors, amendment)
 
@@ -1524,8 +1902,7 @@ def validate_root_bundle(plans: Sequence[dict[str, Any]], manifests: Sequence[di
             root_specific_hashes[logical_id].add(descriptor["sha256_raw"])
     return {
         "status": PASS_STATUS,
-        "root_seeds": list(DEVELOPMENT_ROOTS),
-        "plan_ids": [plan["plan_id"] for plan in plans],
+        "root_count": len(plans),
         "real_asset_read": False,
         "asset_generation": False,
         "forward": False,

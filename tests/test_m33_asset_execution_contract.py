@@ -99,11 +99,57 @@ def fixture_sites(root):
     )
 
 
+def freq_candidate_variants(root):
+    people = sorted(person["person_id"] for person in make_roles(root)["FREQ"])
+    incremental, overlap = fixture_sites(root)
+
+    def genotypes(minor_index, carrier_count=2):
+        common = 1 - minor_index
+        rows = {person: [common, common] for person in people}
+        for person in people[:carrier_count]:
+            rows[person] = [common, minor_index]
+        return rows
+
+    variants = [
+        {**{key: incremental[0][key] for key in ("CHROM", "POS", "REF", "ALT")},
+         "genotypes": genotypes(1)},
+        {**{key: overlap[0][key] for key in ("CHROM", "POS", "REF", "ALT")},
+         "genotypes": genotypes(1)},
+        {**{key: incremental[1][key] for key in ("CHROM", "POS", "REF", "ALT")},
+         "genotypes": genotypes(0)},
+        {"CHROM": "chr22", "POS": 500 + MOD.DEVELOPMENT_ROOTS.index(root) * 1000,
+         "REF": "A", "ALT": "C", "genotypes": genotypes(1, carrier_count=1)},
+    ]
+    return people, variants
+
+
+def tree_freq_authority_document(root):
+    people, variants = freq_candidate_variants(root)
+    return {
+        "schema_version": "1.0.0", "stage": "M33_TREE_SEQUENCE_FREQ_AUTHORITY_FIXTURE",
+        "status": "PASS", "chromosome": "chr22", "freq_person_ids": people,
+        "variants": variants,
+    }
+
+
+def freq_variant_genotypes_document(root):
+    document = tree_freq_authority_document(root)
+    document["stage"] = "M33_FREQ_VARIANT_GENOTYPES"
+    return document
+
+
 def selected_sites_document(logical_id, root):
     incremental, overlap = fixture_sites(root)
-    rows = incremental if logical_id == "selected_sites_incremental" else overlap
-    stage = ("M33_SELECTED_SITES_INCREMENTAL" if logical_id ==
-             "selected_sites_incremental" else "M33_SELECTED_SITES_OVERLAP_FLARE")
+    rows = {
+        "selected_sites_all": sorted(incremental + overlap, key=lambda row: row["POS"]),
+        "selected_sites_incremental": incremental,
+        "selected_sites_overlap_flare": overlap,
+    }[logical_id]
+    stage = {
+        "selected_sites_all": "M33_SELECTED_SITES_ALL",
+        "selected_sites_incremental": "M33_SELECTED_SITES_INCREMENTAL",
+        "selected_sites_overlap_flare": "M33_SELECTED_SITES_OVERLAP_FLARE",
+    }[logical_id]
     return {"schema_version": "1.0.0", "stage": stage, "status": "PASS", "rows": rows}
 
 
@@ -133,6 +179,33 @@ def target_rare_document(root):
     }
 
 
+def target_rare_diploid_document(root):
+    roles = make_roles(root)
+    haplotype_document = target_rare_document(root)
+    presence = {
+        (row["target_haplotype_id"], row["CHROM"], row["POS"], row["REF"], row["ALT"]):
+        row["minor_allele_presence"] for row in haplotype_document["rows"]
+    }
+    incremental, _ = fixture_sites(root)
+    people = sorted(person["person_id"] for person in roles["TARGET"])
+    people_by_id = {person["person_id"]: person for person in roles["TARGET"]}
+    rows = []
+    for person_id in people:
+        haplotypes = sorted(row["haplotype_id"] for row in people_by_id[person_id]["haplotypes"])
+        for site in incremental:
+            key = (site["CHROM"], site["POS"], site["REF"], site["ALT"])
+            rows.append({
+                "person_id": person_id, "CHROM": key[0], "POS": key[1],
+                "REF": key[2], "ALT": key[3],
+                "dosage": sum(presence[(haplotype, *key)] for haplotype in haplotypes),
+                "observed_mask": 1,
+            })
+    return {
+        "schema_version": "1.0.0", "stage": "M33_TARGET_RARE_DIPLOID_INCREMENTAL",
+        "status": "PASS", "target_person_ids": people, "rows": rows,
+    }
+
+
 def roles_document(root):
     return {
         "schema_version": "1.0.0", "stage": "M33_COMPLETE_DIPLOID_ROLES",
@@ -146,6 +219,87 @@ def flare_grid(root):
         {"CHROM": "chr22", "POS": 200 + offset, "REF": "G", "ALT": "A"},
         {"CHROM": "chr22", "POS": 400 + offset, "REF": "T", "ALT": "C"},
     ]
+
+
+def ref_haplotype_registry(root):
+    return sorted(
+        ({"haplotype_id": haplotype["haplotype_id"], "ancestry": person["ancestry"]}
+         for person in make_roles(root)["REF_LAI"] for haplotype in person["haplotypes"]),
+        key=lambda row: row["haplotype_id"],
+    )
+
+
+def ref_vcf_fixture_document(root):
+    haplotypes = ref_haplotype_registry(root)
+    loci = flare_grid(root)
+    alleles = [
+        {"haplotype_id": row["haplotype_id"], **locus,
+         "allele": (haplotype_index + locus_index) % 2}
+        for haplotype_index, row in enumerate(haplotypes)
+        for locus_index, locus in enumerate(loci)
+    ]
+    return {
+        "schema_version": "1.0.0", "stage": "M33_REF_VCF_FIXTURE_VIEW",
+        "status": "PASS", "chromosome": "chr22", "haplotypes": haplotypes,
+        "loci": loci, "alleles": alleles,
+    }
+
+
+def ref_rare_genotypes_document(root):
+    haplotypes = ref_haplotype_registry(root)
+    incremental, _ = fixture_sites(root)
+    loci = [{key: site[key] for key in ("CHROM", "POS", "REF", "ALT")}
+            for site in incremental]
+    ancestry_indices = {ancestry: 0 for ancestry in ("AFR", "EUR", "ASIA")}
+    alleles = []
+    for row in haplotypes:
+        ancestry = row["ancestry"]
+        ancestry_index = ancestry_indices[ancestry]
+        ancestry_indices[ancestry] += 1
+        for locus_index, locus in enumerate(loci):
+            if locus_index == 0 and ancestry == "EUR":
+                allele = 0
+            elif locus_index == 1 and ancestry == "ASIA":
+                allele = 1
+            else:
+                allele = (ancestry_index + locus_index) % 2
+            alleles.append({"haplotype_id": row["haplotype_id"], **locus, "allele": allele})
+    return {
+        "schema_version": "1.0.0", "stage": "M33_REF_RARE_GENOTYPES_INCREMENTAL",
+        "status": "PASS", "chromosome": "chr22", "haplotypes": haplotypes,
+        "loci": loci, "alleles": alleles,
+    }
+
+
+def ref_rare_summary_document(root):
+    source = ref_rare_genotypes_document(root)
+    selected = {row["POS"]: row for row in fixture_sites(root)[0]}
+    ancestry_by_haplotype = {
+        row["haplotype_id"]: row["ancestry"] for row in source["haplotypes"]
+    }
+    rows = []
+    for locus in source["loci"]:
+        minor_index = selected[locus["POS"]]["minor_allele_index"]
+        for ancestry in ("AFR", "EUR", "ASIA"):
+            called = [
+                row["allele"] for row in source["alleles"]
+                if row["POS"] == locus["POS"] and
+                ancestry_by_haplotype[row["haplotype_id"]] == ancestry and
+                row["allele"] is not None
+            ]
+            minor_ac = sum(allele == minor_index for allele in called)
+            callable_an = len(called)
+            rows.append({
+                **locus, "ancestry": ancestry, "minor_allele_index": minor_index,
+                "minor_ac": minor_ac, "callable_an": callable_an,
+                "minor_af": minor_ac / callable_an if callable_an else 0.0,
+                "ref_observed": 1 if callable_an else 0,
+                "ref_no_support": 1 if callable_an and minor_ac == 0 else 0,
+            })
+    return {
+        "schema_version": "1.0.0", "stage": "M33_REF_RARE_INCREMENTAL",
+        "status": "PASS", "chromosome": "chr22", "rows": rows,
+    }
 
 
 def target_vcf_fixture_document(root):
@@ -342,6 +496,12 @@ def make_manifest(plan, ordinal):
         "roles", MOD.canonical_json(roles_payload_document),
         sum(len(rows) for rows in roles_payload_document["roles"].values()),
     )
+    tree_document = tree_freq_authority_document(plan["root_seed"])
+    bind_fixture("tree_sequence", MOD.canonical_json(tree_document),
+                 len(tree_document["variants"]))
+    freq_document = freq_variant_genotypes_document(plan["root_seed"])
+    bind_fixture("freq_variant_genotypes", MOD.canonical_json(freq_document),
+                 len(freq_document["variants"]))
     for logical_id, document in mosaic_fixture_documents(plan["root_seed"]).items():
         count = len(document["target_alleles"] if logical_id ==
                     "donor_to_target_provenance" else document["rows"])
@@ -354,6 +514,15 @@ def make_manifest(plan, ordinal):
     global_document = flare_global_document(plan["root_seed"])
     bind_fixture("flare_global", MOD.canonical_json(global_document),
                  len(global_document["rows"]))
+    reference_document = ref_vcf_fixture_document(plan["root_seed"])
+    bind_fixture("ref_vcf", MOD.canonical_json(reference_document),
+                 len(reference_document["loci"]))
+    ref_genotype_document = ref_rare_genotypes_document(plan["root_seed"])
+    bind_fixture("ref_rare_genotypes_incremental", MOD.canonical_json(ref_genotype_document),
+                 len(ref_genotype_document["loci"]))
+    ref_summary_document = ref_rare_summary_document(plan["root_seed"])
+    bind_fixture("ref_rare_incremental", MOD.canonical_json(ref_summary_document),
+                 len(ref_summary_document["rows"]))
     root_bytes = str(plan["root_seed"]).encode()
     tbi_payload = b"TBI\x01" + b"fixture-index" * 4 + root_bytes
     for logical_id in ("ref_tbi", "target_tbi", "flare_anc_tbi"):
@@ -365,7 +534,9 @@ def make_manifest(plan, ordinal):
         b"contract fixture prediction\nAnalysis finished successfully\n" + b"-" * 32 + root_bytes,
         1,
     )
-    for logical_id in ("selected_sites_incremental", "selected_sites_overlap_flare"):
+    for logical_id in (
+        "selected_sites_all", "selected_sites_incremental", "selected_sites_overlap_flare"
+    ):
         selected_document = selected_sites_document(logical_id, plan["root_seed"])
         payload = MOD.canonical_json(selected_document)
         FIXTURE_PAYLOADS[(plan["plan_id"], logical_id)] = payload
@@ -382,6 +553,11 @@ def make_manifest(plan, ordinal):
         AMENDMENT["manifest_members"]["target_rare_incremental"]["schema"],
         f"{plan['output_prefix']}target_rare_incremental.fixture", target_payload,
         len(target_document["rows"]),
+    )
+    target_diploid_document = target_rare_diploid_document(plan["root_seed"])
+    bind_fixture(
+        "target_rare_diploid_incremental", MOD.canonical_json(target_diploid_document),
+        len(target_diploid_document["rows"]),
     )
     flare = AMENDMENT["flare_contract"]
     run_payload = MOD.canonical_json(flare_run_document(plan, assets))
@@ -456,7 +632,10 @@ def make_manifest(plan, ordinal):
         },
         "predict_bundle": list(AMENDMENT["bundles"]["predict_bundle"]),
         "flare_input_bundle": list(AMENDMENT["bundles"]["flare_input_bundle"]),
+        "flare_output_bundle": list(AMENDMENT["bundles"]["flare_output_bundle"]),
         "rare_enabled_model_bundle": list(AMENDMENT["bundles"]["rare_enabled_model_bundle"]),
+        "rare_screen_tensor_bundle": list(AMENDMENT["bundles"]["rare_screen_tensor_bundle"]),
+        "H_SIMULATION_ONLY_bundle": list(AMENDMENT["bundles"]["H_SIMULATION_ONLY_bundle"]),
         "private_truth_bundle": list(AMENDMENT["bundles"]["private_truth_bundle"]),
         "flare_receipt": flare_receipt,
         "final_manifest_sha256": "0" * 64,
@@ -493,6 +672,23 @@ def rebind_descriptor(descriptor_value, payload, record_count=None):
     if record_count is not None:
         rebound["record_count"] = record_count
     return rebound
+
+
+def resigned_ready_with_documents(plan, documents):
+    manifest = make_manifest(plan, 0)
+    payloads = {}
+    for logical_id, document in documents.items():
+        payload = MOD.canonical_json(document)
+        payloads[logical_id] = payload
+        row_count = len(document.get("rows", document.get("variants", document.get("loci", []))))
+        manifest["assets"][logical_id] = rebind_descriptor(
+            manifest["assets"][logical_id], payload, row_count
+        )
+    reseal_final_manifest(manifest)
+    ready, observations = make_ready(plan, manifest)
+    for logical_id, payload in payloads.items():
+        observations[logical_id] = observed_payload(manifest["assets"][logical_id], payload)
+    return manifest, ready, observations
 
 
 def make_ready(plan, manifest):
@@ -622,6 +818,14 @@ class M33ExecutionContractTests(unittest.TestCase):
         self.assertFalse(AMENDMENT["execution_authorization"]["training"])
         self.assertEqual(AMENDMENT["immutable_inputs"]["pre4_contract_sha256"],
                          MOD.BASE_CONTRACT_SHA256)
+        self.assertEqual(
+            AMENDMENT["screen_tensor_contract"]["channel_order"], MOD.SCREEN_CHANNEL_ORDER
+        )
+        self.assertEqual(AMENDMENT["screen_tensor_contract"]["first_ordered_locus_delta_cM"], 0.0)
+        self.assertEqual(
+            set(AMENDMENT["public_receipt"]["allowed_fields"]),
+            {"status", "root_count", "real_asset_read", "asset_generation", "forward", "training"},
+        )
 
     def test_plan_id_is_prior_to_outputs_and_roots_fail_closed(self):
         plan = make_plan(MOD.DEVELOPMENT_ROOTS[0])
@@ -748,6 +952,144 @@ class M33ExecutionContractTests(unittest.TestCase):
             with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, message):
                 MOD.validate_target_rare_incremental_observations(assets, changed_observations)
 
+    def test_ready_rejects_nonexhaustive_freq_view_and_partition_drift(self):
+        plan = make_plan(MOD.DEVELOPMENT_ROOTS[0])
+        selected_all = selected_sites_document("selected_sites_all", plan["root_seed"])
+        selected_all["rows"].pop()
+        manifest, ready, observations = resigned_ready_with_documents(
+            plan, {"selected_sites_all": selected_all}
+        )
+        with self.assertRaisesRegex(ValueError, "not exhaustive"):
+            MOD.validate_ready(ready, plan, manifest, observations, AMENDMENT, ASSET_CONTRACT)
+
+        authority = tree_freq_authority_document(plan["root_seed"])
+        freq = freq_variant_genotypes_document(plan["root_seed"])
+        missing_person = authority["freq_person_ids"][0]
+        for document in (authority, freq):
+            del document["variants"][0]["genotypes"][missing_person]
+        manifest, ready, observations = resigned_ready_with_documents(
+            plan, {"tree_sequence": authority, "freq_variant_genotypes": freq}
+        )
+        with self.assertRaisesRegex(ValueError, "lacks or adds a FREQ person"):
+            MOD.validate_ready(ready, plan, manifest, observations, AMENDMENT, ASSET_CONTRACT)
+
+        authority = tree_freq_authority_document(plan["root_seed"])
+        freq = freq_variant_genotypes_document(plan["root_seed"])
+        for document in (authority, freq):
+            document["variants"][0]["genotypes"][missing_person][0] = None
+        manifest, ready, observations = resigned_ready_with_documents(
+            plan, {"tree_sequence": authority, "freq_variant_genotypes": freq}
+        )
+        with self.assertRaisesRegex(ValueError, "main simulation FREQ genotype contains missingness"):
+            MOD.validate_ready(ready, plan, manifest, observations, AMENDMENT, ASSET_CONTRACT)
+
+        overlap = selected_sites_document("selected_sites_overlap_flare", plan["root_seed"])
+        overlap["rows"] = [fixture_sites(plan["root_seed"])[0][0]]
+        manifest, ready, observations = resigned_ready_with_documents(
+            plan, {"selected_sites_overlap_flare": overlap}
+        )
+        with self.assertRaisesRegex(ValueError, "not all intersect FLARE grid"):
+            MOD.validate_ready(ready, plan, manifest, observations, AMENDMENT, ASSET_CONTRACT)
+
+    def test_ready_rejects_ref_grid_summary_and_target_diploid_drift(self):
+        plan = make_plan(MOD.DEVELOPMENT_ROOTS[0])
+        ref_summary = ref_rare_summary_document(plan["root_seed"])
+        ref_summary["rows"][0]["minor_ac"] += 1
+        manifest, ready, observations = resigned_ready_with_documents(
+            plan, {"ref_rare_incremental": ref_summary}
+        )
+        with self.assertRaisesRegex(ValueError, "differs from phased REF alleles"):
+            MOD.validate_ready(ready, plan, manifest, observations, AMENDMENT, ASSET_CONTRACT)
+
+        ref_genotypes = ref_rare_genotypes_document(plan["root_seed"])
+        ref_genotypes["alleles"][0]["allele"] = None
+        ancestry_by_haplotype = {
+            row["haplotype_id"]: row["ancestry"] for row in ref_genotypes["haplotypes"]
+        }
+        allele_matrix = {
+            (row["haplotype_id"], MOD.variant_key(row)): row["allele"]
+            for row in ref_genotypes["alleles"]
+        }
+        missing_summary = {
+            "schema_version": "1.0.0", "stage": "M33_REF_RARE_INCREMENTAL",
+            "status": "PASS", "chromosome": "chr22",
+            "rows": MOD.recompute_ref_rare_summary(
+                ancestry_by_haplotype, fixture_sites(plan["root_seed"])[0], allele_matrix
+            ),
+        }
+        manifest, ready, observations = resigned_ready_with_documents(
+            plan, {
+                "ref_rare_genotypes_incremental": ref_genotypes,
+                "ref_rare_incremental": missing_summary,
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "callable_AN is not exactly 60"):
+            MOD.validate_ready(ready, plan, manifest, observations, AMENDMENT, ASSET_CONTRACT)
+
+        reference = ref_vcf_fixture_document(plan["root_seed"])
+        extra_locus = {
+            key: fixture_sites(plan["root_seed"])[0][0][key]
+            for key in ("CHROM", "POS", "REF", "ALT")
+        }
+        reference["loci"].insert(0, extra_locus)
+        reference["alleles"].extend(
+            {"haplotype_id": row["haplotype_id"], **extra_locus, "allele": 0}
+            for row in reference["haplotypes"]
+        )
+        reference["alleles"] = sorted(
+            reference["alleles"], key=lambda row: (row["haplotype_id"], row["POS"])
+        )
+        manifest = make_manifest(plan, 0)
+        reference_payload = MOD.canonical_json(reference)
+        manifest["assets"]["ref_vcf"] = rebind_descriptor(
+            manifest["assets"]["ref_vcf"], reference_payload, len(reference["loci"])
+        )
+        changed_payloads = {"ref_vcf": reference_payload, **reseal_flare_chain(plan, manifest)}
+        ready, observations = make_ready(plan, manifest)
+        for logical_id, payload in changed_payloads.items():
+            observations[logical_id] = observed_payload(manifest["assets"][logical_id], payload)
+        with self.assertRaisesRegex(ValueError, "ref_vcf locus domain drift"):
+            MOD.validate_ready(ready, plan, manifest, observations, AMENDMENT, ASSET_CONTRACT)
+
+        target = target_rare_diploid_document(plan["root_seed"])
+        target["rows"][0]["dosage"] = (target["rows"][0]["dosage"] + 1) % 3
+        manifest, ready, observations = resigned_ready_with_documents(
+            plan, {"target_rare_diploid_incremental": target}
+        )
+        with self.assertRaisesRegex(ValueError, "differs from paired TARGET haplotypes"):
+            MOD.validate_ready(ready, plan, manifest, observations, AMENDMENT, ASSET_CONTRACT)
+
+    def test_ref_missingness_semantics_are_distinct_from_no_support(self):
+        root = MOD.DEVELOPMENT_ROOTS[0]
+        source = ref_rare_genotypes_document(root)
+        ancestry_by_haplotype = {
+            row["haplotype_id"]: row["ancestry"] for row in source["haplotypes"]
+        }
+        locus = MOD.variant_key(source["loci"][0])
+        allele_matrix = {
+            (row["haplotype_id"], MOD.variant_key(row)): row["allele"]
+            for row in source["alleles"]
+        }
+        for haplotype, ancestry in ancestry_by_haplotype.items():
+            if ancestry == "AFR":
+                allele_matrix[(haplotype, locus)] = None
+        rows = MOD.recompute_ref_rare_summary(
+            ancestry_by_haplotype, fixture_sites(root)[0], allele_matrix
+        )
+        missing = next(row for row in rows if row["POS"] == locus[1] and row["ancestry"] == "AFR")
+        no_support = next(
+            row for row in rows if row["POS"] == locus[1] and row["ancestry"] == "EUR"
+        )
+        self.assertEqual(
+            (missing["callable_an"], missing["ref_observed"], missing["ref_no_support"]),
+            (0, 0, 0),
+        )
+        self.assertEqual(
+            (no_support["callable_an"], no_support["ref_observed"],
+             no_support["ref_no_support"]),
+            (60, 1, 1),
+        )
+
     def test_tree_hashes_separate_mutations_from_genealogy(self):
         tables = {
             "sequence_length": 300.0, "time_units": "generations",
@@ -851,6 +1193,7 @@ class M33ExecutionContractTests(unittest.TestCase):
         )
         self.assertEqual(receipt["status"], MOD.PASS_STATUS)
         self.assertFalse(receipt["real_asset_read"])
+        self.assertEqual(set(receipt), set(AMENDMENT["public_receipt"]["allowed_fields"]))
         bad_observation = copy.deepcopy(auth_observation)
         bad_observation["generation"] = "1720000000000002"
         with self.assertRaisesRegex(ValueError, "generation"):
