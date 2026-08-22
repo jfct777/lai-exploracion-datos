@@ -4,7 +4,7 @@
   "status": "AUTHORIZED_APPEND_ONLY_DERIVED_ARTIFACTS_NO_READY",
   "run_id": "m33-i0-real-20260822a",
   "i0_source_commit": "731757aa89949de9a641568a38697794f31a0fff",
-  "publisher_code_commit": "d6de9bfd3754cf7c338feaab6996f7b6cd3d5af0",
+  "publisher_code_commit": "ad7c943ce4f5139f0a021e40dda165c8067f8c4a",
   "base_storage_policy_sha256": "ff9143e29fe154cc5d793a7b36efe91cefc08ff012f8024ffa1c39b7b1adc1da",
   "amendment": {
     "base_json_pointer": "/execution_authorization/derived_index_write",
