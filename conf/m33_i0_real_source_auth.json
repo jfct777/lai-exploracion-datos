@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_I0_REAL_SOURCE_AUTH",
+  "status": "AUTHORIZED_EXACT_I0_REAL_SOURCES",
+  "files": {
+    "bin/m33_i0_index.py": "7098473592e14b901f6dbd6773751c817d8da853f39fdb3224e5a21179a3fa3b",
+    "bin/m33_i0_real.py": "b6e73c7c444aa2fcfef6ae415fec03eec08290babd96d7c1da9f786228d038f1",
+    "conf/m33_i0_real.config": "0fd86fd22163b6c869f1f8ed99bade2f55bce61fdbca2f49eec3a2353ad466b9",
+    "conf/m33_i0_real_authorization.json": "ac58d250adc119b00a2ca800aef2848f3b5d13ad04e2a34dd9c8a8314c6b0dfe",
+    "conf/m33_m0_materializer_contract.json": "fb74cd610a36b22fe54b8681238a13b48a0243642c9a24cd036597d161361614",
+    "modules/33_I0_REAL.nf": "9531a740ed439e550d650c32826c89e917a03d8d163675d04fd710b19e54b8d6",
+    "tests/test_m33_i0_real.py": "aed706619ed042a6c4a08729c5b1db4618402645dc26adc81dd08616395ae9be",
+    "tests/test_m33_i0_real_integration.py": "7fd1b0f680620ed9d19b78f5f742c7955280ed1b2977b71d8a60248be959e71b",
+    "tests/test_m33_i0_real_nextflow.py": "1842025e1518d53836a5896b9dd458e365b3a9a783a96e12926143b17f92fd31",
+    "workflows/m33_i0_real.nf": "026f69d6ee8aba818d94e805aafd148d57184287bee5ef14d9f249bec3775bfb"
+  }
+}

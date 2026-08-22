@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_I0_REAL_AUTHORIZATION",
+  "status": "AUTHORIZED_EXACT_CONSUMED_TECHNICAL_ROOTS_LOCAL_ONLY",
+  "base_m0_contract_sha256": "fb74cd610a36b22fe54b8681238a13b48a0243642c9a24cd036597d161361614",
+  "fixture_commit": "5f788eff7cd675750cfdac0c7d9a1dbd98d4f4a4",
+  "tabix_image": "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/m33-tabix@sha256:e730c35759e3851a92d7f3a6619333105331d97f1ae44a50dfa8d59745c43e54",
+  "tabix_version": "1.16",
+  "chromosome": "22",
+  "expected_record_count": 79791,
+  "download_principal": "jcalderonta@ime.usp.br",
+  "roots": {
+    "root17": {
+      "root_seed": 20260817,
+      "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m30-flare-baseline-20260819b/30_flare_baseline/root17/flare/root17.flare.anc.vcf.gz",
+      "generation": "1787175566795248",
+      "size_bytes": 2297753,
+      "sha256": "85dfd76df2c14cb8fe0a753910f25c49c88d38edc5708ec6d641053d95cc74e8",
+      "crc32c_base64": "QFwzMA==",
+      "md5_base64": "8I0LJOoui+5VwVys588tFA=="
+    },
+    "root18": {
+      "root_seed": 20260818,
+      "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m30-flare-baseline-20260819b/30_flare_baseline/root18/flare/root18.flare.anc.vcf.gz",
+      "generation": "1787175916753131",
+      "size_bytes": 2331603,
+      "sha256": "edc4bcdc62f5ce0ffe04bd27e9d6d6ee892e03282a1474639fc3082fbc3832c9",
+      "crc32c_base64": "aw/Whw==",
+      "md5_base64": "8Yki4megECkiIFX9Erk8SA=="
+    }
+  },
+  "execution": {
+    "real_asset_read": true,
+    "derive_index": true,
+    "local_nextflow_only": true,
+    "root_tasks_parallel": true,
+    "independent_builds_per_root": 2,
+    "cache": false,
+    "retries": 0,
+    "container_network": false,
+    "container_credentials": false,
+    "safe_bridge": false,
+    "materialize": false,
+    "forward": false,
+    "backward": false,
+    "training": false,
+    "truth": false,
+    "test": false,
+    "global_ready": false
+  },
+  "local_output_policy": {
+    "append_only": true,
+    "mode": "0444",
+    "summary_only_receipts": true,
+    "publish_gcs_during_workflow": false,
+    "allowed_future_prefix": "gs://teams-usp/frank/lai-exploracion-datos/runs/",
+    "forbidden_source_prefix": "gs://projects-usp/",
+    "completion_marker": "I0_REAL_PASS_NON_CONSUMABLE"
+  }
+}
