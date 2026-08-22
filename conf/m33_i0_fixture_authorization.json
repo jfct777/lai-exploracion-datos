@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_I0_FIXTURE_AUTHORIZATION",
+  "status": "AUTHORIZED_FIXTURE_ONLY_NO_REAL_ASSET_READ",
+  "base_m0_contract_sha256": "fb74cd610a36b22fe54b8681238a13b48a0243642c9a24cd036597d161361614",
+  "tabix_image": "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/m33-tabix@sha256:e730c35759e3851a92d7f3a6619333105331d97f1ae44a50dfa8d59745c43e54",
+  "tabix_version": "1.16",
+  "fixture_source_vcf_sha256": "52868ddaad1bb9641ecfe499d61817736af36169d9d51e717b1d9112bf06a108",
+  "fixture_descriptor": {
+    "logical_id": "synthetic_m33_i0_fixture_v1",
+    "uri": "synthetic://m33/i0/fixture/v1",
+    "generation": "1",
+    "size_bytes": 270,
+    "sha256": "52868ddaad1bb9641ecfe499d61817736af36169d9d51e717b1d9112bf06a108"
+  },
+  "chromosome": "22",
+  "root_label": "fixture",
+  "root_seed": 0,
+  "contains_real_genomic_data": false,
+  "real_asset_read": false,
+  "safe_bridge": false,
+  "materialize": false,
+  "training": false,
+  "completion_marker": "I0_FIXTURE_PASS",
+  "global_ready_forbidden": true
+}

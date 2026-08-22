@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_I0_FIXTURE_SOURCE_AUTH",
+  "status": "AUTHORIZED_EXACT_FIXTURE_ONLY_SOURCES",
+  "files": {
+    "bin/m33_i0_index.py": "7098473592e14b901f6dbd6773751c817d8da853f39fdb3224e5a21179a3fa3b",
+    "conf/m33_i0_fixture.config": "b1358bddb8df6a4bb79ee605446e5464e0b91a2c5e43ce78b358523a2d67b097",
+    "conf/m33_i0_fixture_authorization.json": "7c1ea66c28df73bcf7fba232355f7a2ea8fe35fd1d306a1887addb0011b0df78",
+    "conf/m33_m0_materializer_contract.json": "fb74cd610a36b22fe54b8681238a13b48a0243642c9a24cd036597d161361614",
+    "modules/33_I0_FIXTURE.nf": "c31f844ff0911533ee009ae278779cdf669e845a5cffb974db8b4dfc62d23d40",
+    "tests/test_m33_i0_index.py": "a7bcadf255398fd286026e3e9ca3f6167fa1ab339e0685f87cb88df38c8a99f0",
+    "tests/test_m33_i0_nextflow.py": "14df400371b306f05277f6eed00f6c072daf5b7c9b304c8239f87534a3a625c9",
+    "workflows/m33_i0_fixture.nf": "5fe60d68b6f55481ad7b176840747240d78056520e3b0d77453307d20ecba9d5"
+  }
+}
