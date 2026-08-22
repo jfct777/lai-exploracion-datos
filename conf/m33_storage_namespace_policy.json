@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_STORAGE_NAMESPACE_POLICY",
+  "status": "CONTRACT_ONLY_NO_REAL_ASSET_READ_NO_PERSISTENT_WRITE",
+  "project_write_root": "gs://teams-usp/frank/lai-exploracion-datos/",
+  "lab_data_policy": {
+    "persistent_write_forbidden": true,
+    "approved_read_buckets": [
+      "projects-usp",
+      "frozen-data-br"
+    ],
+    "read_descriptor_requirement": "exact_logical_id_uri_generation_size_sha256_crc32c",
+    "unregistered_input": "STOP"
+  },
+  "persistent_namespaces": {
+    "runs": "runs/",
+    "work": "work/nextflow/",
+    "logs": "logs/",
+    "manifests": "manifests/",
+    "software_receipts": "software/containers/"
+  },
+  "namespace_amendment": {
+    "preserve_prior_objects_in_place": true,
+    "prior_objects_become_read_only_inputs": true,
+    "supersedes_only": [
+      {
+        "contract_sha256": "3b4ead82305041295b2a997655fe31696eddc15ebbd4c55c0a247f14ea295e4b",
+        "json_pointer": "/canonical_prefix_template"
+      },
+      {
+        "contract_sha256": "f6b373f7766df7b6313696ecad333ff0ea021c1f7d2196b8bc034babbc438735",
+        "json_pointer": "/identity/output_prefix_template"
+      }
+    ],
+    "development_output_prefix_template": "gs://teams-usp/frank/lai-exploracion-datos/runs/m33/{pre4_contract_sha256}/DEVELOPMENT/{root_seed}/{plan_id}/"
+  },
+  "persistent_write_contract": {
+    "append_only": true,
+    "object_creation_precondition": "ifGenerationMatch=0",
+    "ready_is_last": true,
+    "reopen_generation_and_sha256": true,
+    "delete_forbidden": true,
+    "overwrite_forbidden": true,
+    "run_id_pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"
+  },
+  "ephemeral_scratch": {
+    "allowed_roots": [
+      "/tmp"
+    ],
+    "must_not_be_final_artifact": true,
+    "must_be_removed_after_verified_publication": true
+  },
+  "google_batch": {
+    "region": "us-central1",
+    "resource_labels": {
+      "team": "frank"
+    },
+    "real_run_service_account": "BLOCKED_PENDING_DEDICATED_NON_EDITOR_SERVICE_ACCOUNT",
+    "service_account_must_have_lab_object_viewer_only": true,
+    "service_account_write_scope": "exact_project_write_root_only"
+  },
+  "oci": {
+    "repository_prefix": "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/m33-",
+    "runtime_reference_must_use_digest": true,
+    "receipt_namespace": "software_receipts"
+  },
+  "execution_authorization": {
+    "contract_tests": true,
+    "fixture_tests": true,
+    "create_project_prefix": false,
+    "real_asset_read": false,
+    "derived_index_write": false,
+    "materialization": false,
+    "training": false
+  }
+}
