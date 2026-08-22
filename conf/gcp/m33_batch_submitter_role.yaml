@@ -1,0 +1,15 @@
+title: DNABR M33 Batch Submitter
+description: Submit and inspect M33 Batch jobs without update, cancel, or delete permissions.
+stage: GA
+includedPermissions:
+  - batch.jobs.create
+  - batch.jobs.get
+  - batch.jobs.list
+  - batch.locations.get
+  - batch.locations.list
+  - batch.operations.get
+  - batch.operations.list
+  - batch.tasks.get
+  - batch.tasks.list
+  - resourcemanager.projects.get
+  - resourcemanager.projects.list

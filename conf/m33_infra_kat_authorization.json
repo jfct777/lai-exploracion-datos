@@ -1,0 +1,82 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_INFRA_AND_SYNTHETIC_KAT_AUTHORIZATION",
+  "status": "AUTHORIZED_INFRA_AND_SYNTHETIC_KAT_ONLY_NO_REAL_ASSET_READ",
+  "parent_contracts": {
+    "storage_namespace_policy_sha256": "ff9143e29fe154cc5d793a7b36efe91cefc08ff012f8024ffa1c39b7b1adc1da",
+    "m0_materializer_contract_sha256": "fb74cd610a36b22fe54b8681238a13b48a0243642c9a24cd036597d161361614"
+  },
+  "gcp": {
+    "project": "uspbr-242713",
+    "region": "us-central1",
+    "managed_folder": "gs://teams-usp/frank/lai-exploracion-datos/",
+    "controller_service_account": "dnabr-m33-controller-frank@uspbr-242713.iam.gserviceaccount.com",
+    "runtime_service_account": "dnabr-m33-frank@uspbr-242713.iam.gserviceaccount.com",
+    "resource_labels": {
+      "team": "frank"
+    }
+  },
+  "runtime": {
+    "nextflow_version": "26.04.6",
+    "nf_google_version": "1.27.3",
+    "tabix_version": "1.16",
+    "oci_repository": "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/m33-tabix",
+    "oci_digest": "sha256:e730c35759e3851a92d7f3a6619333105331d97f1ae44a50dfa8d59745c43e54"
+  },
+  "storage_permissions": {
+    "work_prefix": "work/nextflow/",
+    "work_allows_create_get_list": true,
+    "work_allows_update": false,
+    "work_allows_delete": false,
+    "append_only_prefixes": [
+      "runs/",
+      "logs/",
+      "manifests/",
+      "software/containers/"
+    ],
+    "append_only_precondition": "ifGenerationMatch=0",
+    "ready_is_last": true,
+    "delete_forbidden_everywhere": true,
+    "write_outside_managed_folder": "STOP"
+  },
+  "authorization": {
+    "create_dedicated_non_editor_controller_service_account": true,
+    "create_dedicated_non_editor_runtime_service_account": true,
+    "create_managed_folder": true,
+    "publish_tabix_oci": true,
+    "synthetic_fixture_only": true,
+    "synthetic_kat": true,
+    "lab_asset_read": false,
+    "root17_read": false,
+    "root18_read": false,
+    "eval_read": false,
+    "derived_real_index_write": false,
+    "safe_bridge": false,
+    "materialization": false,
+    "training": false
+  },
+  "kat": {
+    "chromosome": "22",
+    "replicas": [
+      "A",
+      "B"
+    ],
+    "independent_nextflow_tasks": true,
+    "shared_task_cache_forbidden": true,
+    "controller_runner_required": true,
+    "direct_launch_forbidden": true,
+    "required_checks": [
+      "tabix_version_exact",
+      "source_vcf_sha256_equal",
+      "independent_tbi_sha256_equal",
+      "indexed_sequential_record_count_equal",
+      "indexed_sequential_sha256_equal",
+      "effective_service_account_exact",
+      "effective_controller_service_account_exact",
+      "resource_label_exact",
+      "workdir_under_project_prefix",
+      "no_lab_asset_reads",
+      "no_active_batch_jobs_after_completion"
+    ]
+  }
+}

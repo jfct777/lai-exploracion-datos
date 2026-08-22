@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_TABIX_KAT_SOURCE_AUTH",
+  "status": "AUTHORIZED_EXACT_SOURCE_BUNDLE",
+  "files": {
+    "bin/m33_gcs_append_only.py": "9d0b712e47658840de4d1d6d796feb0ac2f428f84f467005e9079f2d0351446a",
+    "bin/m33_infra_kat_contract.py": "03d9e68dc363746484c392dd6ffea4ca99c2203913c6d6426dcbe5280179fde2",
+    "bin/m33_storage_policy.py": "b2521a9769bedaf9509235138624d4994cb3927ca2bb37e79447c9a49804f321",
+    "bin/m33_tabix_kat.py": "238f316f168bd17e151ac699e6479cd5660a435e8320fb9598bb966fc6450f9a",
+    "bin/m33_tabix_kat_controller.py": "0f38c52340fd8d978dba1d960ccbc3a9e90b98850be6ace1afea4f6007b7017b",
+    "conf/m33_infra_kat_authorization.json": "c1892ebd2f3f9af5a7711bab041e8df1bebe3467ed3f93dd5a218306ced00338",
+    "conf/m33_m0_materializer_contract.json": "fb74cd610a36b22fe54b8681238a13b48a0243642c9a24cd036597d161361614",
+    "conf/m33_storage_namespace_policy.json": "ff9143e29fe154cc5d793a7b36efe91cefc08ff012f8024ffa1c39b7b1adc1da",
+    "conf/m33_tabix_kat.config": "8e439e217034ec8293c84ce47ae61e5efd50e66d7d2605e1cc08df608c79abc0",
+    "containers/m33-controller/Dockerfile": "277ef21cdc33c541111217f69ece376373ddf9536dd43d5cb06e6c7d7d5faea3",
+    "containers/m33-tabix/Dockerfile": "0ccce3277bf55242d779b08b1942076d5a32d6787ee6e58415d93d00cba37065",
+    "modules/33_TABIX_KAT.nf": "a87a5319a10aee8096a742928eb13a75f56c94a7ce12b1cc64e999e430d6886e",
+    "workflows/m33_tabix_kat.nf": "2d95761ca705b14fd52fcab695fa85eb8db0554bb574329ed51a5f1b3ca05610"
+  }
+}
