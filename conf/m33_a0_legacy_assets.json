@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_A0_LEGACY_ASSET_REGISTRY",
+  "status": "TECHNICAL_COMPATIBILITY_ONLY",
+  "roots": {
+    "root17": {
+      "root_seed": 20260817,
+      "expected_counts": {
+        "catalog_sites": 94280,
+        "selected_rare_sites": 94029,
+        "excluded_single_carrier_sites": 251,
+        "minor_code_zero_sites": 526,
+        "incremental_rare_sites": 94029,
+        "rare_overlap_flare_sites": 0,
+        "freq_people": 300,
+        "ref_people": 90,
+        "donor_people": 768,
+        "target_people": 30,
+        "flare_loci": 79791
+      },
+      "sha256": {
+        "tree_sequence": "566946ec93cbc28c7f36d27878e12d091f1c87ebdd6fb6423b940f4f778391f7",
+        "pools": "56f9891bfb7f77d63ec3328107fc8e89b919c34ad16fda2c0c72dc3fde24f0e4",
+        "rare_catalog": "3162022c6882aa184094f96f6e8d49b6917b5fbe5a45ecfabf6cc4a8265b366c",
+        "rare_haplotypes": "015f7c420730537cb2d9173971e4767d4d561d11ed22ce2b46149c9eb7832122",
+        "m31_sites": "f23686f123abec9bfe14fcf3d88e3954e32fa6206707d0cc2d2b68bb9d360c4e",
+        "m31_target": "d9ad299ea7f5cc2b0a92b5397b743b03b1300fd8e59fa71b247b6959eb3837ec",
+        "ref_vcf": "0847407648ccc2b984c7a8a4fb2606d561adcb050105b927708a53130c7807d8",
+        "ref_tbi": "ed7c18bd43835573d872274f0a4e638c17775ae7bc18a547d6e69b9b8453d213",
+        "target_vcf": "6c042e53f9cd963033fa01f983ec446424a2348c5692bf7ea6be55202f5aa389",
+        "target_tbi": "48cd386eaae49697448fe65ce41c3bf46c39ff7aa50dfa660eba53a98c4224eb",
+        "ref_pairs": "4ac7d5b4a976679be88a9c755dff1413d887e577e219c018b68a86dc66d56a06",
+        "panel_map": "1ae29789a2d793957a367b77b78300ddba6d7537c10bb5cda318ef3fdd547647",
+        "flare_anc": "85dfd76df2c14cb8fe0a753910f25c49c88d38edc5708ec6d641053d95cc74e8",
+        "genetic_map": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+        "flare_anc_tbi": null
+      }
+    }
+  },
+  "root18_policy": "ADD_ONLY_AFTER_ROOT17_PASS_AND_EXACT_HASH_RECONCILIATION",
+  "claims_excluded": [
+    "prospective_root_independence",
+    "scientific_validation",
+    "LAI_improvement",
+    "model_or_radius_selection",
+    "DNABR_generalization"
+  ]
+}

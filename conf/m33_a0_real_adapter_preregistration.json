@@ -1,0 +1,121 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_A0_REAL_ADAPTER",
+  "status": "TECHNICAL_COMPATIBILITY_ONLY",
+  "scope": "legacy_consumed_chr22_roots_read_only_no_scientific_evidence",
+  "supersedes_historical_contracts": false,
+  "root_registry": {
+    "allowed_technical_roots": {
+      "root17": 20260817,
+      "root18": 20260818
+    },
+    "scientific_selection": false,
+    "prospective_independence_claim": false,
+    "development_roots_allowed": false,
+    "eval_roots_allowed": false
+  },
+  "phase_separation": {
+    "A0_adapter": "IMPLEMENTED_READ_ONLY_TECHNICAL_COMPATIBILITY",
+    "M0_materializer": "BLOCKED_NOT_IMPLEMENTED_REQUIRES_A0_POST",
+    "F0_forward": "BLOCKED_NOT_IMPLEMENTED_REQUIRES_PINNED_PYTORCH_IMAGE_AND_MASKED_GROUP_NORM",
+    "B1_backward": "BLOCKED_NOT_IMPLEMENTED_REQUIRES_F0_POST"
+  },
+  "gn_blocker": {
+    "problem": "ordinary_GroupNorm_over_N_C_K_uses_masked_padding_in_group_statistics_and_breaks_padding_batch_chunk_invariance",
+    "required_replacement": "MaskedGroupNorm1d_groups_4_statistics_over_C_group_times_K_valid_per_sequence_affine_32_parameters_per_block_K0_returns_zero",
+    "required_pooling": "masked_max_sets_padding_to_negative_infinity_and_K0_returns_zero",
+    "required_known_answer": "same_nonzero_valid_sequence_K7_compared_as_K7_and_as_K13_with_masked_poison_tail_and_in_single_vs_mixed_batch_has_embedding_and_logits_max_abs_le_1e-6"
+  },
+  "required_inputs": [
+    "tree_sequence", "pools", "rare_catalog", "rare_haplotypes", "m31_sites",
+    "m31_target", "ref_vcf", "ref_tbi", "target_vcf",
+    "target_tbi", "ref_pairs", "panel_map", "flare_anc", "genetic_map"
+  ],
+  "optional_legacy_inputs": ["flare_anc_tbi"],
+  "legacy_flare_index_policy": {
+    "root17_root18_flare_anc_tbi_observed": "ABSENT",
+    "sequential_bgzf_read_allowed_in_A0": true,
+    "absence_must_be_reported": true,
+    "absence_may_be_imputed_or_claimed_present": false,
+    "M0_ready_when_absent": false
+  },
+  "allele_and_coordinate_semantics": {
+    "assembly_label": "GRCh38_coordinate_domain_only",
+    "chromosome": "chr22",
+    "tree_start_bp": 15287922,
+    "tree_end_bp_exclusive": 50791378,
+    "tree_sequence_length": 35503456,
+    "fasta_required_for_this_simulation": false,
+    "fasta_used": false,
+    "normalization_GRCh38_claimed": false,
+    "simulation_model": "msprime_BinaryMutationModel",
+    "tree_ancestral_code": "0",
+    "tree_derived_code": "1",
+    "vcf_code_mapping": {"0": "A", "1": "C"},
+    "cross_check": "each_FLARE_grid_VCF_TSID_must_map_to_same_tree_site_position_with_ancestral_state_0_and_REF_A_ALT_C"
+  },
+  "role_contract": {
+    "source_roles": {"FREQ": 300, "REF_LAI": 90, "DONOR": 768},
+    "source_role_unit": "complete_diploid_person_two_tree_nodes",
+    "target_people": 30,
+    "target_haplotypes": 60,
+    "target_source": "rare_haplotypes_and_M31_target_cross_check_not_common_VCF_alone",
+    "ref_people_by_ancestry": {"AFR": 30, "EUR": 30, "ASIA": 30},
+    "ref_tree_to_vcf_mapping": "ref_pairs_private_tsv",
+    "panel_map_role": "REF_LAI_sample_to_ancestry_only"
+  },
+  "vcf_contract": {
+    "format": "VCFv4.2_BGZF",
+    "chromosome": "22",
+    "alleles": ["A", "C"],
+    "phased_binary_GT": true,
+    "ref_and_target_tabix_required": true,
+    "flare_fields": ["GT", "AN1", "AN2", "ANP1", "ANP2"],
+    "flare_ancestry_order": ["AFR", "EUR", "ASIA"],
+    "flare_raw_probability_sum_range": [0.98, 1.02],
+    "flare_probability_renormalization_in_A0": false
+  },
+  "rare_cross_check": {
+    "m28_catalog_is_unfiltered_for_carrier_people": true,
+    "m31_sites_are_FREQ_only_MAC_ge_2_MAF_lt_0_01_carrier_people_ge_2": true,
+    "m31_target_minor_presence_must_equal_indicator_M28_haplotype_state_equals_minor_code": true,
+    "missing_must_never_be_converted_to_hom_ref": true
+  },
+  "genetic_map_contract": {
+    "chromosome": "chr22",
+    "strictly_increasing_bp": true,
+    "nondecreasing_cM": true,
+    "covers_complete_simulated_domain": true
+  },
+  "runtime": {
+    "nextflow": "26.04.6",
+    "adapter_image": "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/m28-lai-sim@sha256:06e7b70a2484de19c73a18a6fc9ddefbfa1599e43cbcdcd60fd185495dfb9a19",
+    "adapter_image_id": "sha256:1f08736aa2750eac4ab8fb0506fb22bad91d2266b7b02b9e35d971f554b807f7",
+    "tabix_image": "sha256:b89353efc9a4a5953519fa9f066728e2f63d0e9125fc9fc771ef3ea9bb9c961c",
+    "tabix_image_id": "sha256:b89353efc9a4a5953519fa9f066728e2f63d0e9125fc9fc771ef3ea9bb9c961c",
+    "python": "3.11",
+    "numpy": "2.4.6",
+    "tskit": "1.0.3",
+    "htslib_tabix": "1.16"
+  },
+  "receipt": {
+    "privacy": "summary_only",
+    "forbidden": ["paths", "sample_ids", "individual_ids", "node_ids", "haplotype_ids", "per_locus_rows", "genotypes", "truth_segments"],
+    "required": ["status", "root_label", "root_seed", "counts", "checks", "input_sha256", "legacy_exceptions", "downstream_gates"]
+  },
+  "execution_authorization": {
+    "contract_tests": true,
+    "synthetic_and_adversarial_tests": true,
+    "read_local_legacy_assets": true,
+    "truth_or_mosaic_provenance_mounted": false,
+    "read_gs_uri_directly": false,
+    "write_inputs": false,
+    "generate_assets": false,
+    "write_READY": false,
+    "materialize_tensor": false,
+    "forward": false,
+    "backward": false,
+    "training": false,
+    "truth_scoring": false
+  }
+}
