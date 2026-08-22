@@ -35,7 +35,7 @@ class TabixKatNextflowTests(unittest.TestCase):
         text = CONFIG.read_text(encoding="utf-8")
         self.assertIn("id 'nf-google@1.27.3'", text)
         self.assertIn("serviceAccountEmail = 'dnabr-m33-frank@uspbr-242713.iam.gserviceaccount.com'", text)
-        self.assertIn("resourceLabels = [team: 'frank']", text)
+        self.assertIn("resourceLabels = [team: 'frank', pipeline: 'm33-tabix-kat', run: m33KatRunLabel]", text)
         self.assertIn("maxForks = 2", text)
         self.assertIn("gs://teams-usp/frank/lai-exploracion-datos", text)
         self.assertNotIn("gs://projects-usp", text)
@@ -91,6 +91,7 @@ class TabixKatNextflowTests(unittest.TestCase):
             "status": "PASS_CONTROLLER_IDENTITY_AND_AUTHORIZATION",
             "controller_service_account": "dnabr-m33-controller-frank@uspbr-242713.iam.gserviceaccount.com",
             "authorization_sha256": hashlib.sha256(AUTH.read_bytes()).hexdigest(),
+            "controller_image": "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/m33-controller@sha256:" + "b" * 64,
             "runtime_image": runtime_image,
             "nextflow_version": "26.04.6",
             "nf_google_version": "1.27.3",

@@ -18,14 +18,17 @@ CONTROLLER = "dnabr-m33-controller-frank@uspbr-242713.iam.gserviceaccount.com"
 RUN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{2,63}$")
 SOURCE_FILES = (
     "bin/m33_gcs_append_only.py",
+    "bin/m33_batch_postflight.py",
     "bin/m33_infra_kat_contract.py",
     "bin/m33_storage_policy.py",
     "bin/m33_tabix_kat.py",
+    "bin/m33_tabix_kat_cloud_runner.py",
     "bin/m33_tabix_kat_controller.py",
     "conf/m33_infra_kat_authorization.json",
     "conf/m33_m0_materializer_contract.json",
     "conf/m33_storage_namespace_policy.json",
     "conf/m33_tabix_kat.config",
+    "conf/gcp/m33_batch_submitter_role.yaml",
     "containers/m33-controller/Dockerfile",
     "containers/m33-tabix/Dockerfile",
     "modules/33_TABIX_KAT.nf",
@@ -120,14 +123,30 @@ def write_exclusive(path: Path, payload: dict) -> None:
         os.fsync(handle.fileno())
 
 
+def nextflow_environment(base: dict[str, str], values: dict[str, str]) -> dict[str, str]:
+    environment = {key: value for key, value in base.items() if key not in FORBIDDEN_CREDENTIAL_ENV}
+    environment.update(values)
+    environment["NXF_OFFLINE"] = "true"
+    environment["NXF_SYNTAX_PARSER"] = "v1"
+    return environment
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--runtime-image", required=True)
+    parser.add_argument("--controller-image", required=True)
     parser.add_argument("--receipt", required=True, type=Path)
     args = parser.parse_args()
 
     require(RUN_ID_RE.fullmatch(args.run_id) is not None, "invalid M33 run ID")
+    require(
+        re.fullmatch(
+            r"us-central1-docker\.pkg\.dev/uspbr-242713/dnabr-lai/m33-controller@sha256:[0-9a-f]{64}",
+            args.controller_image,
+        ) is not None,
+        "controller image must use the immutable M33 controller repository digest",
+    )
     repo_root = Path(__file__).resolve().parents[1]
     authorization_path = repo_root / "conf" / "m33_infra_kat_authorization.json"
     storage_policy_path = repo_root / "conf" / "m33_storage_namespace_policy.json"
@@ -162,6 +181,7 @@ def main() -> int:
         "status": "PASS_CONTROLLER_IDENTITY_AND_AUTHORIZATION",
         "controller_service_account": observed_controller,
         "authorization_sha256": module.sha256_file(authorization_path),
+        "controller_image": args.controller_image,
         "runtime_image": args.runtime_image,
         "nextflow_version": observed_nextflow,
         "nf_google_version": observed_nf_google,
@@ -174,23 +194,52 @@ def main() -> int:
         "real_asset_read": False,
     }
     write_exclusive(args.receipt, receipt)
-    environment = {
-        key: value for key, value in os.environ.items()
-        if key not in FORBIDDEN_CREDENTIAL_ENV
-    }
-    environment.update({
+    environment = nextflow_environment(dict(os.environ), {
         "DNABR_M33_INFRA_KAT": "1",
         "DNABR_RUN_ID": args.run_id,
         "DNABR_M33_TABIX_IMAGE": args.runtime_image,
         "DNABR_M33_CONTROLLER_RECEIPT": str(args.receipt.resolve()),
         "DNABR_M33_AUTHORIZATION": str(authorization_path),
         "DNABR_M33_SOURCE_AUTH": str(source_auth_path),
-        "NXF_OFFLINE": "true",
     })
     command = [
         "nextflow", "-C", str(config_path), "run", str(workflow_path),
     ]
-    return subprocess.run(command, env=environment, check=False).returncode
+    completed = subprocess.run(command, env=environment, check=False)
+    if completed.returncode != 0:
+        return completed.returncode
+
+    publisher = load_contract_module(repo_root / "bin" / "m33_gcs_append_only.py")
+    postflight_module = load_contract_module(repo_root / "bin" / "m33_batch_postflight.py")
+    token = publisher.access_token()
+    gcs = publisher.AppendOnlyGCS(token)
+    kat_object = (
+        "frank/lai-exploracion-datos/runs/"
+        f"{args.run_id}/m33_tabix_kat.receipt.json"
+    )
+    kat_record = gcs.record_for_existing("teams-usp", kat_object)
+    kat_receipt = json.loads(gcs.reopen_record(kat_record))
+    batch_api = postflight_module.BatchAPI(token)
+    job_summaries = postflight_module.stable_inventory(
+        batch_api.list_jobs,
+        run_id=args.run_id,
+    )
+    jobs = [batch_api.get_job(job["name"]) for job in job_summaries]
+    postflight = postflight_module.make_postflight(
+        jobs=jobs,
+        run_id=args.run_id,
+        runtime_image=args.runtime_image,
+        controller_image=args.controller_image,
+        kat_receipt=kat_receipt,
+    )
+    final = publisher.finalize_candidate(
+        run_id=args.run_id,
+        storage_policy=storage_policy_path,
+        storage_validator=repo_root / "bin" / "m33_storage_policy.py",
+        postflight=postflight,
+    )
+    print(json.dumps(final, sort_keys=True))
+    return 0
 
 
 if __name__ == "__main__":

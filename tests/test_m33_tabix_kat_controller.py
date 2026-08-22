@@ -46,7 +46,19 @@ class ControllerTests(unittest.TestCase):
     def test_source_inventory_is_closed(self):
         self.assertIn("workflows/m33_tabix_kat.nf", MODULE.SOURCE_FILES)
         self.assertIn("conf/m33_infra_kat_authorization.json", MODULE.SOURCE_FILES)
+        self.assertIn("bin/m33_batch_postflight.py", MODULE.SOURCE_FILES)
+        self.assertIn("bin/m33_tabix_kat_cloud_runner.py", MODULE.SOURCE_FILES)
+        self.assertIn("conf/gcp/m33_batch_submitter_role.yaml", MODULE.SOURCE_FILES)
         self.assertNotIn(".claude/handoff.md", MODULE.SOURCE_FILES)
+
+    def test_real_runner_fixes_v1_parser_and_removes_credential_overrides(self):
+        environment = MODULE.nextflow_environment(
+            {"PATH": "/bin", "NXF_SYNTAX_PARSER": "v2", "GOOGLE_APPLICATION_CREDENTIALS": "/tmp/key"},
+            {"DNABR_RUN_ID": "m33-run"},
+        )
+        self.assertEqual(environment["NXF_SYNTAX_PARSER"], "v1")
+        self.assertEqual(environment["NXF_OFFLINE"], "true")
+        self.assertNotIn("GOOGLE_APPLICATION_CREDENTIALS", environment)
 
     def test_current_source_bundle_is_exactly_authorized(self):
         source_auth, digest = MODULE.validate_source_auth(ROOT)

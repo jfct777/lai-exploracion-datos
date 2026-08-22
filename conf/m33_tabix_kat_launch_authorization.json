@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_TABIX_KAT_CLOUD_LAUNCH_AUTHORIZATION",
+  "status": "BLOCKED_PENDING_PUBLISHED_CONTROLLER_DIGEST",
+  "controller_image": "BLOCKED_PENDING_PUBLISHED_DIGEST",
+  "runtime_image": "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/m33-tabix@sha256:e730c35759e3851a92d7f3a6619333105331d97f1ae44a50dfa8d59745c43e54",
+  "external_closer_files": {
+    "bin/m33_batch_postflight.py": "80c3cb8f548b748385d64d713d55e9339297826b09f1c17222288ccf040b478a",
+    "bin/m33_gcs_append_only.py": "292b54a597d3c55d4fc8c80b7d0d1faf126b8d03a451a817a06e0f9d1d8ce0be",
+    "bin/m33_storage_policy.py": "b2521a9769bedaf9509235138624d4994cb3927ca2bb37e79447c9a49804f321",
+    "bin/m33_tabix_kat_cloud_runner.py": "b69ddcf0cacc17bae0c4dd9c85c1ac47bc2da3359d3c3a7395024071b12172f6",
+    "conf/m33_storage_namespace_policy.json": "ff9143e29fe154cc5d793a7b36efe91cefc08ff012f8024ffa1c39b7b1adc1da"
+  },
+  "source_auth_sha256": "8a130cb332677397ff1d7db4bca3fd3f1487948cf9ec2cb0e97c816bc3cd3fd0",
+  "impersonation_boundary": {
+    "launcher_service_account": "653458115080-compute@developer.gserviceaccount.com",
+    "target_service_account": "dnabr-m33-controller-frank@uspbr-242713.iam.gserviceaccount.com",
+    "required_role": "roles/iam.serviceAccountTokenCreator",
+    "scope": "controller_service_account_only_all_controller_permissions"
+  }
+}
