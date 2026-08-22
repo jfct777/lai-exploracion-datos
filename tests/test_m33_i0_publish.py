@@ -31,6 +31,15 @@ class M33I0PublicationTests(unittest.TestCase):
     def test_source_auth_inventory_is_exact(self):
         self.assertRegex(MODULE.load_source_auth(SOURCE_AUTH, ROOT), r"^[0-9a-f]{64}$")
 
+    def test_runtime_controls_must_be_canonical_repository_files(self):
+        base = ROOT / "conf/m33_storage_namespace_policy.json"
+        self.assertEqual(MODULE.validate_control_paths(ROOT, AUTH, SOURCE_AUTH, base), ROOT)
+        with tempfile.TemporaryDirectory() as temporary:
+            external = Path(temporary) / AUTH.name
+            external.write_bytes(AUTH.read_bytes())
+            with self.assertRaisesRegex(ValueError, "non-canonical control path"):
+                MODULE.validate_control_paths(ROOT, external, SOURCE_AUTH, base)
+
     def test_local_inventory_rejects_vcf_extra_and_writable_artifact(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

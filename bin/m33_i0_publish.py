@@ -404,10 +404,28 @@ def prepare_local_receipt(path: Path, payload: dict[str, Any]) -> dict[str, Any]
     return {"size_bytes": path.stat().st_size, "sha256": sha256_file(path)}
 
 
+def validate_control_paths(
+    repo_root: Path, authorization_path: Path, source_auth_path: Path, base_policy_path: Path,
+) -> Path:
+    repo_root = repo_root.resolve()
+    canonical_controls = {
+        authorization_path: repo_root / "conf/m33_i0_publication_authorization.json",
+        source_auth_path: repo_root / SOURCE_AUTH_FILE,
+        base_policy_path: repo_root / "conf/m33_storage_namespace_policy.json",
+    }
+    for supplied, canonical in canonical_controls.items():
+        require(supplied.resolve() == canonical and canonical.is_file() and not canonical.is_symlink(),
+                f"non-canonical control path: {supplied}")
+    return repo_root
+
+
 def publish(
     *, artifact_root: Path, authorization_path: Path, source_auth_path: Path,
     base_policy_path: Path, repo_root: Path, receipt_path: Path,
 ) -> dict[str, Any]:
+    repo_root = validate_control_paths(
+        repo_root, authorization_path, source_auth_path, base_policy_path,
+    )
     authorization = load_authorization(authorization_path)
     source_auth_sha = load_source_auth(source_auth_path, repo_root)
     publisher_commit = validate_publisher_commit(repo_root, authorization)
