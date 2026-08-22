@@ -26,6 +26,18 @@ SOURCE_FILES = {
     "conf/m33_storage_namespace_policy.json",
     "tests/test_m33_i0_publish.py",
 }
+SOURCE_AUTH_FILE = "conf/m33_i0_publication_source_auth.json"
+EXPECTED_ARTIFACT_ORDER = (
+    "root17/root17.flare.anc.vcf.gz.tbi",
+    "root17/root17.i0_real.receipt.json",
+    "root17/ROOT17_I0_REAL_PASS_NON_CONSUMABLE",
+    "root18/root18.flare.anc.vcf.gz.tbi",
+    "root18/root18.i0_real.receipt.json",
+    "root18/ROOT18_I0_REAL_PASS_NON_CONSUMABLE",
+    "m33_i0_real.manifest.json",
+    "I0_REAL_PASS_NON_CONSUMABLE",
+)
+EMPTY_PREFIX_MESSAGE = "ERROR: (gcloud.storage.ls) One or more URLs matched no objects."
 FORBIDDEN_ENV = {
     "CLOUDSDK_AUTH_ACCESS_TOKEN",
     "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE",
@@ -96,10 +108,13 @@ def load_authorization(path: Path) -> dict[str, Any]:
             "manifest hash is invalid")
     artifacts = payload["artifacts"]
     require(isinstance(artifacts, dict) and len(artifacts) == 8, "exactly eight artifacts required")
+    require(set(artifacts) == set(EXPECTED_ARTIFACT_ORDER), "authorized artifact paths differ")
     for relative, descriptor in artifacts.items():
         path = Path(relative)
         require(not path.is_absolute() and ".." not in path.parts, "unsafe artifact path")
         require(not relative.endswith(".vcf.gz"), "VCF publication is forbidden")
+        require("READY" not in path.parts and path.name != "publication.receipt.json",
+                "reserved publication artifact path")
         require(set(descriptor) == {"size_bytes", "sha256"}, "artifact descriptor differs")
         require(type(descriptor["size_bytes"]) is int and descriptor["size_bytes"] > 0,
                 "artifact size is invalid")
@@ -139,10 +154,26 @@ def load_source_auth(path: Path, repo_root: Path) -> str:
 
 def validate_publisher_commit(repo_root: Path, authorization: dict[str, Any]) -> str:
     require(not subprocess.run(
-        ["git", "-C", str(repo_root), "status", "--porcelain", "--untracked-files=no"],
+        ["git", "-C", str(repo_root), "status", "--porcelain"],
         check=True, capture_output=True, text=True,
-    ).stdout.strip(), "tracked worktree must be clean")
+    ).stdout.strip(), "worktree must be fully clean")
+    controlled_files = SOURCE_FILES | {SOURCE_AUTH_FILE}
+    for relative in controlled_files:
+        subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "--error-unmatch", relative],
+            check=True, capture_output=True,
+        )
+        committed = subprocess.run(
+            ["git", "-C", str(repo_root), "show", f"HEAD:{relative}"],
+            check=True, capture_output=True,
+        ).stdout
+        require(hashlib.sha256(committed).hexdigest() == sha256_file(repo_root / relative),
+                f"working source differs from HEAD: {relative}")
     commit = authorization["publisher_code_commit"]
+    require(subprocess.run(
+        ["git", "-C", str(repo_root), "merge-base", "--is-ancestor", commit, "HEAD"],
+        capture_output=True,
+    ).returncode == 0, "publisher commit is not an ancestor of HEAD")
     result = subprocess.run(
         ["git", "-C", str(repo_root), "show", f"{commit}:bin/m33_i0_publish.py"],
         check=True, capture_output=True,
@@ -207,6 +238,9 @@ def validate_i0_semantics(root: Path, authorization: dict[str, Any]) -> None:
                 f"root TBI builds differ: {root_label}")
         require(receipt["output_tbi_sha256"] == root_manifest["output_tbi_sha256"],
                 f"root manifest TBI binding differs: {root_label}")
+        tbi = root / root_label / f"{root_label}.flare.anc.vcf.gz.tbi"
+        require(sha256_file(tbi) == receipt["output_tbi_sha256"],
+                f"local TBI differs from receipt: {root_label}")
         require(receipt["query_parity_sha256"] == root_manifest["query_parity_sha256"],
                 f"root query binding differs: {root_label}")
         for flag in ("global_ready", "materialize", "safe_bridge", "scientific_evidence",
@@ -231,12 +265,47 @@ def active_account() -> str:
     return accounts[0]
 
 
-def require_empty_prefix(prefix: str) -> None:
+def list_remote_objects(prefix: str) -> dict[str, dict[str, Any]]:
     result = subprocess.run(
-        ["gcloud", "storage", "ls", prefix, "--recursive"], capture_output=True, text=True,
+        ["gcloud", "storage", "ls", prefix, "--recursive", "--json"],
+        capture_output=True, text=True,
     )
-    require(result.returncode in {0, 1}, "destination listing failed")
-    require(not result.stdout.strip(), "destination prefix is not empty")
+    if result.returncode != 0:
+        diagnostic = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+        require(result.returncode == 1 and diagnostic == EMPTY_PREFIX_MESSAGE,
+                f"destination listing failed: {diagnostic}")
+        return {}
+    payload = json.loads(result.stdout)
+    require(isinstance(payload, list), "unexpected destination listing")
+    observed: dict[str, dict[str, Any]] = {}
+    for entry in payload:
+        require(isinstance(entry, dict) and entry.get("type") == "cloud_object",
+                "non-object entry in destination listing")
+        metadata = entry.get("metadata")
+        require(isinstance(metadata, dict), "missing object metadata in destination listing")
+        uri = f"gs://{metadata['bucket']}/{metadata['name']}"
+        require(uri.startswith(prefix), "listed object escaped destination prefix")
+        require(uri not in observed, "duplicate object in destination listing")
+        observed[uri] = metadata
+    return observed
+
+
+def validate_bucket_controls(prefix: str) -> dict[str, Any]:
+    bucket = prefix.removeprefix("gs://").split("/", 1)[0]
+    result = subprocess.run(
+        ["gcloud", "storage", "buckets", "describe", f"gs://{bucket}", "--format=json"],
+        check=True, capture_output=True, text=True,
+    )
+    payload = json.loads(result.stdout)
+    require(payload.get("uniform_bucket_level_access") is True,
+            "uniform bucket-level access is not enabled")
+    require(payload.get("public_access_prevention") == "enforced",
+            "public access prevention is not enforced")
+    return {
+        "bucket": bucket,
+        "uniform_bucket_level_access": True,
+        "public_access_prevention": "enforced",
+    }
 
 
 def describe_object(uri: str) -> dict[str, Any]:
@@ -249,15 +318,12 @@ def describe_object(uri: str) -> dict[str, Any]:
     return payload
 
 
-def publish_one(local: Path, uri: str, expected: dict[str, Any]) -> dict[str, Any]:
-    subprocess.run(
-        ["gcloud", "storage", "cp", "--if-generation-match=0", str(local), uri], check=True,
-    )
+def verify_remote_object(uri: str, expected: dict[str, Any]) -> dict[str, Any]:
     metadata = describe_object(uri)
     generation = str(metadata["generation"])
     require(int(metadata["size"]) == expected["size_bytes"], "remote size differs")
     with tempfile.TemporaryDirectory(prefix="m33-i0-reopen-") as temporary:
-        reopened = Path(temporary) / local.name
+        reopened = Path(temporary) / "reopened"
         subprocess.run(["gcloud", "storage", "cp", f"{uri}#{generation}", str(reopened)], check=True)
         require(reopened.stat().st_size == expected["size_bytes"], "reopened size differs")
         require(sha256_file(reopened) == expected["sha256"], "reopened SHA-256 differs")
@@ -269,6 +335,35 @@ def publish_one(local: Path, uri: str, expected: dict[str, Any]) -> dict[str, An
         "crc32c_base64": metadata["crc32c_hash"],
         "md5_base64": metadata["md5_hash"],
     }
+
+
+def publish_one(local: Path, uri: str, expected: dict[str, Any]) -> dict[str, Any]:
+    subprocess.run(
+        ["gcloud", "storage", "cp", "--if-generation-match=0", str(local), uri], check=True,
+    )
+    return verify_remote_object(uri, expected)
+
+
+def validate_exact_inventory(
+    prefix: str, expected: dict[str, dict[str, Any]], verified: dict[str, dict[str, Any]],
+) -> None:
+    listed = list_remote_objects(prefix)
+    require(set(listed) == set(expected), "final remote inventory differs")
+    require(set(verified) == set(expected), "verified remote inventory differs")
+    for uri, descriptor in expected.items():
+        metadata = describe_object(uri)
+        require(str(metadata["generation"]) == verified[uri]["generation"],
+                f"remote generation changed: {uri}")
+        require(int(metadata["size"]) == descriptor["size_bytes"], f"remote size changed: {uri}")
+
+
+def validate_initial_inventory(
+    initial: dict[str, dict[str, Any]], expected_uris: set[str], receipt_uri: str,
+) -> None:
+    allowed = expected_uris | {receipt_uri}
+    require(set(initial) <= allowed, "destination contains an unauthorized object")
+    require(receipt_uri not in initial or set(initial) == allowed,
+            "publication receipt exists before all authorized artifacts")
 
 
 def atomic_json(path: Path, payload: dict[str, Any]) -> None:
@@ -299,22 +394,25 @@ def publish(
     artifacts = validate_local_artifacts(artifact_root, authorization)
     validate_i0_semantics(artifact_root, authorization)
     principal = active_account()
-    require_empty_prefix(authorization["destination_prefix"])
+    bucket_controls = validate_bucket_controls(authorization["destination_prefix"])
+    receipt_uri = authorization["destination_prefix"] + "publication.receipt.json"
+    expected_uris = {
+        authorization["destination_prefix"] + relative: descriptor
+        for relative, descriptor in authorization["artifacts"].items()
+    }
+    initial = list_remote_objects(authorization["destination_prefix"])
+    validate_initial_inventory(initial, set(expected_uris), receipt_uri)
     published = []
-    order = sorted(
-        artifacts,
-        key=lambda relative: (
-            2 if relative == "I0_REAL_PASS_NON_CONSUMABLE"
-            else 1 if relative == "m33_i0_real.manifest.json"
-            else 0,
-            relative,
-        ),
-    )
-    for relative in order:
-        published.append(publish_one(
-            artifacts[relative], authorization["destination_prefix"] + relative,
-            authorization["artifacts"][relative],
-        ))
+    verified_by_uri: dict[str, dict[str, Any]] = {}
+    for relative in EXPECTED_ARTIFACT_ORDER:
+        uri = authorization["destination_prefix"] + relative
+        descriptor = authorization["artifacts"][relative]
+        if uri in initial:
+            verified = verify_remote_object(uri, descriptor)
+        else:
+            verified = publish_one(artifacts[relative], uri, descriptor)
+        published.append(verified)
+        verified_by_uri[uri] = verified
     payload = {
         "schema_version": "1.0.0",
         "stage": "M33_I0_PUBLICATION",
@@ -326,6 +424,7 @@ def publish(
         "source_manifest_sha256": authorization["source_manifest_sha256"],
         "publication_source_auth_sha256": source_auth_sha,
         "publisher_principal": principal,
+        "bucket_controls": bucket_controls,
         "destination_prefix": authorization["destination_prefix"],
         "published_object_count": 8,
         "objects": published,
@@ -337,13 +436,33 @@ def publish(
         "test": False,
         "global_ready": False,
     }
-    atomic_json(receipt_path, payload)
-    receipt_expected = {"size_bytes": receipt_path.stat().st_size, "sha256": sha256_file(receipt_path)}
-    remote_receipt = publish_one(
-        receipt_path, authorization["destination_prefix"] + "publication.receipt.json", receipt_expected,
-    )
+    if receipt_uri in initial:
+        with tempfile.TemporaryDirectory(prefix="m33-i0-receipt-reopen-") as temporary:
+            remote_copy = Path(temporary) / "publication.receipt.json"
+            generation = str(describe_object(receipt_uri)["generation"])
+            subprocess.run(
+                ["gcloud", "storage", "cp", f"{receipt_uri}#{generation}", str(remote_copy)], check=True,
+            )
+            require(load_json(remote_copy) == payload, "existing publication receipt differs")
+            receipt_expected = {
+                "size_bytes": remote_copy.stat().st_size,
+                "sha256": sha256_file(remote_copy),
+            }
+        remote_receipt = verify_remote_object(receipt_uri, receipt_expected)
+    else:
+        atomic_json(receipt_path, payload)
+        receipt_expected = {
+            "size_bytes": receipt_path.stat().st_size,
+            "sha256": sha256_file(receipt_path),
+        }
+        remote_receipt = publish_one(receipt_path, receipt_uri, receipt_expected)
+    final_expected = dict(expected_uris)
+    final_expected[receipt_uri] = receipt_expected
+    verified_by_uri[receipt_uri] = remote_receipt
+    validate_exact_inventory(authorization["destination_prefix"], final_expected, verified_by_uri)
     result = dict(payload)
     result["publication_receipt"] = remote_receipt
+    result["final_remote_object_count"] = 9
     return result
 
 
