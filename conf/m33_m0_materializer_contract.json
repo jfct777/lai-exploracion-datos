@@ -1,0 +1,764 @@
+{
+    "schema_version": "2.0.0",
+    "stage": "M33_M0_MATERIALIZER_CONTRACT",
+    "status": "CONTRACT_ONLY_NO_REAL_ASSET_READ_NO_INDEX_NO_BRIDGE_NO_MATERIALIZATION_NO_FORWARD_NO_TRAINING",
+    "scope": "technical_chr22_root17_root18_only",
+    "supersedes_historical_contracts": false,
+    "anchors": {
+        "a0_root17": {
+            "git_commit": "f1b08289ac6635cbe69cb1d8c897f86ea51f22cc",
+            "official_receipt_sha256": "4fe79f0dc648caa2c64b9d81c752e144af6d0c9db43e3fa3ae4274887ecfff93",
+            "source_auth_sha256": "e9b062c6ac803d7a3c4b50ba087c3553d89efe8d4d83be42e539d2bb74ed1940",
+            "index_audit_sha256": "614931d5042999602be6078e93d802b31d27282b33b3cadabfc2a54e2afc7ad3",
+            "preregistration_sha256": "c99f890e00c383df25bbdfbb94e9fba3bb181adbfa4db1e1301e4648cfa3d70d",
+            "asset_registry_sha256": "44311fe8ef9238c81f630343857439ac16e52b7569c1348a52fb65d744ad93cd"
+        },
+        "a0_root18": {
+            "git_commit": "cd324fe156fcb4168b6249d20d1a34144d58f065",
+            "official_receipt_sha256": "de1ea4ae2b67179acb9a6f56024bfe9bbb92b00663ef3684b280d077f1726b4b",
+            "source_auth_sha256": "03fefb178a50d4427ad9be89a908adf03cbddf1b2ad58ab66e6b23a899f85255",
+            "index_audit_sha256": "328b0ab2ba9fa4032798bb54bede1be1daa324082f884484c92e42bc62532a2a",
+            "preregistration_sha256": "c99f890e00c383df25bbdfbb94e9fba3bb181adbfa4db1e1301e4648cfa3d70d",
+            "asset_registry_sha256": "649993d6e098b3cf92260a95d5bfcf8a89a529f8438f753dce368598958773de"
+        },
+        "known_answer_root17": {
+            "profile": "official_root17_A0_KAT",
+            "counts": {
+                "flare_loci": 79791,
+                "selected_all": 94029,
+                "selected_incremental": 94029,
+                "flare_overlap": 0,
+                "reference_no_support": 43892,
+                "target_missing_diploid_cells": 0
+            },
+            "sha256": {
+                "target_diploid_dosage": "ea142d0a87ae4e74a6817b15f4b9dc196467ea6f0c875611aa0813b417e2eff4",
+                "reference_ac_an": "6f0d91443fd5f187377111e38133e8ab823399ebb1fe095c3b78e4da06723bdd",
+                "flare_anc_raw": "85dfd76df2c14cb8fe0a753910f25c49c88d38edc5708ec6d641053d95cc74e8",
+                "genetic_map": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9"
+            }
+        },
+        "known_answer_root18": {
+            "profile": "official_root18_A0_KAT",
+            "counts": {
+                "flare_loci": 79791,
+                "selected_all": 94703,
+                "selected_incremental": 94703,
+                "flare_overlap": 0,
+                "reference_no_support": 43938,
+                "target_missing_diploid_cells": 0
+            },
+            "sha256": {
+                "target_diploid_dosage": "cc068025663bd88e3b2903685fdf76cf164a04c9ac52362b80305c0adc52ee46",
+                "reference_ac_an": "f2fcf538258114df5410674fe52ef7b6abaf64a35ec4bc251d6a6c25633ccee5",
+                "flare_anc_raw": "edc4bcdc62f5ce0ffe04bd27e9d6d6ee892e03282a1474639fc3082fbc3832c9",
+                "genetic_map": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9"
+            }
+        }
+    },
+    "root_registry": {
+        "consumed_technical_roots": {
+            "root17": 20260817,
+            "root18": 20260818
+        },
+        "root18_status": "TECHNICAL_A0_COMPLETE_CONSUMED_NO_SCIENTIFIC_VALIDATION",
+        "consumed_roots_quarantine": "root17_and_root18_may_only_serve_as_technical_known_answers_never_fit_validation_test_radius_or_model_selection",
+        "scientific_selection": false,
+        "radius_selection": false
+    },
+    "process_contracts": {
+        "I0_DERIVE_AUTHENTICATE_FLARE_INDEX": {
+            "implemented": false,
+            "status": "BLOCKED_PENDING_PULLABLE_TABIX_OCI",
+            "input_logical_ids": [
+                "a0_authenticated_flare_anc"
+            ],
+            "output_logical_ids": [
+                "derived_flare_anc_tbi",
+                "i0_index_receipt"
+            ],
+            "tool": {
+                "name": "tabix",
+                "exact_version": "1.16",
+                "local_image_id_technical_anchor": "sha256:b89353efc9a4a5953519fa9f066728e2f63d0e9125fc9fc771ef3ea9bb9c961c",
+                "required_pullable_oci_image": "BLOCKED_PENDING_REPOSITORY_AT_SHA256_DIGEST"
+            },
+            "exact_command_argv": [
+                "tabix",
+                "-p",
+                "vcf",
+                "flare.anc.vcf.gz"
+            ],
+            "query_parity": "sha256_and_record_count_of_tabix_flare.anc.vcf.gz_22_must_equal_sequential_nonheader_records_with_CHROM_exactly_22",
+            "write_policy": "append_only_fail_if_output_exists_atomic_fsync_reopen",
+            "requirements": [
+                "copy_authenticated_flare_anc_without_modification",
+                "verify_raw_flare_anc_sha256_before_and_after",
+                "build_tbi_twice_in_independent_clean_directories_with_pinned_tabix_image",
+                "require_identical_tbi_sha256",
+                "require_indexed_and_sequential_query_parity",
+                "record_derived_index_provenance_without_claiming_FLARE_produced_the_index"
+            ],
+            "receipt_required_keys": [
+                "stage",
+                "status",
+                "root_label",
+                "root_seed",
+                "source_flare_sha256",
+                "tabix_version",
+                "tabix_oci_repository_digest",
+                "independent_tbi_sha256",
+                "query_parity_sha256",
+                "output_tbi_sha256",
+                "append_only",
+                "reopen_verified"
+            ]
+        },
+        "SAFE_BRIDGE": {
+            "implemented": false,
+            "isolation": "raw_inputs_are_read_only_inside_SAFE_BRIDGE_and_never_forwarded",
+            "truth_mounted": false,
+            "physical_inputs": {
+                "tree_sequence": {
+                    "logical_id": "a0_tree_sequence",
+                    "format": "trees",
+                    "access": "read_only",
+                    "authentication": "A0_receipt_input_sha256"
+                },
+                "pools": {
+                    "logical_id": "a0_pools",
+                    "format": "tsv",
+                    "access": "read_only",
+                    "authentication": "A0_receipt_input_sha256"
+                },
+                "rare_catalog": {
+                    "logical_id": "a0_rare_catalog",
+                    "format": "tsv_gzip",
+                    "access": "read_only",
+                    "authentication": "A0_receipt_input_sha256"
+                },
+                "rare_haplotypes": {
+                    "logical_id": "a0_rare_haplotypes",
+                    "format": "tsv_gzip",
+                    "access": "read_only",
+                    "authentication": "A0_receipt_input_sha256"
+                },
+                "selected_sites": {
+                    "logical_id": "a0_m31_sites",
+                    "format": "tsv_gzip",
+                    "access": "read_only",
+                    "authentication": "A0_receipt_input_sha256"
+                },
+                "target_calls": {
+                    "logical_id": "a0_m31_target",
+                    "format": "tsv_gzip",
+                    "access": "read_only",
+                    "authentication": "A0_receipt_input_sha256"
+                },
+                "common_reference_crosscheck": {
+                    "logical_id": "a0_ref_vcf_FLARE_grid_only",
+                    "format": "vcf_bgzf",
+                    "access": "read_only",
+                    "authentication": "A0_receipt_input_sha256"
+                },
+                "ref_pairs": {
+                    "logical_id": "a0_ref_pairs",
+                    "format": "tsv",
+                    "access": "read_only",
+                    "authentication": "A0_receipt_input_sha256"
+                },
+                "panel_map": {
+                    "logical_id": "a0_panel_map",
+                    "format": "tsv",
+                    "access": "read_only",
+                    "authentication": "A0_receipt_input_sha256"
+                },
+                "genetic_map": {
+                    "logical_id": "a0_genetic_map",
+                    "format": "tsv",
+                    "access": "read_only",
+                    "authentication": "A0_receipt_input_sha256"
+                }
+            },
+            "derivations": {
+                "selected_loci_incremental": "selected_sites_crosschecked_against_rare_catalog_then_subtract_exact_FLARE_keys",
+                "target_rare_diploid_incremental": "rare_haplotypes_joined_to_M31_target_then_collapsed_to_diploid_dosage_no_phase",
+                "reference_rare_summary_incremental": "tree_sequence_plus_pools_plus_ref_pairs_at_selected_loci_with_panel_map_ancestry_labels",
+                "common_reference_crosscheck_scope": "FLARE_grid_only_never_source_of_reference_rare_summary"
+            },
+            "role_firewall": {
+                "tree_and_pools_allowed_nodes": "exactly_REF_haplotypes_listed_by_ref_pairs",
+                "required_node_set_equality": "contributing_tree_nodes_equals_ref_pairs_nodes_and_each_node_maps_to_one_REF_person_and_one_AFR_EUR_ASIA_label",
+                "forbidden_genotype_contributors": [
+                    "DONOR",
+                    "FREQ",
+                    "TARGET",
+                    "VALID",
+                    "TEST"
+                ],
+                "freq_usage": "selection_audit_only_no_FREQ_genotype_or_metric_export",
+                "violation": "STOP"
+            },
+            "output_artifacts": {
+                "selected_loci_incremental": {
+                    "schema_id": "m33_m0_selected_loci_incremental_v1",
+                    "format": "npz_uncompressed",
+                    "axes": [
+                        "locus"
+                    ],
+                    "dtypes": {
+                        "locus_id": "<u8",
+                        "chrom": "|u1",
+                        "pos": "<i8",
+                        "ref": "|S1",
+                        "alt": "|S1",
+                        "cM": "<f8"
+                    },
+                    "layout": "C_contiguous_sorted_by_cM_pos_locus_id",
+                    "byte_order": "little_endian_for_multibyte_numeric_fields",
+                    "contains_raw_input_payload": false,
+                    "privacy": "private"
+                },
+                "target_rare_diploid_incremental": {
+                    "schema_id": "m33_m0_target_rare_diploid_incremental_v1",
+                    "format": "npz_uncompressed",
+                    "axes": [
+                        "sample",
+                        "locus"
+                    ],
+                    "dtypes": {
+                        "sample_key_sha256": "|S64",
+                        "locus_id": "<u8",
+                        "minor_dosage": "|i1",
+                        "observed_mask": "|u1"
+                    },
+                    "layout": "C_contiguous_sample_major_exact_locus_axis",
+                    "byte_order": "little_endian_for_multibyte_numeric_fields",
+                    "contains_raw_input_payload": false,
+                    "privacy": "private"
+                },
+                "reference_rare_summary_incremental": {
+                    "schema_id": "m33_m0_reference_rare_summary_incremental_v1",
+                    "format": "npz_uncompressed",
+                    "axes": [
+                        "ancestry",
+                        "locus"
+                    ],
+                    "dtypes": {
+                        "ancestry": "|u1",
+                        "locus_id": "<u8",
+                        "minor_ac": "<u2",
+                        "callable_an": "<u2",
+                        "minor_af": "<f8",
+                        "observed_mask": "|u1",
+                        "no_support": "|u1"
+                    },
+                    "enum_mappings": {
+                        "ancestry": {
+                            "0": "AFR",
+                            "1": "EUR",
+                            "2": "ASIA"
+                        }
+                    },
+                    "layout": "C_contiguous_ancestry_major_exact_locus_axis",
+                    "byte_order": "little_endian_for_multibyte_numeric_fields",
+                    "contains_raw_input_payload": false,
+                    "privacy": "private"
+                },
+                "safe_bridge_receipt": {
+                    "schema_id": "m33_m0_safe_bridge_receipt_v1",
+                    "format": "strict_json",
+                    "axes": [],
+                    "dtypes": {
+                        "semantic_sha256": "hex64"
+                    },
+                    "layout": "summary_only_no_sample_or_locus_payload",
+                    "byte_order": "not_applicable",
+                    "contains_raw_input_payload": false,
+                    "privacy": "private",
+                    "required_keys": [
+                        "stage",
+                        "status",
+                        "root_label",
+                        "root_seed",
+                        "expected_ref_node_count",
+                        "contributing_ref_node_count",
+                        "rejected_non_ref_node_count",
+                        "expected_ref_nodes_semantic_sha256",
+                        "contributing_ref_nodes_semantic_sha256",
+                        "role_firewall_pass",
+                        "artifact_semantic_sha256",
+                        "reopen_verified",
+                        "append_only"
+                    ]
+                }
+            }
+        },
+        "MATERIALIZE": {
+            "implemented": false,
+            "input_logical_ids": [
+                "selected_loci_incremental",
+                "target_rare_diploid_incremental",
+                "reference_rare_summary_incremental",
+                "a0_authenticated_flare_anc",
+                "derived_flare_anc_tbi",
+                "authenticated_genetic_map"
+            ],
+            "output_logical_ids": [
+                "packed_rare_context",
+                "bundle_manifest_by_radius",
+                "materialization_receipt",
+                "READY"
+            ],
+            "bundle_partitioning": {
+                "unit": "one_root_one_radius_one_person_batch_one_contiguous_marker_chunk",
+                "row_order": "sample_major_then_marker",
+                "token_order_within_row": "cM_then_bp_then_locus_id",
+                "person_batch": 8,
+                "maximum_valid_tokens_per_shard": 262144
+            },
+            "channel_cast": "compute_AC_AN_AF_and_normalizations_in_float64_then_clip_declared_ranges_then_cast_to_little_endian_float32_then_hash_raw_and_cast_views",
+            "output_artifacts": {
+                "packed_rare_context_shard": {
+                    "schema_id": "m33_m0_packed_rare_context_shard_v1",
+                    "format": "npz_uncompressed",
+                    "privacy": "private",
+                    "arrays": {
+                        "sample_key_sha256": {
+                            "axes": [
+                                "sample"
+                            ],
+                            "shape": [
+                                "B"
+                            ],
+                            "dtype": "|S64"
+                        },
+                        "marker_chrom": {
+                            "axes": [
+                                "marker"
+                            ],
+                            "shape": [
+                                "M"
+                            ],
+                            "dtype": "|u1"
+                        },
+                        "marker_pos": {
+                            "axes": [
+                                "marker"
+                            ],
+                            "shape": [
+                                "M"
+                            ],
+                            "dtype": "<i8"
+                        },
+                        "marker_ref": {
+                            "axes": [
+                                "marker"
+                            ],
+                            "shape": [
+                                "M"
+                            ],
+                            "dtype": "|S1"
+                        },
+                        "marker_alt": {
+                            "axes": [
+                                "marker"
+                            ],
+                            "shape": [
+                                "M"
+                            ],
+                            "dtype": "|S1"
+                        },
+                        "marker_cM": {
+                            "axes": [
+                                "marker"
+                            ],
+                            "shape": [
+                                "M"
+                            ],
+                            "dtype": "<f8"
+                        },
+                        "radius_cM": {
+                            "axes": [
+                                "singleton"
+                            ],
+                            "shape": [
+                                1
+                            ],
+                            "dtype": "<f4"
+                        },
+                        "rare_tokens": {
+                            "axes": [
+                                "valid_token",
+                                "channel"
+                            ],
+                            "shape": [
+                                "N",
+                                13
+                            ],
+                            "dtype": "<f4"
+                        },
+                        "rare_mask": {
+                            "axes": [
+                                "valid_token"
+                            ],
+                            "shape": [
+                                "N"
+                            ],
+                            "dtype": "|u1"
+                        },
+                        "rare_locus_index": {
+                            "axes": [
+                                "valid_token"
+                            ],
+                            "shape": [
+                                "N"
+                            ],
+                            "dtype": "<u8"
+                        },
+                        "row_ptr": {
+                            "axes": [
+                                "ragged_row_plus_one"
+                            ],
+                            "shape": [
+                                "B_times_M_plus_1"
+                            ],
+                            "dtype": "<u8"
+                        },
+                        "row_sample_index": {
+                            "axes": [
+                                "ragged_row"
+                            ],
+                            "shape": [
+                                "B_times_M"
+                            ],
+                            "dtype": "<u4"
+                        },
+                        "row_marker_index": {
+                            "axes": [
+                                "ragged_row"
+                            ],
+                            "shape": [
+                                "B_times_M"
+                            ],
+                            "dtype": "<u4"
+                        },
+                        "F0": {
+                            "axes": [
+                                "sample",
+                                "haplotype",
+                                "marker",
+                                "ancestry"
+                            ],
+                            "shape": [
+                                "B",
+                                2,
+                                "M",
+                                3
+                            ],
+                            "dtype": "<f4"
+                        }
+                    },
+                    "invariants": [
+                        "1_le_B_le_8",
+                        "M_gt_0",
+                        "0_le_N_le_262144",
+                        "row_ptr_length_equals_B_times_M_plus_1",
+                        "row_ptr_starts_0_is_nondecreasing_and_ends_N",
+                        "rare_mask_is_exactly_one_for_every_packed_valid_token",
+                        "row_indices_encode_complete_sample_major_marker_grid",
+                        "radius_is_one_of_frozen_radii",
+                        "rare_locus_indices_match_inclusive_cM_context_and_are_sorted_by_cM_bp_locus_id",
+                        "F0_is_finite_and_each_ancestry_vector_sums_to_one_within_float32_tolerance"
+                    ]
+                },
+                "bundle_manifest": {
+                    "schema_id": "m33_m0_bundle_manifest_v1",
+                    "format": "strict_json",
+                    "privacy": "private",
+                    "required_keys": [
+                        "stage",
+                        "schema_id",
+                        "status",
+                        "root_label",
+                        "root_seed",
+                        "radius_cM",
+                        "ordered_shards",
+                        "raw_semantic_sha256",
+                        "channel_semantic_sha256",
+                        "source_auth_sha256"
+                    ],
+                    "forbid_extra_keys": true,
+                    "ordered_shard_entry_schema": {
+                        "exact_keys": [
+                            "schema_id",
+                            "shard_ordinal",
+                            "person_start",
+                            "person_end_exclusive",
+                            "marker_start",
+                            "marker_end_exclusive",
+                            "valid_token_count",
+                            "gcs_uri",
+                            "gcs_generation",
+                            "raw_sha256",
+                            "semantic_sha256"
+                        ],
+                        "field_contracts": {
+                            "schema_id": "exact_m33_m0_packed_rare_context_shard_v1",
+                            "shard_ordinal": "zero_based_contiguous_nonnegative_integer",
+                            "person_start": "nonnegative_integer_less_than_person_end_exclusive",
+                            "person_end_exclusive": "positive_integer_at_most_target_count",
+                            "marker_start": "nonnegative_integer_less_than_marker_end_exclusive",
+                            "marker_end_exclusive": "positive_integer_at_most_marker_count",
+                            "valid_token_count": "integer_0_to_262144_equal_shard_N",
+                            "gcs_uri": "exact_final_object_uri_under_unique_run_root_radius_prefix",
+                            "gcs_generation": "positive_integer_created_with_ifGenerationMatch_0",
+                            "raw_sha256": "lowercase_hex64_of_object_bytes",
+                            "semantic_sha256": "lowercase_hex64_using_shard_schema_id_axes_dtypes_shapes_and_array_bytes"
+                        }
+                    },
+                    "ordering_and_coverage": "ordered_by_shard_ordinal_with_no_duplicate_uri_generation_or_hash_and_exactly_one_nonoverlapping_complete_partition_of_each_person_batch_by_contiguous_marker_intervals"
+                },
+                "materialization_receipt": {
+                    "schema_id": "m33_m0_materialization_receipt_v1",
+                    "format": "strict_json",
+                    "privacy": "private",
+                    "required_keys": [
+                        "stage",
+                        "schema_id",
+                        "status",
+                        "root_label",
+                        "root_seed",
+                        "radii_cM",
+                        "ordered_bundle_manifest_sha256_by_radius",
+                        "raw_semantic_sha256",
+                        "channel_semantic_sha256",
+                        "reopen_verified",
+                        "append_only"
+                    ],
+                    "forbid_extra_keys": true,
+                    "radius_manifest_map": {
+                        "exact_order": [
+                            "0.05",
+                            "0.1",
+                            "0.2",
+                            "0.5"
+                        ],
+                        "value": "lowercase_hex64_of_exact_bundle_manifest_raw_bytes"
+                    }
+                },
+                "READY": {
+                    "schema_id": "m33_m0_READY_v1",
+                    "format": "strict_json",
+                    "privacy": "private",
+                    "required_keys": [
+                        "stage",
+                        "schema_id",
+                        "status",
+                        "root_label",
+                        "root_seed",
+                        "materialization_receipt_sha256",
+                        "ordered_bundle_manifest_sha256_by_radius",
+                        "source_auth_sha256"
+                    ],
+                    "forbid_extra_keys": true,
+                    "write_order": "last_after_all_shards_manifests_and_receipt_are_reopened_and_verified"
+                }
+            },
+            "forbidden_namespace_tokens_case_insensitive": [
+                "truth",
+                "mosaic",
+                "donor",
+                "freq",
+                "minor_maf",
+                "minor_mac",
+                "carrier_people",
+                "minor_allele_index",
+                "target_haplotype",
+                "raw_genotype"
+            ]
+        }
+    },
+    "incremental_partition": {
+        "model_input": "selected_loci_incremental_only",
+        "exact_key": [
+            "chrom",
+            "pos",
+            "ref",
+            "alt"
+        ],
+        "required_identity": "selected_all_equals_disjoint_union_incremental_and_flare_overlap",
+        "selected_all_and_flare_overlap": "audit_only_inside_SAFE_BRIDGE",
+        "overlap_loci_must_not_enter_model": true,
+        "duplicate_key_or_locus_id": "STOP"
+    },
+    "reference_semantics": {
+        "raw_bridge_fields": [
+            "minor_ac",
+            "callable_an",
+            "minor_af",
+            "observed_mask",
+            "no_support"
+        ],
+        "minor_af": "minor_ac_div_callable_an_if_callable_an_gt_0_else_0",
+        "observed_mask": "1_if_callable_an_gt_0_else_0",
+        "no_support": "1_if_callable_an_gt_0_and_minor_ac_eq_0_else_0",
+        "no_support_is_explicit_bridge_audit_field_not_an_extra_tensor_channel": true,
+        "dosage_mean_as_af": false,
+        "callable_normalization": {
+            "technical_denominator_by_root": {
+                "root17": 60,
+                "root18": 60
+            },
+            "technical_status": "TECHNICAL_ONLY_EQUIVALENT_NEVER_REUSED_FOR_SCIENTIFIC_NORMALIZATION",
+            "future_scientific_denominator": "max_callable_AN_from_FIT_only_manifest_per_ancestry_and_rotation",
+            "future_manifest_required_before_forward": true,
+            "raw_callable_an_is_persisted_unchanged": true
+        }
+    },
+    "sample_key_contract": {
+        "algorithm": "sha256",
+        "domain_separator": "DNABR_M33_M0_SAMPLE_V1|",
+        "input_encoding": "utf8_exact_sample_id_no_whitespace_normalization",
+        "output_encoding": "lowercase_hex_ascii_64_bytes",
+        "formula": "sha256(domain_separator_plus_sample_id_utf8)",
+        "f0_join": "hash_each_exact_F0_sample_id_with_same_formula_then_require_bijection",
+        "duplicate_or_collision": "STOP",
+        "privacy": "private"
+    },
+    "f0_contract": {
+        "join_key": [
+            "root_seed",
+            "sample_id",
+            "chrom",
+            "pos",
+            "ref",
+            "alt"
+        ],
+        "probability_fields": [
+            "ANP1",
+            "ANP2"
+        ],
+        "ancestry_order": [
+            "AFR",
+            "EUR",
+            "ASIA"
+        ],
+        "raw_sum_range": [
+            0.98,
+            1.02
+        ],
+        "operation": "renormalize_each_ANP_vector_to_exact_simplex_for_probability_operations",
+        "haplotype_axis_preserved": true,
+        "forbidden_dependencies": [
+            "GT",
+            "AN1",
+            "AN2",
+            "truth",
+            "hard_call",
+            "target_rare_phase"
+        ]
+    },
+    "primary_transferable_input": {
+        "storage": "contiguous_packed_ragged_no_dense_global_padding",
+        "conceptual_shapes": {
+            "rare_tokens": "B_M_K_13",
+            "rare_mask": "B_M_K",
+            "F0": "B_2_M_3"
+        },
+        "phase_policy": "target_rare_diploid_dosage_only_no_target_rare_phase",
+        "channel_count": 13,
+        "channel_dtype": "<f4",
+        "calculation_dtype_before_cast": "<f8",
+        "first_ordered_locus_delta_cM": 0.0,
+        "channels": [
+            "target_minor_dosage_div_2_float32_clip_0_1",
+            "target_observed_mask_float32_0_1",
+            "ref_minor_af_AFR_float32_clip_0_1",
+            "log1p_ref_callable_AFR_div_log1p_maxAN_AFR_FIT",
+            "ref_observed_AFR_float32_0_1",
+            "ref_minor_af_EUR_float32_clip_0_1",
+            "log1p_ref_callable_EUR_div_log1p_maxAN_EUR_FIT",
+            "ref_observed_EUR_float32_0_1",
+            "ref_minor_af_ASIA_float32_clip_0_1",
+            "log1p_ref_callable_ASIA_div_log1p_maxAN_ASIA_FIT",
+            "ref_observed_ASIA_float32_0_1",
+            "relative_cM_minus_marker_cM_div_radius_clip_minus1_1",
+            "delta_cM_from_previous_ordered_locus_div_radius_clip_0_2"
+        ],
+        "rare_order": [
+            "cM",
+            "bp",
+            "locus_id"
+        ],
+        "missing_policy": "zero_numeric_value_plus_explicit_mask_never_interpret_as_hom_ref"
+    },
+    "packed_loader": {
+        "mode": "contiguous_packed",
+        "person_batch": 8,
+        "token_budget": 262144,
+        "token_definition": "one_valid_diploid_person_by_marker_by_rare_locus_cell",
+        "radii_cm": [
+            0.05,
+            0.1,
+            0.2,
+            0.5
+        ],
+        "radius_selection": false,
+        "interval": "bisect_left_cm_marker_minus_radius_to_bisect_right_cm_marker_plus_radius",
+        "global_padding": false,
+        "truncation": false,
+        "empty_context": "K0_remains_empty_no_fake_token",
+        "single_context_over_budget": "STOP",
+        "warning_memory_fraction": 0.7,
+        "stop_memory_fraction": 0.8
+    },
+    "source_auth_policy": {
+        "status": "REQUIRED_FROM_CLEAN_COMMIT_BEFORE_ANY_REAL_ASSET_READ",
+        "initial_anchor": "git_commit_containing_contract_validator_and_tests",
+        "minimum_covered_now": [
+            "conf/m33_m0_materializer_contract.json",
+            "bin/m33_m0_contract.py",
+            "tests/test_m33_m0_contract.py"
+        ],
+        "future_implementation_must_also_cover": [
+            "I0_bin_module_workflow_config_tests",
+            "SAFE_BRIDGE_bin_module_workflow_config_tests",
+            "MATERIALIZE_bin_module_workflow_config_tests"
+        ],
+        "dirty_or_untracked_source": "STOP"
+    },
+    "persistence_contract": {
+        "write": "temporary_sibling_then_fsync_file_then_atomic_link_no_overwrite_then_fsync_directory",
+        "reopen": "close_and_reopen_every_artifact_then_validate_schema_shape_dtype_hash_and_cross_artifact_keys",
+        "semantic_hash": {
+            "algorithm": "sha256",
+            "canonicalization": "schema_id_plus_axis_names_plus_dtype_strings_plus_shapes_plus_little_endian_C_order_array_bytes",
+            "archive_metadata_excluded": true,
+            "required_for_every_output_artifact": true
+        },
+        "receipt": "strict_json_duplicate_keys_and_NaN_rejected_append_only",
+        "bundle_transaction": "write_shards_then_one_bundle_manifest_per_radius_then_materialization_receipt_then_create_READY_last_after_reopen_and_hash_validation_READY_is_exclusively_the_only_consumable_completion_marker",
+        "partial_bundle_policy": "never_consumable_and_safe_to_abandon_without_overwriting_or_reusing_prefix",
+        "gcs_policy": "append_only_fail_if_final_prefix_or_READY_exists_and_use_ifGenerationMatch_equals_0_for_every_final_object_manifest_and_READY_creation"
+    },
+    "execution_authorization": {
+        "contract_validation": true,
+        "synthetic_known_answer_tests": true,
+        "real_asset_read": false,
+        "derive_index": false,
+        "safe_bridge": false,
+        "materialize": false,
+        "write_READY": false,
+        "forward": false,
+        "backward": false,
+        "training": false,
+        "truth_scoring": false
+    },
+    "known_contract_tensions": [
+        "derived_authenticated_tbi_is_technical_provenance_not_original_FLARE_output",
+        "root17_and_root18_are_consumed_technical_known_answers_not_scientific_validation",
+        "root17_callable_AN_60_is_only_technical_equivalence_not_general_FIT_normalization",
+        "A0_does_not_claim_FASTA_based_GRCh38_normalization"
+    ]
+}
