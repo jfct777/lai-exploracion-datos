@@ -36,7 +36,7 @@ from m33_asset_manifest_contract import (
 )
 
 
-AMENDMENT_SHA256 = "d23844d97dc193d664925922cde362158658c8a49a486d9f603c5ba69f91fc1b"
+AMENDMENT_SHA256 = "f6b373f7766df7b6313696ecad333ff0ea021c1f7d2196b8bc034babbc438735"
 STATUS = "CONTRACT_ONLY_NO_REAL_ASSET_READ_NO_GENERATION_NO_FORWARD_NO_TRAINING"
 PASS_STATUS = "PASS_EXECUTION_CONTRACT_FIXTURES_ONLY_NO_REAL_ASSET_READ"
 EXPECTED_NEXTFLOW_VERSION = "26.04.6"
@@ -63,8 +63,9 @@ PLAN_KEYS = {
 MANIFEST_KEYS = {
     "schema_version", "stage", "mode", "root_seed", "plan_id", "asset_set_id",
     "output_prefix", "plan_manifest_sha256", "assets", "semantic_fingerprints",
-    "predict_bundle", "flare_input_bundle", "flare_output_bundle", "rare_enabled_model_bundle",
-    "rare_screen_tensor_bundle", "H_SIMULATION_ONLY_bundle", "private_truth_bundle",
+    "predict_bundle", "flare_input_bundle", "flare_output_bundle", "materializer_input_bundle",
+    "rare_enabled_model_bundle", "rare_screen_tensor_bundle", "H_SIMULATION_ONLY_bundle",
+    "private_truth_bundle",
     "flare_receipt", "final_manifest_sha256",
 }
 SEMANTIC_KEYS = {
@@ -165,6 +166,8 @@ SELECTED_SITE_KEYS = {
     "CHROM", "POS", "REF", "ALT", "minor_allele_index", "minor_mac",
     "minor_an", "minor_maf", "carrier_people",
 }
+SELECTED_LOCI_DOCUMENT_KEYS = {"schema_version", "stage", "status", "rows"}
+SELECTED_LOCUS_KEYS = {"CHROM", "POS", "REF", "ALT"}
 
 
 def canonical_json(value: Any) -> bytes:
@@ -248,6 +251,9 @@ def validate_amendment(amendment: dict[str, Any]) -> None:
             "FLARE command argv exposes truth")
     rare_bundle = amendment["bundles"]["rare_enabled_model_bundle"]
     validate_rare_enabled_inputs(rare_bundle)
+    materializer_bundle = amendment["bundles"]["materializer_input_bundle"]
+    require(materializer_bundle == rare_bundle,
+            "materializer and historical rare-enabled bundles differ")
     require(amendment["bundles"]["rare_screen_tensor_bundle"] == rare_bundle,
             "screen tensor and rare-enabled bundles differ")
     require(amendment["bundles"]["predict_bundle"] == rare_bundle,
@@ -263,7 +269,8 @@ def validate_amendment(amendment: dict[str, Any]) -> None:
     forbidden_model_inputs = {
         "tree_sequence", "truth", "mosaic_events", "donor_to_target_provenance",
         "target_rare_incremental", "ref_rare_genotypes_incremental",
-        "selected_sites_all", "selected_sites_overlap_flare", "freq_variant_genotypes",
+        "selected_sites_all", "selected_sites_incremental", "selected_sites_overlap_flare",
+        "freq_variant_genotypes",
     }
     require(predict.isdisjoint(forbidden_model_inputs) and
             set(rare_bundle).isdisjoint(forbidden_model_inputs),
@@ -281,6 +288,27 @@ def validate_amendment(amendment: dict[str, Any]) -> None:
     require(amendment["public_receipt"]["allowed_fields"] == [
         "status", "root_count", "real_asset_read", "asset_generation", "forward", "training"
     ], "public receipt field contract drift")
+    require(amendment["bundle_semantics"] == {
+        "materializer_input_bundle":
+            "only_authenticated_inputs_mounted_by_future_tensor_materializer",
+        "predict_bundle":
+            "historical_manifest_key_alias_of_materializer_input_bundle_not_direct_model_inputs",
+        "rare_enabled_model_bundle":
+            "historical_manifest_key_alias_of_materializer_input_bundle_not_direct_model_inputs",
+        "rare_screen_tensor_bundle":
+            "historical_manifest_key_alias_of_materializer_input_bundle_not_direct_model_inputs",
+    }, "materializer-only bundle semantics drift")
+    future_interface = amendment["future_model_process_interface"]
+    require(future_interface == {
+        "input_logical_ids": ["materialized_tensor_13", "rare_mask", "F0"],
+        "status": "BLOCKED_NOT_IMPLEMENTED",
+        "FREQ_metrics_addressable": False,
+        "forbidden_inputs": [
+            "freq_variant_genotypes", "selected_sites_all", "selected_sites_incremental",
+            "selected_sites_overlap_flare", "minor_allele_index", "minor_mac", "minor_an",
+            "minor_maf", "carrier_people",
+        ],
+    }, "future model process interface drift")
     require(amendment["publication"]["terminal_write_order"] == ["final_manifest", "READY"],
             "READY is not last")
     require(amendment["publication"]["object_precondition"] == "ifGenerationMatch=0",
@@ -608,13 +636,15 @@ def validate_selected_site_partition(selected_sites_all: Sequence[Mapping[str, A
 def validate_rare_enabled_inputs(input_logical_ids: Sequence[str]) -> None:
     """RE consumes only loci not already visible on the frozen FLARE grid."""
     expected = [
-        "selected_sites_incremental", "target_rare_diploid_incremental",
+        "selected_loci_incremental", "target_rare_diploid_incremental",
         "ref_rare_incremental",
         "flare_anc", "flare_anc_tbi", "genetic_map",
     ]
     require(list(input_logical_ids) == expected,
             "rare-enabled input bundle is not the exact minimal frozen interface")
-    require(set(input_logical_ids).isdisjoint({"selected_sites_all", "selected_sites_overlap_flare"}),
+    require(set(input_logical_ids).isdisjoint({
+        "selected_sites_all", "selected_sites_incremental", "selected_sites_overlap_flare",
+    }),
             "rare-enabled arm includes loci already visible to FLARE")
 
 
@@ -1044,6 +1074,38 @@ def parse_selected_sites_document(
     return rows
 
 
+def parse_selected_loci_incremental(
+    descriptor: dict[str, Any], observation: Mapping[str, Any],
+    selected_sites_incremental: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Validate the metric-free materializer view against its private audit table."""
+    verify_observed_bytes(
+        descriptor, observation["payload"], observation["generation"], observation["crc32c"]
+    )
+    document = strict_json_bytes(observation["payload"], "selected_loci_incremental")
+    exact_keys(document, SELECTED_LOCI_DOCUMENT_KEYS, "selected_loci_incremental")
+    require(document["schema_version"] == "1.0.0" and
+            document["stage"] == "M33_SELECTED_LOCI_INCREMENTAL" and
+            document["status"] == "PASS",
+            "selected_loci_incremental schema, stage or status drift")
+    require(isinstance(document["rows"], list), "selected_loci_incremental rows are absent")
+    rows: list[dict[str, Any]] = []
+    for raw in document["rows"]:
+        row = dict(raw)
+        exact_keys(row, SELECTED_LOCUS_KEYS, "selected_loci_incremental row")
+        variant_key(row)
+        rows.append(row)
+    expected = [
+        {key: row[key] for key in ("CHROM", "POS", "REF", "ALT")}
+        for row in selected_sites_incremental
+    ]
+    require(rows == expected,
+            "selected_loci_incremental is not the exact ordered metric-free projection")
+    require(descriptor["record_count"] == len(rows),
+            "selected_loci_incremental record count drift")
+    return rows
+
+
 def validate_target_rare_incremental_observations(
     assets: Mapping[str, dict[str, Any]],
     observations: Mapping[str, Mapping[str, Any]],
@@ -1277,6 +1339,10 @@ def validate_reopened_rare_selection(
     validate_selected_sites_exhaustive(variants, set(expected_people), selected_all)
     validate_selected_site_partition(
         selected_all, selected_incremental, selected_overlap, set(flare_grid)
+    )
+    parse_selected_loci_incremental(
+        assets["selected_loci_incremental"], observations["selected_loci_incremental"],
+        selected_incremental,
     )
     return selected_incremental
 
@@ -1700,6 +1766,7 @@ def validate_final_manifest(manifest: dict[str, Any], plan: dict[str, Any],
     predict = manifest["predict_bundle"]
     flare_inputs = manifest["flare_input_bundle"]
     flare_outputs = manifest["flare_output_bundle"]
+    materializer_inputs = manifest["materializer_input_bundle"]
     rare_inputs = manifest["rare_enabled_model_bundle"]
     screen_inputs = manifest["rare_screen_tensor_bundle"]
     haplotype_ceiling_inputs = manifest["H_SIMULATION_ONLY_bundle"]
@@ -1709,6 +1776,8 @@ def validate_final_manifest(manifest: dict[str, Any], plan: dict[str, Any],
             "FLARE input bundle drift")
     require(flare_outputs == amendment["bundles"]["flare_output_bundle"],
             "FLARE output bundle drift")
+    require(materializer_inputs == amendment["bundles"]["materializer_input_bundle"],
+            "materializer input bundle drift")
     require(rare_inputs == amendment["bundles"]["rare_enabled_model_bundle"],
             "rare-enabled model bundle drift")
     require(screen_inputs == amendment["bundles"]["rare_screen_tensor_bundle"],

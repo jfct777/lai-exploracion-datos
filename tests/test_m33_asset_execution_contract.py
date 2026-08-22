@@ -153,6 +153,18 @@ def selected_sites_document(logical_id, root):
     return {"schema_version": "1.0.0", "stage": stage, "status": "PASS", "rows": rows}
 
 
+def selected_loci_document(root):
+    incremental, _ = fixture_sites(root)
+    return {
+        "schema_version": "1.0.0", "stage": "M33_SELECTED_LOCI_INCREMENTAL",
+        "status": "PASS",
+        "rows": [
+            {key: row[key] for key in ("CHROM", "POS", "REF", "ALT")}
+            for row in incremental
+        ],
+    }
+
+
 def target_rare_document(root):
     roles = make_roles(root)
     targets = sorted(
@@ -545,6 +557,11 @@ def make_manifest(plan, ordinal):
             f"{plan['output_prefix']}{logical_id}.fixture", payload,
             len(selected_document["rows"]),
         )
+    selected_loci = selected_loci_document(plan["root_seed"])
+    bind_fixture(
+        "selected_loci_incremental", MOD.canonical_json(selected_loci),
+        len(selected_loci["rows"]),
+    )
     target_document = target_rare_document(plan["root_seed"])
     target_payload = MOD.canonical_json(target_document)
     FIXTURE_PAYLOADS[(plan["plan_id"], "target_rare_incremental")] = target_payload
@@ -633,6 +650,7 @@ def make_manifest(plan, ordinal):
         "predict_bundle": list(AMENDMENT["bundles"]["predict_bundle"]),
         "flare_input_bundle": list(AMENDMENT["bundles"]["flare_input_bundle"]),
         "flare_output_bundle": list(AMENDMENT["bundles"]["flare_output_bundle"]),
+        "materializer_input_bundle": list(AMENDMENT["bundles"]["materializer_input_bundle"]),
         "rare_enabled_model_bundle": list(AMENDMENT["bundles"]["rare_enabled_model_bundle"]),
         "rare_screen_tensor_bundle": list(AMENDMENT["bundles"]["rare_screen_tensor_bundle"]),
         "H_SIMULATION_ONLY_bundle": list(AMENDMENT["bundles"]["H_SIMULATION_ONLY_bundle"]),
@@ -826,6 +844,17 @@ class M33ExecutionContractTests(unittest.TestCase):
             set(AMENDMENT["public_receipt"]["allowed_fields"]),
             {"status", "root_count", "real_asset_read", "asset_generation", "forward", "training"},
         )
+        self.assertEqual(
+            AMENDMENT["future_model_process_interface"]["input_logical_ids"],
+            ["materialized_tensor_13", "rare_mask", "F0"],
+        )
+        self.assertFalse(
+            AMENDMENT["future_model_process_interface"]["FREQ_metrics_addressable"]
+        )
+        self.assertEqual(
+            AMENDMENT["bundles"]["materializer_input_bundle"],
+            AMENDMENT["bundles"]["predict_bundle"],
+        )
 
     def test_plan_id_is_prior_to_outputs_and_roots_fail_closed(self):
         plan = make_plan(MOD.DEVELOPMENT_ROOTS[0])
@@ -962,6 +991,49 @@ class M33ExecutionContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not exhaustive"):
             MOD.validate_ready(ready, plan, manifest, observations, AMENDMENT, ASSET_CONTRACT)
 
+    def test_materializer_locus_view_never_exposes_freq_selection_metrics(self):
+        plan = make_plan(MOD.DEVELOPMENT_ROOTS[0])
+        forbidden_metrics = {
+            "minor_allele_index", "minor_mac", "minor_an", "minor_maf", "carrier_people",
+        }
+        materializer = AMENDMENT["bundles"]["materializer_input_bundle"]
+        self.assertNotIn("selected_sites_incremental", materializer)
+        self.assertIn("selected_loci_incremental", materializer)
+        self.assertTrue(forbidden_metrics.isdisjoint(materializer))
+        self.assertTrue(forbidden_metrics.issubset(
+            set(AMENDMENT["future_model_process_interface"]["forbidden_inputs"])
+        ))
+        locus_view = selected_loci_document(plan["root_seed"])
+        self.assertTrue(all(forbidden_metrics.isdisjoint(row) for row in locus_view["rows"]))
+
+        injected = copy.deepcopy(locus_view)
+        injected["rows"][0]["minor_mac"] = 2
+        manifest, ready, observations = resigned_ready_with_documents(
+            plan, {"selected_loci_incremental": injected}
+        )
+        with self.assertRaisesRegex(ValueError, "key inventory drift"):
+            MOD.validate_ready(ready, plan, manifest, observations, AMENDMENT, ASSET_CONTRACT)
+
+        full_private_table = selected_sites_document(
+            "selected_sites_incremental", plan["root_seed"]
+        )
+        full_private_table["stage"] = "M33_SELECTED_LOCI_INCREMENTAL"
+        manifest, ready, observations = resigned_ready_with_documents(
+            plan, {"selected_loci_incremental": full_private_table}
+        )
+        with self.assertRaisesRegex(ValueError, "key inventory drift"):
+            MOD.validate_ready(ready, plan, manifest, observations, AMENDMENT, ASSET_CONTRACT)
+
+        reordered = selected_loci_document(plan["root_seed"])
+        reordered["rows"].reverse()
+        manifest, ready, observations = resigned_ready_with_documents(
+            plan, {"selected_loci_incremental": reordered}
+        )
+        with self.assertRaisesRegex(ValueError, "exact ordered metric-free projection"):
+            MOD.validate_ready(ready, plan, manifest, observations, AMENDMENT, ASSET_CONTRACT)
+
+    def test_ready_rejects_missing_freq_and_partition_drift(self):
+        plan = make_plan(MOD.DEVELOPMENT_ROOTS[0])
         authority = tree_freq_authority_document(plan["root_seed"])
         freq = freq_variant_genotypes_document(plan["root_seed"])
         missing_person = authority["freq_person_ids"][0]
