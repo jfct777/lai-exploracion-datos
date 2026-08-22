@@ -75,7 +75,10 @@ class StrictContractTests(unittest.TestCase):
         self.assertEqual(bridge["physical_inputs"]["pools"]["format"], "tsv")
         for name in ("rare_catalog", "rare_haplotypes", "selected_sites", "target_calls"):
             self.assertEqual(bridge["physical_inputs"][name]["format"], "tsv_gzip")
-        self.assertIn("tree_sequence_plus_pools_plus_ref_pairs", bridge["derivations"]["reference_rare_summary_incremental"])
+        self.assertIn("raw_binary_state_equals_authenticated_rare_catalog_minor_code",
+                      bridge["derivations"]["reference_rare_summary_incremental"])
+        self.assertIn("sum_indicator_raw_REF_haplotype_state_equals_minor_code",
+                      bridge["reference_minor_orientation"]["minor_ac_formula"])
         self.assertIn("never_source", bridge["derivations"]["common_reference_crosscheck_scope"])
         self.assertTrue(all(not artifact["contains_raw_input_payload"] for artifact in bridge["output_artifacts"].values()))
 
@@ -118,6 +121,27 @@ class StrictContractTests(unittest.TestCase):
                     "rejected_non_ref_node_count", "expected_ref_nodes_semantic_sha256",
                     "contributing_ref_nodes_semantic_sha256", "role_firewall_pass"):
             self.assertIn(key, receipt["required_keys"])
+        for key in ("selected_all_count", "selected_incremental_count", "selected_overlap_count",
+                    "partition_disjoint_union_pass", "minor_code_0_locus_count",
+                    "minor_code_1_locus_count", "minor_orientation_source_semantic_sha256",
+                    "reference_minor_summary_semantic_sha256"):
+            self.assertIn(key, receipt["required_keys"])
+
+    def test_fit_manifest_sample_axis_tolerance_and_privacy_are_frozen(self) -> None:
+        materialize = self.contract["process_contracts"]["MATERIALIZE"]
+        self.assertIn("authenticated_fit_callable_normalization_manifest", materialize["input_logical_ids"])
+        self.assertEqual(materialize["fit_callable_normalization_manifest"]["score_only_or_eval_contribution"],
+                         "STOP_BEFORE_ANY_SHARD_WRITE")
+        self.assertEqual(self.contract["f0_contract"]["float32_simplex_absolute_tolerance"], 5e-06)
+        self.assertFalse(self.contract["privacy_contract"]["external_sharing"])
+        self.assertIn("sample_axis_semantic_sha256",
+                      materialize["output_artifacts"]["bundle_manifest"]["required_keys"])
+        self.assertEqual(self.contract["anchors"]["pre4_contract"]["preregistration_sha256"],
+                         "4308bbf33ae28f554f701da33efdc185264f9f407d62661e7048e0345687eb8b")
+        controls = self.contract["control_views"]
+        self.assertEqual(controls["target_same_locus_sham"]["seeds"],
+                         [1277457345, 943666774, 1858042568])
+        self.assertEqual(controls["REF_label_sham"]["seeds"], [79351217, 202307732, 1737132171])
 
     def test_load_bearing_mutations_all_fail_closed(self) -> None:
         mutations = []
@@ -170,16 +194,42 @@ class DataSemanticsTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 MODULE.reference_summary(*args)
 
+    def test_reference_minor_orientation_uses_minor_code_and_excludes_missing(self) -> None:
+        states = [0, 0, 1, None]
+        self.assertEqual(MODULE.reference_minor_summary(states, 0), {
+            "minor_ac": 2, "callable_an": 3, "minor_af": 2 / 3,
+            "observed_mask": 1, "no_support": 0})
+        self.assertEqual(MODULE.reference_minor_summary(states, 1), {
+            "minor_ac": 1, "callable_an": 3, "minor_af": 1 / 3,
+            "observed_mask": 1, "no_support": 0})
+        self.assertEqual(MODULE.reference_minor_summary([None, None], 0), {
+            "minor_ac": 0, "callable_an": 0, "minor_af": 0.0,
+            "observed_mask": 0, "no_support": 0})
+        for bad_states, minor_code in (([0, 2], 0), ([False, 1], 1), ([0, 1], 2), ([0, 1], True)):
+            with self.assertRaises(ValueError):
+                MODULE.reference_minor_summary(bad_states, minor_code)
+
     def test_missing_and_boolean_dosage_are_rejected(self) -> None:
         self.assertEqual(MODULE.validate_target_cell(0, 0), (0, 0))
         self.assertEqual(MODULE.validate_target_cell(2, 1), (2, 1))
         for args in ((1, 0), (3, 1), (True, 1), (1, True), (-1, 1)):
             with self.assertRaises(ValueError):
                 MODULE.validate_target_cell(*args)
-        self.assertEqual(MODULE.diploid_minor_dosage(None, 1), (0, 0))
-        self.assertEqual(MODULE.diploid_minor_dosage(0, 1), MODULE.diploid_minor_dosage(1, 0))
+        self.assertEqual(MODULE.diploid_minor_dosage(None, 1, 1), (0, 0))
+        self.assertEqual(MODULE.diploid_minor_dosage(0, 1, 1), MODULE.diploid_minor_dosage(1, 0, 1))
         with self.assertRaises(ValueError):
-            MODULE.diploid_minor_dosage(True, 0)
+            MODULE.diploid_minor_dosage(True, 0, 1)
+
+    def test_minor_orientation_uses_authenticated_minor_code(self) -> None:
+        self.assertEqual(MODULE.diploid_minor_dosage(0, 0, 0), (2, 1))
+        self.assertEqual(MODULE.diploid_minor_dosage(0, 1, 0), (1, 1))
+        self.assertEqual(MODULE.diploid_minor_dosage(1, 1, 0), (0, 1))
+        self.assertEqual(MODULE.diploid_minor_dosage(0, 0, 1), (0, 1))
+        self.assertEqual(MODULE.diploid_minor_dosage(0, 1, 1), (1, 1))
+        self.assertEqual(MODULE.diploid_minor_dosage(1, 1, 1), (2, 1))
+        for minor_code in (-1, 2, True):
+            with self.assertRaises(ValueError):
+                MODULE.diploid_minor_dosage(0, 1, minor_code)
 
     def test_nonempty_overlap_partition_is_disjoint_and_reconstructs_union(self) -> None:
         rows = [locus(100, 1, 0.1), locus(200, 2, 0.2), locus(300, 3, 0.3)]
@@ -190,6 +240,8 @@ class DataSemanticsTests(unittest.TestCase):
         self.assertEqual(len(incremental) + len(overlap), len(rows))
         with self.assertRaises(ValueError):
             MODULE.partition_incremental(rows, [overlap_key, overlap_key])
+        with self.assertRaises(ValueError):
+            MODULE.partition_incremental([locus(200, 2, 0.2, ref="C", alt="A")], [overlap_key])
 
     def test_duplicate_key_and_locus_id_fail(self) -> None:
         with self.assertRaises(ValueError):
@@ -262,6 +314,156 @@ class DataSemanticsTests(unittest.TestCase):
         for contributors in ([1], [1, 2, 3]):
             with self.assertRaises(ValueError):
                 MODULE.validate_ref_node_firewall([1, 2, 3], [1, 2], contributors)
+
+    def test_fit_manifest_excludes_score_only_and_sample_axis_is_ordered(self) -> None:
+        digest = "a" * 64
+        sources = {"2024931463": digest, "1324432253": "b" * 64}
+        maxima = {"AFR": 60, "EUR": 58, "ASIA": 56}
+        manifest = {
+            "stage": "M33_M0_FIT_NORMALIZATION", "schema_id": "m33_m0_fit_callable_normalization_manifest_v1",
+            "status": "PASS", "profile": "DEVELOPMENT_ROTATION", "rotation_id": "R0",
+            "fit_root_seeds": [2024931463, 1324432253], "score_only_root_seed": 386357765,
+            "max_callable_an_by_ancestry": maxima,
+            "source_reference_summary_sha256_by_fit_root": sources,
+            "semantic_sha256": "", "source_auth_sha256": "d" * 64,
+        }
+        manifest["semantic_sha256"] = MODULE.fit_manifest_semantic_sha256(manifest)
+        source_auth = manifest["source_auth_sha256"]
+        MODULE.validate_fit_normalization_manifest(manifest, sources, maxima, source_auth)
+        leaked = copy.deepcopy(manifest)
+        leaked["fit_root_seeds"] = [2024931463, 386357765]
+        leaked["source_reference_summary_sha256_by_fit_root"] = {
+            "2024931463": digest, "386357765": "b" * 64}
+        leaked["semantic_sha256"] = MODULE.fit_manifest_semantic_sha256(leaked)
+        with self.assertRaises(ValueError):
+            MODULE.validate_fit_normalization_manifest(
+                leaked, leaked["source_reference_summary_sha256_by_fit_root"], maxima, source_auth)
+        wrong_maxima = copy.deepcopy(manifest)
+        wrong_maxima["max_callable_an_by_ancestry"]["AFR"] = 61
+        wrong_maxima["semantic_sha256"] = MODULE.fit_manifest_semantic_sha256(wrong_maxima)
+        with self.assertRaises(ValueError):
+            MODULE.validate_fit_normalization_manifest(wrong_maxima, sources, maxima, source_auth)
+        with self.assertRaises(ValueError):
+            MODULE.validate_fit_normalization_manifest(
+                manifest, {**sources, "2024931463": "e" * 64}, maxima, source_auth)
+        stale_semantic = copy.deepcopy(manifest)
+        stale_semantic["source_auth_sha256"] = "e" * 64
+        stale_semantic["semantic_sha256"] = MODULE.fit_manifest_semantic_sha256(stale_semantic)
+        with self.assertRaises(ValueError):
+            MODULE.validate_fit_normalization_manifest(stale_semantic, sources, maxima, source_auth)
+        sample_ids = ["S1", "S2"]
+        keys = [MODULE.sample_key_sha256(value) for value in sample_ids]
+        MODULE.validate_sample_axis_join(keys, sample_ids)
+        with self.assertRaises(ValueError):
+            MODULE.validate_sample_axis_join(list(reversed(keys)), sample_ids)
+
+    def test_float32_simplex_and_cross_radius_nested_loci(self) -> None:
+        MODULE.validate_float32_simplex([0.2, 0.3, 0.500004])
+        with self.assertRaises(ValueError):
+            MODULE.validate_float32_simplex([0.2, 0.3, 0.500006])
+        MODULE.validate_cross_radius_loci({0.05: [2], 0.1: [1, 2], 0.2: [1, 2, 3], 0.5: [0, 1, 2, 3]})
+        with self.assertRaises(ValueError):
+            MODULE.validate_cross_radius_loci({0.05: [2], 0.1: [2, 1], 0.2: [1, 2, 3], 0.5: [0, 1, 2, 3]})
+        loci = {0.05: [2], 0.1: [1, 2], 0.2: [1, 2, 3], 0.5: [0, 1, 2, 3]}
+        token = [0.1] * 13
+        payloads = {radius: [token[:] for _ in values] for radius, values in loci.items()}
+        MODULE.validate_cross_radius_payloads(loci, payloads)
+        for non_geometry_channel in range(11):
+            broken_mask = copy.deepcopy(payloads)
+            broken_mask[0.5][2][non_geometry_channel] = 0.0
+            with self.assertRaises(ValueError):
+                MODULE.validate_cross_radius_payloads(loci, broken_mask)
+
+    def test_materialization_chain_binds_rotation_root_role_and_manifests(self) -> None:
+        fit_hash, source_auth = "a" * 64, "b" * 64
+        sample_axis, marker_axis, channel_hash = "c" * 64, "d" * 64, "e" * 64
+        bundle_hashes = {radius: str(index + 1) * 64 for index, radius in enumerate(MODULE.RADIUS_KEYS)}
+        prefixes = {radius: f"gs://projects-usp/dnaBr-lai/datalake/m33/{radius}/"
+                    for radius in MODULE.RADIUS_KEYS}
+        authenticated_shards = {}
+        bundles = {}
+        for index, (radius_key, radius) in enumerate(zip(MODULE.RADIUS_KEYS, MODULE.EXPECTED_RADII)):
+            shard = {
+                "schema_id": "m33_m0_packed_rare_context_shard_v1", "shard_ordinal": 0,
+                "person_start": 0, "person_end_exclusive": 2, "marker_start": 0,
+                "marker_end_exclusive": 3, "valid_token_count": 10,
+                "gcs_uri": f"{prefixes[radius_key]}part-00000.npz", "gcs_generation": index + 1,
+                "raw_sha256": format(index + 10, "x") * 64,
+                "semantic_sha256": format(index + 5, "x") * 64,
+            }
+            authenticated_shards[radius_key] = [shard]
+            bundles[radius_key] = {
+                "stage": "M33_M0_MATERIALIZE_BUNDLE", "schema_id": "m33_m0_bundle_manifest_v1",
+                "status": "PASS", "root_label": "development-root", "root_seed": 386357765,
+                "rotation_id": "R0", "role_in_rotation": "SCORE", "radius_cM": radius,
+                "fit_callable_normalization_manifest_sha256": fit_hash, "sample_count": 2,
+                "sample_axis_semantic_sha256": sample_axis, "marker_count": 3,
+                "marker_axis_semantic_sha256": marker_axis, "ordered_shards": [shard],
+                "raw_semantic_sha256": "f" * 64, "channel_semantic_sha256": channel_hash,
+                "source_auth_sha256": source_auth,
+            }
+        receipt = {
+            "stage": "M33_M0_MATERIALIZATION_RECEIPT",
+            "schema_id": "m33_m0_materialization_receipt_v1", "status": "PASS",
+            "root_label": "development-root", "root_seed": 386357765, "rotation_id": "R0",
+            "role_in_rotation": "SCORE", "radii_cM": MODULE.EXPECTED_RADII,
+            "fit_callable_normalization_manifest_sha256": fit_hash, "sample_count": 2,
+            "sample_axis_semantic_sha256": sample_axis, "marker_count": 3,
+            "marker_axis_semantic_sha256": marker_axis,
+            "ordered_bundle_manifest_sha256_by_radius": bundle_hashes,
+            "raw_semantic_sha256": "0" * 64, "channel_semantic_sha256": channel_hash,
+            "source_auth_sha256": source_auth, "reopen_verified": True, "append_only": True,
+        }
+        receipt_hash = "9" * 64
+        ready = {
+            "stage": "M33_M0_READY", "schema_id": "m33_m0_READY_v1", "status": "PASS",
+            "root_label": "development-root", "root_seed": 386357765, "rotation_id": "R0",
+            "role_in_rotation": "SCORE", "fit_callable_normalization_manifest_sha256": fit_hash,
+            "sample_count": 2, "sample_axis_semantic_sha256": sample_axis, "marker_count": 3,
+            "marker_axis_semantic_sha256": marker_axis, "materialization_receipt_sha256": receipt_hash,
+            "ordered_bundle_manifest_sha256_by_radius": bundle_hashes, "source_auth_sha256": source_auth,
+        }
+        args = (bundles, bundle_hashes, authenticated_shards, prefixes,
+                receipt, receipt_hash, ready, fit_hash, source_auth,
+                "R0", 386357765, "SCORE")
+        MODULE.validate_materialization_output_chain(*args)
+
+        relabeled_bundles, relabeled_receipt, relabeled_ready = (
+            copy.deepcopy(bundles), copy.deepcopy(receipt), copy.deepcopy(ready))
+        for bundle in relabeled_bundles.values():
+            bundle["role_in_rotation"] = "FIT"
+        relabeled_receipt["role_in_rotation"] = "FIT"
+        relabeled_ready["role_in_rotation"] = "FIT"
+        with self.assertRaises(ValueError):
+            MODULE.validate_materialization_output_chain(
+                relabeled_bundles, bundle_hashes, authenticated_shards, prefixes,
+                relabeled_receipt, receipt_hash, relabeled_ready,
+                fit_hash, source_auth, "R0", 386357765, "SCORE")
+
+        drifted_ready = copy.deepcopy(ready)
+        drifted_ready["sample_axis_semantic_sha256"] = "8" * 64
+        with self.assertRaises(ValueError):
+            MODULE.validate_materialization_output_chain(
+                bundles, bundle_hashes, authenticated_shards, prefixes, receipt, receipt_hash, drifted_ready,
+                fit_hash, source_auth, "R0", 386357765, "SCORE")
+
+        malformed_bundles, malformed_shards = copy.deepcopy(bundles), copy.deepcopy(authenticated_shards)
+        malformed_bundles["0.05"]["ordered_shards"] = [{"ordinal": 0}]
+        malformed_shards["0.05"] = [{"ordinal": 0}]
+        with self.assertRaises(ValueError):
+            MODULE.validate_materialization_output_chain(
+                malformed_bundles, bundle_hashes, malformed_shards, prefixes,
+                receipt, receipt_hash, ready, fit_hash, source_auth, "R0", 386357765, "SCORE")
+
+        reversed_map = dict(reversed(list(bundle_hashes.items())))
+        reversed_receipt, reversed_ready = copy.deepcopy(receipt), copy.deepcopy(ready)
+        reversed_receipt["ordered_bundle_manifest_sha256_by_radius"] = reversed_map
+        reversed_ready["ordered_bundle_manifest_sha256_by_radius"] = reversed_map
+        with self.assertRaises(ValueError):
+            MODULE.validate_materialization_output_chain(
+                bundles, bundle_hashes, authenticated_shards, prefixes,
+                reversed_receipt, receipt_hash, reversed_ready,
+                fit_hash, source_auth, "R0", 386357765, "SCORE")
 
 
 class PackedEquivalenceTests(unittest.TestCase):

@@ -54,6 +54,10 @@
                 "flare_anc_raw": "edc4bcdc62f5ce0ffe04bd27e9d6d6ee892e03282a1474639fc3082fbc3832c9",
                 "genetic_map": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9"
             }
+        },
+        "pre4_contract": {
+            "git_commit": "9f2214f5eaa2c5ab02e5df89528282569cffac4d",
+            "preregistration_sha256": "4308bbf33ae28f554f701da33efdc185264f9f407d62661e7048e0345687eb8b"
         }
     },
     "root_registry": {
@@ -182,8 +186,8 @@
             },
             "derivations": {
                 "selected_loci_incremental": "selected_sites_crosschecked_against_rare_catalog_then_subtract_exact_FLARE_keys",
-                "target_rare_diploid_incremental": "rare_haplotypes_joined_to_M31_target_then_collapsed_to_diploid_dosage_no_phase",
-                "reference_rare_summary_incremental": "tree_sequence_plus_pools_plus_ref_pairs_at_selected_loci_with_panel_map_ancestry_labels",
+                "target_rare_diploid_incremental": "for_each_called_raw_haplotype_state_emit_indicator_state_equals_authenticated_rare_catalog_minor_code_then_sum_two_indicators_to_diploid_minor_dosage_no_phase",
+                "reference_rare_summary_incremental": "for_each_ancestry_and_locus_over_tree_sequence_REF_nodes_sum_indicator_raw_binary_state_equals_authenticated_rare_catalog_minor_code_and_count_nonmissing_binary_states_as_callable_an",
                 "common_reference_crosscheck_scope": "FLARE_grid_only_never_source_of_reference_rare_summary"
             },
             "role_firewall": {
@@ -198,6 +202,28 @@
                 ],
                 "freq_usage": "selection_audit_only_no_FREQ_genotype_or_metric_export",
                 "violation": "STOP"
+            },
+            "target_minor_orientation": {
+                "minor_code_source": "authenticated_rare_catalog_minor_code_inside_SAFE_BRIDGE_only",
+                "haplotype_formula": "minor_indicator_equals_1_if_raw_binary_state_equals_minor_code_else_0",
+                "diploid_formula": "minor_indicator_h0_plus_minor_indicator_h1",
+                "missing_formula": "if_either_raw_haplotype_is_missing_emit_dosage_0_and_observed_mask_0",
+                "minor_code_domain": [
+                    0,
+                    1
+                ],
+                "minor_code_exported_to_MATERIALIZE": false,
+                "invalid_or_ambiguous_orientation": "STOP"
+            },
+            "reference_minor_orientation": {
+                "minor_code_source": "same_authenticated_rare_catalog_minor_code_used_for_TARGET_inside_SAFE_BRIDGE_only",
+                "minor_ac_formula": "sum_indicator_raw_REF_haplotype_state_equals_minor_code_within_ancestry_and_locus",
+                "callable_an_formula": "count_raw_REF_haplotype_states_in_0_1_within_ancestry_and_locus",
+                "minor_af_formula": "minor_ac_div_callable_an_if_callable_an_positive_else_0",
+                "missing_rule": "missing_REF_state_contributes_neither_minor_ac_nor_callable_an",
+                "raw_state_domain": "0_1_or_missing",
+                "minor_code_domain": [0, 1],
+                "invalid_or_ambiguous_state_or_orientation": "STOP"
             },
             "output_artifacts": {
                 "selected_loci_incremental": {
@@ -287,6 +313,18 @@
                         "expected_ref_nodes_semantic_sha256",
                         "contributing_ref_nodes_semantic_sha256",
                         "role_firewall_pass",
+                        "selected_all_count",
+                        "selected_incremental_count",
+                        "selected_overlap_count",
+                        "selected_all_semantic_sha256",
+                        "selected_incremental_semantic_sha256",
+                        "selected_overlap_semantic_sha256",
+                        "partition_disjoint_union_pass",
+                        "minor_code_0_locus_count",
+                        "minor_code_1_locus_count",
+                        "minor_orientation_source_semantic_sha256",
+                        "target_minor_dosage_semantic_sha256",
+                        "reference_minor_summary_semantic_sha256",
                         "artifact_semantic_sha256",
                         "reopen_verified",
                         "append_only"
@@ -302,7 +340,8 @@
                 "reference_rare_summary_incremental",
                 "a0_authenticated_flare_anc",
                 "derived_flare_anc_tbi",
-                "authenticated_genetic_map"
+                "authenticated_genetic_map",
+                "authenticated_fit_callable_normalization_manifest"
             ],
             "output_logical_ids": [
                 "packed_rare_context",
@@ -311,11 +350,45 @@
                 "READY"
             ],
             "bundle_partitioning": {
-                "unit": "one_root_one_radius_one_person_batch_one_contiguous_marker_chunk",
+                "unit": "one_rotation_one_root_one_radius_one_person_batch_one_contiguous_marker_chunk",
                 "row_order": "sample_major_then_marker",
                 "token_order_within_row": "cM_then_bp_then_locus_id",
                 "person_batch": 8,
                 "maximum_valid_tokens_per_shard": 262144
+            },
+            "fit_callable_normalization_manifest": {
+                "schema_id": "m33_m0_fit_callable_normalization_manifest_v1",
+                "required_keys": [
+                    "stage",
+                    "schema_id",
+                    "status",
+                    "profile",
+                    "rotation_id",
+                    "fit_root_seeds",
+                    "score_only_root_seed",
+                    "max_callable_an_by_ancestry",
+                    "source_reference_summary_sha256_by_fit_root",
+                    "semantic_sha256",
+                    "source_auth_sha256"
+                ],
+                "forbid_extra_keys": true,
+                "profiles": {
+                    "DEVELOPMENT_ROTATION": "derive_each_ancestry_maxAN_only_from_authenticated_FIT_roots_excluding_score_only_and_EVAL"
+                },
+                "development_rotations": {
+                    "R0": {"fit_root_seeds": [2024931463, 1324432253], "score_only_root_seed": 386357765},
+                    "R1": {"fit_root_seeds": [386357765, 1324432253], "score_only_root_seed": 2024931463},
+                    "R2": {"fit_root_seeds": [386357765, 2024931463], "score_only_root_seed": 1324432253}
+                },
+                "forbidden_eval_root_seeds": [1341407242, 2049644864, 693524843, 1896826422, 166187460],
+                "consumed_technical_root_materialization": "STOP_root17_root18_are_SAFE_BRIDGE_KAT_only",
+                "ancestry_order": [
+                    "AFR",
+                    "EUR",
+                    "ASIA"
+                ],
+                "max_callable_rule": "positive_integer_max_of_raw_callable_an_over_all_loci_and_authenticated_FIT_roots_for_each_ancestry",
+                "score_only_or_eval_contribution": "STOP_BEFORE_ANY_SHARD_WRITE"
             },
             "channel_cast": "compute_AC_AN_AF_and_normalizations_in_float64_then_clip_declared_ranges_then_cast_to_little_endian_float32_then_hash_raw_and_cast_views",
             "output_artifacts": {
@@ -482,13 +555,39 @@
                         "status",
                         "root_label",
                         "root_seed",
+                        "rotation_id",
+                        "role_in_rotation",
                         "radius_cM",
+                        "fit_callable_normalization_manifest_sha256",
+                        "sample_count",
+                        "sample_axis_semantic_sha256",
+                        "marker_count",
+                        "marker_axis_semantic_sha256",
                         "ordered_shards",
                         "raw_semantic_sha256",
                         "channel_semantic_sha256",
                         "source_auth_sha256"
                     ],
                     "forbid_extra_keys": true,
+                    "field_contracts": {
+                        "stage": "exact_M33_M0_MATERIALIZE_BUNDLE",
+                        "schema_id": "exact_m33_m0_bundle_manifest_v1",
+                        "status": "exact_PASS",
+                        "root_label": "nonempty_private_label_equal_across_output_chain",
+                        "root_seed": "exact_seed_registered_for_rotation_and_role",
+                        "rotation_id": "one_of_R0_R1_R2",
+                        "role_in_rotation": "FIT_iff_root_is_in_rotation_fit_roots_else_SCORE_iff_root_is_rotation_score_only_root",
+                        "radius_cM": "one_of_0.05_0.1_0.2_0.5",
+                        "fit_callable_normalization_manifest_sha256": "lowercase_hex64_equal_across_output_chain",
+                        "sample_count": "positive_integer_equal_across_output_chain",
+                        "sample_axis_semantic_sha256": "lowercase_hex64_equal_across_output_chain",
+                        "marker_count": "positive_integer_equal_across_output_chain",
+                        "marker_axis_semantic_sha256": "lowercase_hex64_equal_across_output_chain",
+                        "ordered_shards": "nonempty_exact_partition_validated_against_ordered_shard_entry_schema",
+                        "raw_semantic_sha256": "lowercase_hex64",
+                        "channel_semantic_sha256": "lowercase_hex64_equal_across_output_chain",
+                        "source_auth_sha256": "lowercase_hex64_equal_across_output_chain"
+                    },
                     "ordered_shard_entry_schema": {
                         "exact_keys": [
                             "schema_id",
@@ -507,7 +606,7 @@
                             "schema_id": "exact_m33_m0_packed_rare_context_shard_v1",
                             "shard_ordinal": "zero_based_contiguous_nonnegative_integer",
                             "person_start": "nonnegative_integer_less_than_person_end_exclusive",
-                            "person_end_exclusive": "positive_integer_at_most_target_count",
+                            "person_end_exclusive": "positive_integer_at_most_sample_count",
                             "marker_start": "nonnegative_integer_less_than_marker_end_exclusive",
                             "marker_end_exclusive": "positive_integer_at_most_marker_count",
                             "valid_token_count": "integer_0_to_262144_equal_shard_N",
@@ -529,14 +628,43 @@
                         "status",
                         "root_label",
                         "root_seed",
+                        "rotation_id",
+                        "role_in_rotation",
                         "radii_cM",
+                        "fit_callable_normalization_manifest_sha256",
+                        "sample_count",
+                        "sample_axis_semantic_sha256",
+                        "marker_count",
+                        "marker_axis_semantic_sha256",
                         "ordered_bundle_manifest_sha256_by_radius",
                         "raw_semantic_sha256",
                         "channel_semantic_sha256",
+                        "source_auth_sha256",
                         "reopen_verified",
                         "append_only"
                     ],
                     "forbid_extra_keys": true,
+                    "field_contracts": {
+                        "stage": "exact_M33_M0_MATERIALIZATION_RECEIPT",
+                        "schema_id": "exact_m33_m0_materialization_receipt_v1",
+                        "status": "exact_PASS",
+                        "root_label": "nonempty_private_label_equal_across_output_chain",
+                        "root_seed": "exact_seed_registered_for_rotation_and_role",
+                        "rotation_id": "one_of_R0_R1_R2",
+                        "role_in_rotation": "FIT_iff_root_is_in_rotation_fit_roots_else_SCORE_iff_root_is_rotation_score_only_root",
+                        "radii_cM": "exact_order_0.05_0.1_0.2_0.5",
+                        "fit_callable_normalization_manifest_sha256": "lowercase_hex64_equal_across_output_chain",
+                        "sample_count": "positive_integer_equal_across_output_chain",
+                        "sample_axis_semantic_sha256": "lowercase_hex64_equal_across_output_chain",
+                        "marker_count": "positive_integer_equal_across_output_chain",
+                        "marker_axis_semantic_sha256": "lowercase_hex64_equal_across_output_chain",
+                        "ordered_bundle_manifest_sha256_by_radius": "exact_map_of_reopened_bundle_raw_hashes_equal_in_READY",
+                        "raw_semantic_sha256": "lowercase_hex64",
+                        "channel_semantic_sha256": "lowercase_hex64_equal_across_output_chain",
+                        "source_auth_sha256": "lowercase_hex64_equal_across_output_chain",
+                        "reopen_verified": "exact_true",
+                        "append_only": "exact_true"
+                    },
                     "radius_manifest_map": {
                         "exact_order": [
                             "0.05",
@@ -557,11 +685,35 @@
                         "status",
                         "root_label",
                         "root_seed",
+                        "rotation_id",
+                        "role_in_rotation",
+                        "fit_callable_normalization_manifest_sha256",
+                        "sample_count",
+                        "sample_axis_semantic_sha256",
+                        "marker_count",
+                        "marker_axis_semantic_sha256",
                         "materialization_receipt_sha256",
                         "ordered_bundle_manifest_sha256_by_radius",
                         "source_auth_sha256"
                     ],
                     "forbid_extra_keys": true,
+                    "field_contracts": {
+                        "stage": "exact_M33_M0_READY",
+                        "schema_id": "exact_m33_m0_READY_v1",
+                        "status": "exact_PASS",
+                        "root_label": "nonempty_private_label_equal_across_output_chain",
+                        "root_seed": "exact_seed_registered_for_rotation_and_role",
+                        "rotation_id": "one_of_R0_R1_R2",
+                        "role_in_rotation": "FIT_iff_root_is_in_rotation_fit_roots_else_SCORE_iff_root_is_rotation_score_only_root",
+                        "fit_callable_normalization_manifest_sha256": "lowercase_hex64_equal_across_output_chain",
+                        "sample_count": "positive_integer_equal_across_output_chain",
+                        "sample_axis_semantic_sha256": "lowercase_hex64_equal_across_output_chain",
+                        "marker_count": "positive_integer_equal_across_output_chain",
+                        "marker_axis_semantic_sha256": "lowercase_hex64_equal_across_output_chain",
+                        "materialization_receipt_sha256": "lowercase_hex64_of_reopened_receipt_raw_bytes",
+                        "ordered_bundle_manifest_sha256_by_radius": "exact_map_equal_to_reopened_receipt",
+                        "source_auth_sha256": "lowercase_hex64_equal_across_output_chain"
+                    },
                     "write_order": "last_after_all_shards_manifests_and_receipt_are_reopened_and_verified"
                 }
             },
@@ -588,6 +740,8 @@
             "alt"
         ],
         "required_identity": "selected_all_equals_disjoint_union_incremental_and_flare_overlap",
+        "cross_source_identity_guard": "all_inputs_must_be_GRCh38_chr22_biallelic_SNV_and_every_shared_CHROM_POS_must_have_exactly_identical_REF_ALT",
+        "ref_alt_swap_or_allele_mismatch_at_same_chrom_pos": "STOP_never_count_as_incremental",
         "selected_all_and_flare_overlap": "audit_only_inside_SAFE_BRIDGE",
         "overlap_loci_must_not_enter_model": true,
         "duplicate_key_or_locus_id": "STOP"
@@ -612,7 +766,7 @@
             },
             "technical_status": "TECHNICAL_ONLY_EQUIVALENT_NEVER_REUSED_FOR_SCIENTIFIC_NORMALIZATION",
             "future_scientific_denominator": "max_callable_AN_from_FIT_only_manifest_per_ancestry_and_rotation",
-            "future_manifest_required_before_forward": true,
+            "future_manifest_required_before_materialize": true,
             "raw_callable_an_is_persisted_unchanged": true
         }
     },
@@ -623,8 +777,10 @@
         "output_encoding": "lowercase_hex_ascii_64_bytes",
         "formula": "sha256(domain_separator_plus_sample_id_utf8)",
         "f0_join": "hash_each_exact_F0_sample_id_with_same_formula_then_require_bijection",
+        "axis_join": "ordered_target_sample_keys_must_equal_ordered_hashed_F0_sample_ids_and_each_shard_slice_must_match_the_authenticated_global_sample_axis",
         "duplicate_or_collision": "STOP",
-        "privacy": "private"
+        "privacy": "private",
+        "not_anonymization": "deterministic_hash_is_linkable_pseudonym_only_and_must_never_leave_private_access_control"
     },
     "f0_contract": {
         "join_key": [
@@ -649,6 +805,7 @@
             1.02
         ],
         "operation": "renormalize_each_ANP_vector_to_exact_simplex_for_probability_operations",
+        "float32_simplex_absolute_tolerance": 5e-06,
         "haplotype_axis_preserved": true,
         "forbidden_dependencies": [
             "GT",
@@ -658,6 +815,31 @@
             "hard_call",
             "target_rare_phase"
         ]
+    },
+    "control_views": {
+        "rare_disabled_RD": "from_same_materialized_shard_zero_channels_indices_0_2_3_5_6_8_9_keep_geometry_mask_channels_1_4_7_10_11_12_and_F0_unchanged",
+        "rare_enabled_RE": "all_13_real_channels_from_same_shard",
+        "target_same_locus_sham": {
+            "replicates": 3,
+            "seeds": [
+                1277457345,
+                943666774,
+                1858042568
+            ],
+            "operation": "permute_complete_joint_target_dosage_and_observed_vectors_across_TARGET_people_within_locus_root_rotation_split"
+        },
+        "REF_label_sham": {
+            "replicates": 3,
+            "seeds": [
+                79351217,
+                202307732,
+                1737132171
+            ],
+            "operation": "nonidentity_group_size_preserving_permutation_of_complete_diploid_REF_labels_then_recompute_AC_AN_AF"
+        },
+        "common_matched": "separate_PRE4_control_not_created_by_M0_and_must_match_exact_position_callability_density_contract_before_comparison",
+        "cross_radius_invariant": "for_same_root_rotation_sample_marker_locus_all_non_geometry_channel_values_are_identical_and_each_smaller_radius_locus_sequence_is_an_order_preserving_subsequence_of_each_larger_radius",
+        "control_or_cross_radius_violation": "STOP"
     },
     "primary_transferable_input": {
         "storage": "contiguous_packed_ragged_no_dense_global_padding",
@@ -712,6 +894,15 @@
         "single_context_over_budget": "STOP",
         "warning_memory_fraction": 0.7,
         "stop_memory_fraction": 0.8
+    },
+    "privacy_contract": {
+        "classification": "restricted_individual_level_genomic_derived_data",
+        "gcs_access_gate": "uniform_bucket_level_access_and_no_allUsers_or_allAuthenticatedUsers_binding_verified_before_write_and_rechecked_before_READY",
+        "encryption": "GCS_server_side_encryption_required",
+        "retention": "inherit_project_retention_and_M0_never_deletes_or_overwrites_objects",
+        "external_sharing": false,
+        "sample_hash_interpretation": "pseudonymous_linkable_not_anonymous",
+        "acl_or_privacy_failure": "STOP_BEFORE_WRITE_OR_READY"
     },
     "source_auth_policy": {
         "status": "REQUIRED_FROM_CLEAN_COMMIT_BEFORE_ANY_REAL_ASSET_READ",
