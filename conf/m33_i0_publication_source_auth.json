@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_I0_PUBLICATION_SOURCE_AUTH",
+  "status": "AUTHORIZED_EXACT_PUBLICATION_SOURCES",
+  "files": {
+    "bin/m33_i0_publish.py": "8c5ec628440ece8c8224eea00bcd7bd1c7379084b032ca864774006ec15c309a",
+    "conf/m33_i0_publication_authorization.json": "c27aa60c0b54b4ac2501e8e875ea27732726e43f9f1f2c4620fee7787850bc89",
+    "conf/m33_storage_namespace_policy.json": "ff9143e29fe154cc5d793a7b36efe91cefc08ff012f8024ffa1c39b7b1adc1da",
+    "tests/test_m33_i0_publish.py": "73b19e3a37410a854242e38b1137ded8c6bef25031acf413628499baa85299df"
+  }
+}

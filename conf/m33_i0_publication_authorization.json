@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_I0_PUBLICATION_AUTHORIZATION",
+  "status": "AUTHORIZED_APPEND_ONLY_DERIVED_ARTIFACTS_NO_READY",
+  "run_id": "m33-i0-real-20260822a",
+  "i0_source_commit": "731757aa89949de9a641568a38697794f31a0fff",
+  "publisher_code_commit": "5939f9a88cf12f746af3a33a736025aa4d12ccc2",
+  "base_storage_policy_sha256": "ff9143e29fe154cc5d793a7b36efe91cefc08ff012f8024ffa1c39b7b1adc1da",
+  "amendment": {
+    "base_json_pointer": "/execution_authorization/derived_index_write",
+    "base_value": false,
+    "amended_value": true,
+    "scope": "EXACT_EIGHT_I0_DERIVED_ARTIFACTS_THIS_RUN_ONLY"
+  },
+  "source_manifest_sha256": "f275c55c8ff49fa3a947c19858f8e65916a56bcbf65b519d13367c405a07ee10",
+  "publisher_principal": "jcalderonta@ime.usp.br",
+  "destination_prefix": "gs://teams-usp/frank/lai-exploracion-datos/runs/m33-i0-real-20260822a/",
+  "artifacts": {
+    "I0_REAL_PASS_NON_CONSUMABLE": {"size_bytes": 249, "sha256": "3e65bf464a089a8f66e5785c3b7bd1f7bd0d0970cb5de78833db840e7e267572"},
+    "m33_i0_real.manifest.json": {"size_bytes": 1457, "sha256": "f275c55c8ff49fa3a947c19858f8e65916a56bcbf65b519d13367c405a07ee10"},
+    "root17/ROOT17_I0_REAL_PASS_NON_CONSUMABLE": {"size_bytes": 260, "sha256": "3b7715994da736a5702d2da9482cda7b8b671843874c3ea6f65e2d47c2399c18"},
+    "root17/root17.flare.anc.vcf.gz.tbi": {"size_bytes": 23309, "sha256": "936a5d8256a2f1610898e2a3fe00523001c203cb014a7509c9c76911fe626e52"},
+    "root17/root17.i0_real.receipt.json": {"size_bytes": 1355, "sha256": "53425116ccf0e3d9d8df7b4eaab1e248efe425d0fd0d22041bbc330cbcbb3924"},
+    "root18/ROOT18_I0_REAL_PASS_NON_CONSUMABLE": {"size_bytes": 260, "sha256": "1a225717999a39e6e1532c7f066004793130b8c8ea6ba43a6b7b432809e9bfe1"},
+    "root18/root18.flare.anc.vcf.gz.tbi": {"size_bytes": 23404, "sha256": "9f26af28898adbdcc8eec8ebddc10b321464923c8b244719e7c3b7a6d0dfacaf"},
+    "root18/root18.i0_real.receipt.json": {"size_bytes": 1355, "sha256": "c9a0a5bdc74ade07cb98cfadbfadf0ed9e274adca0c18cd4250de6fffce66984"}
+  },
+  "policy": {
+    "expected_file_count": 8,
+    "required_mode": "0444",
+    "if_generation_match": 0,
+    "reopen_exact_generation": true,
+    "publication_receipt_last": true,
+    "allow_vcf": false,
+    "allow_overwrite": false,
+    "allow_delete": false,
+    "allow_ready": false,
+    "safe_bridge": false,
+    "materialize": false,
+    "training": false,
+    "global_ready": false
+  }
+}
