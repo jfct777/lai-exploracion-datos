@@ -33,6 +33,7 @@ class M33A0NextflowTests(unittest.TestCase):
         self.assertIn("--network=none", CONFIG)
         self.assertIn("--read-only", CONFIG)
         self.assertIn("docker.enabled = true", CONFIG)
+        self.assertNotIn("--tmpfs /tmp", CONFIG)
 
 
 if __name__ == "__main__":
