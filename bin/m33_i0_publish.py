@@ -279,8 +279,11 @@ def list_remote_objects(prefix: str) -> dict[str, dict[str, Any]]:
     require(isinstance(payload, list), "unexpected destination listing")
     observed: dict[str, dict[str, Any]] = {}
     for entry in payload:
-        require(isinstance(entry, dict) and entry.get("type") == "cloud_object",
-                "non-object entry in destination listing")
+        require(isinstance(entry, dict), "invalid entry in destination listing")
+        if entry.get("type") == "prefix":
+            require(entry.get("url") == prefix, "unexpected prefix in destination listing")
+            continue
+        require(entry.get("type") == "cloud_object", "unknown entry in destination listing")
         metadata = entry.get("metadata")
         require(isinstance(metadata, dict), "missing object metadata in destination listing")
         uri = f"gs://{metadata['bucket']}/{metadata['name']}"
@@ -358,12 +361,17 @@ def validate_exact_inventory(
 
 
 def validate_initial_inventory(
-    initial: dict[str, dict[str, Any]], expected_uris: set[str], receipt_uri: str,
+    initial: dict[str, dict[str, Any]], ordered_uris: tuple[str, ...], receipt_uri: str,
 ) -> None:
+    expected_uris = set(ordered_uris)
     allowed = expected_uris | {receipt_uri}
     require(set(initial) <= allowed, "destination contains an unauthorized object")
     require(receipt_uri not in initial or set(initial) == allowed,
             "publication receipt exists before all authorized artifacts")
+    if receipt_uri not in initial:
+        observed = set(initial)
+        require(observed == set(ordered_uris[:len(observed)]),
+                "partial destination is not a valid publication prefix")
 
 
 def atomic_json(path: Path, payload: dict[str, Any]) -> None:
@@ -381,6 +389,16 @@ def atomic_json(path: Path, payload: dict[str, Any]) -> None:
         os.link(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def prepare_local_receipt(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    if path.exists() or path.is_symlink():
+        require(path.is_file() and not path.is_symlink(), "publication receipt is not a regular file")
+        require((path.stat().st_mode & 0o777) == 0o444, "publication receipt mode differs")
+        require(load_json(path) == payload, "existing local publication receipt differs")
+    else:
+        atomic_json(path, payload)
+    return {"size_bytes": path.stat().st_size, "sha256": sha256_file(path)}
 
 
 def publish(
@@ -401,7 +419,10 @@ def publish(
         for relative, descriptor in authorization["artifacts"].items()
     }
     initial = list_remote_objects(authorization["destination_prefix"])
-    validate_initial_inventory(initial, set(expected_uris), receipt_uri)
+    ordered_uris = tuple(
+        authorization["destination_prefix"] + relative for relative in EXPECTED_ARTIFACT_ORDER
+    )
+    validate_initial_inventory(initial, ordered_uris, receipt_uri)
     published = []
     verified_by_uri: dict[str, dict[str, Any]] = {}
     for relative in EXPECTED_ARTIFACT_ORDER:
@@ -450,11 +471,7 @@ def publish(
             }
         remote_receipt = verify_remote_object(receipt_uri, receipt_expected)
     else:
-        atomic_json(receipt_path, payload)
-        receipt_expected = {
-            "size_bytes": receipt_path.stat().st_size,
-            "sha256": sha256_file(receipt_path),
-        }
+        receipt_expected = prepare_local_receipt(receipt_path, payload)
         remote_receipt = publish_one(receipt_path, receipt_uri, receipt_expected)
     final_expected = dict(expected_uris)
     final_expected[receipt_uri] = receipt_expected

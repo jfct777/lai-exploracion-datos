@@ -85,6 +85,9 @@ class M33I0PublicationTests(unittest.TestCase):
     def test_nonempty_prefix_listing_is_parsed_exactly(self, run):
         name = "frank/lai-exploracion-datos/runs/m33-i0-real-20260822a/x"
         run.return_value = mock.Mock(returncode=0, stderr="", stdout=json.dumps([{
+            "url": MODULE.EXPECTED_PREFIX,
+            "type": "prefix",
+        }, {
             "url": f"gs://teams-usp/{name}#1",
             "type": "cloud_object",
             "metadata": {"bucket": "teams-usp", "name": name, "generation": "1"},
@@ -93,13 +96,31 @@ class M33I0PublicationTests(unittest.TestCase):
         self.assertEqual(set(observed), {MODULE.EXPECTED_PREFIX + "x"})
 
     def test_partial_publication_is_recoverable_but_extra_or_early_receipt_stops(self):
-        expected = {MODULE.EXPECTED_PREFIX + "a", MODULE.EXPECTED_PREFIX + "b"}
+        ordered = (MODULE.EXPECTED_PREFIX + "a", MODULE.EXPECTED_PREFIX + "b")
         receipt = MODULE.EXPECTED_PREFIX + "publication.receipt.json"
-        MODULE.validate_initial_inventory({MODULE.EXPECTED_PREFIX + "a": {}}, expected, receipt)
+        for length in range(len(ordered) + 1):
+            MODULE.validate_initial_inventory({uri: {} for uri in ordered[:length]}, ordered, receipt)
         with self.assertRaisesRegex(ValueError, "unauthorized"):
-            MODULE.validate_initial_inventory({MODULE.EXPECTED_PREFIX + "extra": {}}, expected, receipt)
+            MODULE.validate_initial_inventory({MODULE.EXPECTED_PREFIX + "extra": {}}, ordered, receipt)
         with self.assertRaisesRegex(ValueError, "before all"):
-            MODULE.validate_initial_inventory({receipt: {}}, expected, receipt)
+            MODULE.validate_initial_inventory({receipt: {}}, ordered, receipt)
+        with self.assertRaisesRegex(ValueError, "valid publication prefix"):
+            MODULE.validate_initial_inventory({ordered[1]: {}}, ordered, receipt)
+        MODULE.validate_initial_inventory(
+            {**{uri: {} for uri in ordered}, receipt: {}}, ordered, receipt,
+        )
+
+    def test_local_receipt_can_resume_only_when_exact_and_read_only(self):
+        payload = {"status": "PASS"}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "publication.receipt.json"
+            first = MODULE.prepare_local_receipt(path, payload)
+            second = MODULE.prepare_local_receipt(path, payload)
+            self.assertEqual(first, second)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o444)
+            path.chmod(0o644)
+            with self.assertRaisesRegex(ValueError, "mode differs"):
+                MODULE.prepare_local_receipt(path, payload)
 
     def test_dependency_order_puts_evidence_before_markers(self):
         self.assertLess(
