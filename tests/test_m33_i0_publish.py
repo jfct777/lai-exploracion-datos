@@ -88,6 +88,9 @@ class M33I0PublicationTests(unittest.TestCase):
             "url": MODULE.EXPECTED_PREFIX,
             "type": "prefix",
         }, {
+            "url": MODULE.EXPECTED_PREFIX + "root17/",
+            "type": "prefix",
+        }, {
             "url": f"gs://teams-usp/{name}#1",
             "type": "cloud_object",
             "metadata": {"bucket": "teams-usp", "name": name, "generation": "1"},

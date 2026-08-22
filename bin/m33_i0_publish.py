@@ -281,7 +281,10 @@ def list_remote_objects(prefix: str) -> dict[str, dict[str, Any]]:
     for entry in payload:
         require(isinstance(entry, dict), "invalid entry in destination listing")
         if entry.get("type") == "prefix":
-            require(entry.get("url") == prefix, "unexpected prefix in destination listing")
+            listed_prefix = entry.get("url")
+            require(isinstance(listed_prefix, str) and listed_prefix.startswith(prefix)
+                    and listed_prefix.endswith("/"),
+                    "unexpected prefix in destination listing")
             continue
         require(entry.get("type") == "cloud_object", "unknown entry in destination listing")
         metadata = entry.get("metadata")
