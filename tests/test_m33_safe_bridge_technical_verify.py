@@ -170,6 +170,8 @@ class TechnicalVerifierTests(unittest.TestCase):
             name: VERIFY.artifact_semantic_sha256(VERIFY.ARTIFACTS[name][0], payloads[name])
             for name in paths
         }
+        source_auth_path = ROOT / "conf/m33_safe_bridge_technical_kat_source_auth.json"
+        source_auth = json.loads(source_auth_path.read_text(encoding="utf-8"))
         receipt = {
             "stage": VERIFY.STAGE,
             "status": VERIFY.STATUS,
@@ -212,6 +214,8 @@ class TechnicalVerifierTests(unittest.TestCase):
             "f0_probability_vectors": 8,
             "target_diploid_dosage_legacy_sha256": expected["target_legacy_sha256"],
             "reference_ac_an_legacy_sha256": expected["ref_legacy_sha256"],
+            "source_auth_sha256": VERIFY.sha256_file(source_auth_path),
+            "git_commit": source_auth["implementation_commit"],
         }
         receipt_path = root / "safe_bridge_technical_kat.receipt.json"
         write_json(receipt_path, receipt)
@@ -225,6 +229,7 @@ class TechnicalVerifierTests(unittest.TestCase):
             paths["technical_kat_reference_rare_summary_incremental.npz"],
             paths["technical_kat_flare_f0_sanitized.npz"],
             paths["receipt"], paths["a0"], paths["i0"],
+            ROOT / "conf/m33_safe_bridge_technical_kat_source_auth.json",
         )
 
     def refresh_artifact_receipt(self, paths: dict[str, Path], name: str) -> None:
@@ -245,6 +250,8 @@ class TechnicalVerifierTests(unittest.TestCase):
             self.assertFalse(result["scientific_evidence"])
             self.assertFalse(result["consumable"])
             self.assertRegex(result["a0_receipt_sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(result["verifier_source_sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(result["source_auth_sha256"], r"^[0-9a-f]{64}$")
             self.assertEqual(set(result["artifact_raw_sha256"]), set(VERIFY.ARTIFACTS))
 
     def test_independent_receipt_is_exclusive_and_reopenable(self) -> None:

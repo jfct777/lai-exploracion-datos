@@ -91,6 +91,10 @@ EXPECTED_ROOTS = {
         "f0_vector_count": 4787460,
     },
 }
+VERIFIER_SOURCE_FILES = {
+    "bin/m33_safe_bridge_technical_verify.py",
+    "tests/test_m33_safe_bridge_technical_verify.py",
+}
 
 
 def require(condition: bool, message: str) -> None:
@@ -121,6 +125,23 @@ def sha256_file(path: Path) -> str:
         for block in iter(lambda: handle.read(1 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def validate_verifier_source_auth(path: Path) -> tuple[str, str, str]:
+    payload = load_json(path)
+    require(payload.get("stage") == "M33_SAFE_BRIDGE_TECHNICAL_KAT_SOURCE_AUTH" and
+            payload.get("status") == "AUTHORIZED_EXACT_TECHNICAL_KAT_SOURCES",
+            "source-auth identity drifted")
+    files = payload.get("independent_verifier_files", {})
+    require(set(files) == VERIFIER_SOURCE_FILES, "verifier source-auth inventory drifted")
+    repo_root = Path(__file__).resolve().parents[1]
+    observed = {relative: sha256_file(repo_root / relative) for relative in sorted(files)}
+    require(observed == files, "verifier bytes differ from source-auth")
+    implementation_commit = payload.get("implementation_commit")
+    require(isinstance(implementation_commit, str) and
+            re.fullmatch(r"[0-9a-f]{40}", implementation_commit) is not None,
+            "source-auth implementation commit is invalid")
+    return sha256_file(path), observed["bin/m33_safe_bridge_technical_verify.py"], implementation_commit
 
 
 def write_exclusive_json(path: Path, payload: dict[str, Any]) -> None:
@@ -309,13 +330,20 @@ def validate_receipt(receipt: dict[str, Any], expected: dict[str, Any], root: st
 
 
 def verify(root: str, selected_path: Path, target_path: Path, reference_path: Path,
-           f0_path: Path, receipt_path: Path, a0_path: Path, i0_path: Path) -> dict[str, Any]:
+           f0_path: Path, receipt_path: Path, a0_path: Path, i0_path: Path,
+           source_auth_path: Path) -> dict[str, Any]:
     require(root in EXPECTED_ROOTS, "root must be root17 or root18")
     expected = EXPECTED_ROOTS[root]
     a0_hash, i0_hash = sha256_file(a0_path), sha256_file(i0_path)
     require(a0_hash == expected["a0_receipt_sha256"], "A0 receipt raw hash drifted")
     require(i0_hash == expected["i0_receipt_sha256"], "I0 receipt raw hash drifted")
     a0, i0, receipt = load_json(a0_path), load_json(i0_path), load_json(receipt_path)
+    source_auth_sha256, verifier_source_sha256, implementation_commit = (
+        validate_verifier_source_auth(source_auth_path)
+    )
+    require(receipt.get("source_auth_sha256") == source_auth_sha256 and
+            receipt.get("git_commit") == implementation_commit,
+            "bridge receipt is not bound to the verifier source-auth")
     validate_a0(a0, expected, root)
     validate_i0(i0, expected, root)
     paths = {
@@ -452,6 +480,9 @@ def verify(root: str, selected_path: Path, target_path: Path, reference_path: Pa
         "a0_receipt_sha256": a0_hash,
         "i0_receipt_sha256": i0_hash,
         "bridge_receipt_sha256": sha256_file(receipt_path),
+        "source_auth_sha256": source_auth_sha256,
+        "verifier_source_sha256": verifier_source_sha256,
+        "implementation_commit": implementation_commit,
         "artifact_raw_sha256": {name: sha256_file(path) for name, path in sorted(paths.items())},
         "artifact_semantic_sha256": {
             name: artifact_semantic_sha256(ARTIFACTS[name][0], opened[name])
@@ -472,6 +503,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bridge-receipt", required=True, type=Path)
     parser.add_argument("--a0-receipt", required=True, type=Path)
     parser.add_argument("--i0-receipt", required=True, type=Path)
+    parser.add_argument("--source-auth", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     return parser.parse_args()
 
@@ -479,7 +511,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     result = verify(args.root, args.selected_loci, args.target, args.reference, args.f0,
-                    args.bridge_receipt, args.a0_receipt, args.i0_receipt)
+                    args.bridge_receipt, args.a0_receipt, args.i0_receipt, args.source_auth)
     write_exclusive_json(args.output, result)
     print(json.dumps(result, sort_keys=True, allow_nan=False))
     return 0
