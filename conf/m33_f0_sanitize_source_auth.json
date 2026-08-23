@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_F0_SANITIZE_SOURCE_AUTH",
+  "status": "AUTHORIZED_EXACT_SANITIZER_SOURCES",
+  "implementation_commit": "27ff92bea579ab5afcb35bc9d14cb8c087d6b540",
+  "files": {
+    "bin/m33_f0_sanitize.py": "2af4dc109b5a248fe36f7263d7db6395fba2abf0ff4f86dda7753028a2cb1a39",
+    "bin/m33_safe_bridge_core.py": "d5d22619dfc4b4254d1db4c921fb8679849497635c5e2fd0e607112b92f707f5",
+    "conf/m33_m0_f0_sanitized_amendment_contract.json": "568965b67fb5c4153d8dd42d45465bfccd5c3c21d9b04f306c21acd427eb2be3",
+    "conf/m33_f0_sanitize.config": "58d1259df6da655fc3270038a2aa318a02075b2d690750e7a9f0120e51e584bd",
+    "modules/33_SANITIZE_FLARE_F0.nf": "0a2a0d798cfa6ad44d5e20af4af006e6eda3f519765a5d9be3f0f1e24bcfc8c8",
+    "workflows/m33_f0_sanitize.nf": "2a430e44c3ea884c634e94d7be985ee03db3ae3310edf5e85dc6753e6b5c72f6",
+    "tests/test_m33_f0_sanitize.py": "5a43b7e1eb4a4300973cde0942ba1033f215543ba9700b54f2da7dac5d14f54c",
+    "tests/test_m33_f0_sanitize_nextflow.py": "a82f3dda68c64769b2b999690a71620e37ae8fbaae5d2a06d2620e4283264226"
+  }
+}
