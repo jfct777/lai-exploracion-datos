@@ -134,6 +134,8 @@ class M33T0bTests(unittest.TestCase):
         self.assertIn("time '10h'", module.lower())
         self.assertIn("--network none", combined)
         self.assertIn("--memory 6g", combined)
+        self.assertIn("path root17_map, stageAs: 'root17-map/*'", module)
+        self.assertIn("path root18_map, stageAs: 'root18-map/*'", module)
         cases = workflow.split("cases = Channel.of(", 1)[1].split("\n    )", 1)[0]
         positions = [cases.index(fragment) for fragment in (
             "'small_residual_cnn_1d', 0", "'small_residual_cnn_1d', 1",

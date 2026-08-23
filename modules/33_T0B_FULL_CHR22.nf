@@ -19,8 +19,8 @@ process M33_T0B_PREFLIGHT {
     path root18_technical_dir
     path root17_verify
     path root18_verify
-    path root17_map
-    path root18_map
+    path root17_map, stageAs: 'root17-map/*'
+    path root18_map, stageAs: 'root18-map/*'
 
     output:
     path 'm33_t0b.preflight.receipt.json', emit: receipt
