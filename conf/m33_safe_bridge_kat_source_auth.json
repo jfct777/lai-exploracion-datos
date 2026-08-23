@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_SAFE_BRIDGE_KAT_SOURCE_AUTH",
+  "status": "PASS_EXACT_CLEAN_COMMIT_AND_SOURCE_HASHES",
+  "git_commit": "a3b4c5c5b602bf14836af81d5467ba52e30d5400",
+  "nextflow_version": "26.04.6",
+  "oci_image": "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/m28-lai-sim@sha256:06e7b70a2484de19c73a18a6fc9ddefbfa1599e43cbcdcd60fd185495dfb9a19",
+  "source_sha256": {
+    "bin/m33_safe_bridge_core.py": "d5d22619dfc4b4254d1db4c921fb8679849497635c5e2fd0e607112b92f707f5",
+    "bin/m33_safe_bridge_kat.py": "1ea6a8f08e9c7d4ecbb36f3bb352a91969706f5ada65510f1d3ce2964f111653",
+    "conf/m33_m0_materializer_contract.json": "fb74cd610a36b22fe54b8681238a13b48a0243642c9a24cd036597d161361614",
+    "conf/m33_safe_bridge_kat.config": "82abae430745e4d9469916d5113e789fa825fe6d13d3201bb8bd1801ed82e440",
+    "conf/m33_safe_bridge_kat_contract.json": "1c6b3d5679d8f64902f3adb7ae40319874ef88bf32ba215402352b6f6a196b25",
+    "modules/33_SAFE_BRIDGE_KAT.nf": "c5170fc90a440c82ace849535927dafe00dbac7116be77c3d716e13bf1f90aed",
+    "tests/fixtures/m33_safe_bridge_minor0_overlap_missing.json": "08458f8cd52a4a31c84852bfcf3145618d3a1a4f5f5d4c80df3246320694ea69",
+    "tests/test_m33_safe_bridge_kat.py": "e24253675d29467e950e2fdd809c3458531dce7d56b08f25dd4bdb3279871a88",
+    "tests/test_m33_safe_bridge_kat_nextflow.py": "9342c75a84761a67075131c87fe86c54a43192e82e5b182f6e0a2fa61356b763",
+    "workflows/m33_safe_bridge_kat.nf": "6b0160da068d217adbdfd5786e6d037d791f904930c12bcef1c5192041cf428c"
+  },
+  "scope": {
+    "synthetic_kat_only": true,
+    "technical_root_kat": false,
+    "real_asset_read": false,
+    "gcs_write": false,
+    "materialize": false,
+    "ready": false,
+    "training": false,
+    "truth": false
+  }
+}
