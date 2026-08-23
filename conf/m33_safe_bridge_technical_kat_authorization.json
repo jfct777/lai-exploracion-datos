@@ -1,0 +1,184 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_SAFE_BRIDGE_TECHNICAL_KAT_AUTHORIZATION",
+  "status": "AUTHORIZED_EXACT_READ_ONLY_TECHNICAL_ROOTS",
+  "execution": {
+    "both_roots_one_invocation": true,
+    "cache": false,
+    "retries": 0,
+    "network": false,
+    "credentials": false,
+    "truth": false,
+    "materialize": false,
+    "ready": false,
+    "training": false
+  },
+  "roots": {
+    "root17": {
+      "root_seed": 20260817,
+      "assets": {
+        "tree_sequence": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m28-v2-individual-safe-20260817a/seed17-b/seed-20260817/m28/m28_sources.trees",
+          "generation": "1786991078504561", "size_bytes": 101665732,
+          "sha256": "566946ec93cbc28c7f36d27878e12d091f1c87ebdd6fb6423b940f4f778391f7",
+          "crc32c_base64": "diTrIA==", "md5_base64": "3b2dFUZkEXD+c5iraj0P9g=="
+        },
+        "pools": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m28-v2-individual-safe-20260817a/seed17-b/seed-20260817/m28/m28_pools.private.tsv",
+          "generation": "1786991077381107", "size_bytes": 194219,
+          "sha256": "56f9891bfb7f77d63ec3328107fc8e89b919c34ad16fda2c0c72dc3fde24f0e4",
+          "crc32c_base64": "bmCm9g==", "md5_base64": "KwrkcOmEFmQvQ0S731TIuA=="
+        },
+        "rare_catalog": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m28-v2-individual-safe-20260817a/seed17-b/seed-20260817/m28/m28_rare_catalog.tsv.gz",
+          "generation": "1786991077378436", "size_bytes": 580467,
+          "sha256": "3162022c6882aa184094f96f6e8d49b6917b5fbe5a45ecfabf6cc4a8265b366c",
+          "crc32c_base64": "1DSkDg==", "md5_base64": "BdgXKxxXWqsz87qgnr5iAw=="
+        },
+        "rare_haplotypes": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m28-v2-individual-safe-20260817a/seed17-b/seed-20260817/m28/m28_rare_haplotypes.tsv.gz",
+          "generation": "1786991077393855", "size_bytes": 440335,
+          "sha256": "015f7c420730537cb2d9173971e4767d4d561d11ed22ce2b46149c9eb7832122",
+          "crc32c_base64": "JwIGEw==", "md5_base64": "cCgDTg2t+Z7od0UpQSTE+w=="
+        },
+        "m31_sites": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m31-ordered-rare-preflight-20260820a/root17-preflight/m31_ordered_rare.sites.tsv.gz",
+          "generation": "1787246083380131", "size_bytes": 627606,
+          "sha256": "f23686f123abec9bfe14fcf3d88e3954e32fa6206707d0cc2d2b68bb9d360c4e",
+          "crc32c_base64": "xUeNQA==", "md5_base64": "y3f1Gs87JQXxpkM8uZ03Fw=="
+        },
+        "m31_target": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m31-ordered-rare-preflight-20260820a/root17-preflight/m31_ordered_rare.target.tsv.gz",
+          "generation": "1787246083662806", "size_bytes": 6120739,
+          "sha256": "d9ad299ea7f5cc2b0a92b5397b743b03b1300fd8e59fa71b247b6959eb3837ec",
+          "crc32c_base64": "pIRYwg==", "md5_base64": "c+atnq0GBgZx1GQdVmBe1Q=="
+        },
+        "ref_vcf": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root17/ingest/m28c_b0_reference.vcf.gz",
+          "generation": "1787080905066136", "size_bytes": 1915001,
+          "sha256": "0847407648ccc2b984c7a8a4fb2606d561adcb050105b927708a53130c7807d8",
+          "crc32c_base64": "F2cccw==", "md5_base64": "6WDbZwWP1X1SIoLKaD/wPA=="
+        },
+        "ref_tbi": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root17/ingest/m28c_b0_reference.vcf.gz.tbi",
+          "generation": "1787080905039198", "size_bytes": 21888,
+          "sha256": "ed7c18bd43835573d872274f0a4e638c17775ae7bc18a547d6e69b9b8453d213",
+          "crc32c_base64": "l9Rx+A==", "md5_base64": "VyJrNzvDHYn9xHGeMVI+DQ=="
+        },
+        "ref_pairs": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root17/materialized/m28c_b0_reference_pairs.private.tsv",
+          "generation": "1787080896577739", "size_bytes": 2365,
+          "sha256": "4ac7d5b4a976679be88a9c755dff1413d887e577e219c018b68a86dc66d56a06",
+          "crc32c_base64": "gxNHGg==", "md5_base64": "k4/utzGnU+TMy2aC4EzKzw=="
+        },
+        "panel_map": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root17/materialized/m28c_b0_reference.sample_map.tsv",
+          "generation": "1787080896536220", "size_bytes": 1500,
+          "sha256": "1ae29789a2d793957a367b77b78300ddba6d7537c10bb5cda318ef3fdd547647",
+          "crc32c_base64": "1HCvUw==", "md5_base64": "aTh6Kr65upGyRu3wEATNGg=="
+        },
+        "genetic_map": {
+          "uri": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/maps/genetic.map.chr22",
+          "generation": "1673955700088022", "size_bytes": 984992,
+          "sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+          "crc32c_base64": "1jTiNw==", "md5_base64": "1s6LAebV6fQp531kVKe6rw=="
+        },
+        "flare_anc": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m30-flare-baseline-20260819b/30_flare_baseline/root17/flare/root17.flare.anc.vcf.gz",
+          "generation": "1787175566795248", "size_bytes": 2297753,
+          "sha256": "85dfd76df2c14cb8fe0a753910f25c49c88d38edc5708ec6d641053d95cc74e8",
+          "crc32c_base64": "QFwzMA==", "md5_base64": "8I0LJOoui+5VwVys588tFA=="
+        },
+        "flare_tbi": {
+          "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m33-i0-real-20260822a/root17/root17.flare.anc.vcf.gz.tbi",
+          "generation": "1787439866074847", "size_bytes": 23309,
+          "sha256": "936a5d8256a2f1610898e2a3fe00523001c203cb014a7509c9c76911fe626e52",
+          "crc32c_base64": "gicPfQ==", "md5_base64": "HjJZ1QS0I/CtwAOa5KJFWw=="
+        }
+      }
+    },
+    "root18": {
+      "root_seed": 20260818,
+      "assets": {
+        "tree_sequence": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m28-v2-individual-safe-20260817a/seed18-a/seed-20260818/m28/m28_sources.trees",
+          "generation": "1786991078567003", "size_bytes": 101501668,
+          "sha256": "780800c1f3d279746ace8631fa1b1ccd57782e9bf697a3dacc2cc983523f5f54",
+          "crc32c_base64": "L67o7w==", "md5_base64": "7e7QndLOExABlK0BM6QjHg=="
+        },
+        "pools": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m28-v2-individual-safe-20260817a/seed18-a/seed-20260818/m28/m28_pools.private.tsv",
+          "generation": "1786991077307213", "size_bytes": 194219,
+          "sha256": "046c6e903ca4b3beea8ac468836d28bb953d32b4e731c13be86f42d7c110a4ff",
+          "crc32c_base64": "u9/aVw==", "md5_base64": "RazBAKZ3J01P3PWERS9JKg=="
+        },
+        "rare_catalog": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m28-v2-individual-safe-20260817a/seed18-a/seed-20260818/m28/m28_rare_catalog.tsv.gz",
+          "generation": "1786991077397858", "size_bytes": 583965,
+          "sha256": "7a12195c18db5d4bfd5a1cee43ed4f04eccc5cd21d9fb7ed01e8c24f2a00c3b3",
+          "crc32c_base64": "kid1Lg==", "md5_base64": "6phvq1jFXO19BggYy6dhYA=="
+        },
+        "rare_haplotypes": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m28-v2-individual-safe-20260817a/seed18-a/seed-20260818/m28/m28_rare_haplotypes.tsv.gz",
+          "generation": "1786991077349752", "size_bytes": 443578,
+          "sha256": "29c562da4cdf24a680b617fc155f0ee09546e8dbd4b23cd8dd4a75d5daeb9827",
+          "crc32c_base64": "TBZXnQ==", "md5_base64": "OjPBnxXslw2qcyWYa/WKpA=="
+        },
+        "m31_sites": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m31-ordered-rare-preflight-20260820a/root18-preflight/m31_ordered_rare.sites.tsv.gz",
+          "generation": "1787246085420984", "size_bytes": 632058,
+          "sha256": "eec6a6a3cfbe0f832618c69451a6bf588b4d60a5b734e05fc8acc343849f1f9b",
+          "crc32c_base64": "0dlsxw==", "md5_base64": "S/Bh1T1btLfJ3FOwmTerxg=="
+        },
+        "m31_target": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m31-ordered-rare-preflight-20260820a/root18-preflight/m31_ordered_rare.target.tsv.gz",
+          "generation": "1787246085661497", "size_bytes": 6162686,
+          "sha256": "c6622c0bbaa6657187f6488a6fcfd523ab90b7d628da4cac03adc9476a9ca6d5",
+          "crc32c_base64": "cjxo5w==", "md5_base64": "Lq2Z7LyufQt0RTXq1OGXNg=="
+        },
+        "ref_vcf": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root18/ingest/m28c_b0_reference.vcf.gz",
+          "generation": "1787080899250388", "size_bytes": 1934247,
+          "sha256": "6bcf0ccfbc06e82bb89677848d2a5a9e61e56d18019dff95a4949e39ec4cb05d",
+          "crc32c_base64": "ZEEWSQ==", "md5_base64": "FIhBdOlYFjPYP99xwI3Oig=="
+        },
+        "ref_tbi": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root18/ingest/m28c_b0_reference.vcf.gz.tbi",
+          "generation": "1787080899151135", "size_bytes": 21895,
+          "sha256": "d602322e07c04e98c81bcf2d48cba3b8237e4b64d28bf8727154e234dc88c72c",
+          "crc32c_base64": "NDAn6A==", "md5_base64": "AudEv2VTtPIiKWf+drcbsw=="
+        },
+        "ref_pairs": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root18/materialized/m28c_b0_reference_pairs.private.tsv",
+          "generation": "1787080890781265", "size_bytes": 2369,
+          "sha256": "89f90f8be99e452098bf2afd8a18f8110ae00f2a2d96c140f2ace75cc855b058",
+          "crc32c_base64": "5LXRUA==", "md5_base64": "uDMAC6O9nK5hJLvOrQPA3w=="
+        },
+        "panel_map": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m29-root-b0-production-20260818a/29_root_b0_production/root18/materialized/m28c_b0_reference.sample_map.tsv",
+          "generation": "1787080890789395", "size_bytes": 1500,
+          "sha256": "1ae29789a2d793957a367b77b78300ddba6d7537c10bb5cda318ef3fdd547647",
+          "crc32c_base64": "1HCvUw==", "md5_base64": "aTh6Kr65upGyRu3wEATNGg=="
+        },
+        "genetic_map": {
+          "uri": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/maps/genetic.map.chr22",
+          "generation": "1673955700088022", "size_bytes": 984992,
+          "sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+          "crc32c_base64": "1jTiNw==", "md5_base64": "1s6LAebV6fQp531kVKe6rw=="
+        },
+        "flare_anc": {
+          "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m30-flare-baseline-20260819b/30_flare_baseline/root18/flare/root18.flare.anc.vcf.gz",
+          "generation": "1787175916753131", "size_bytes": 2331603,
+          "sha256": "edc4bcdc62f5ce0ffe04bd27e9d6d6ee892e03282a1474639fc3082fbc3832c9",
+          "crc32c_base64": "aw/Whw==", "md5_base64": "8Yki4megECkiIFX9Erk8SA=="
+        },
+        "flare_tbi": {
+          "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m33-i0-real-20260822a/root18/root18.flare.anc.vcf.gz.tbi",
+          "generation": "1787439878299238", "size_bytes": 23404,
+          "sha256": "9f26af28898adbdcc8eec8ebddc10b321464923c8b244719e7c3b7a6d0dfacaf",
+          "crc32c_base64": "m8918g==", "md5_base64": "I6eUBgLsAHR6KFb06PL2ag=="
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_SAFE_BRIDGE_TECHNICAL_KAT_CONTRACT",
+  "status": "AUTHORIZED_TECHNICAL_ROOT_KAT_NO_MATERIALIZE",
+  "base_m0_contract_sha256": "fb74cd610a36b22fe54b8681238a13b48a0243642c9a24cd036597d161361614",
+  "synthetic_kat_commit": "a3b4c5c",
+  "chromosome": 22,
+  "roots": {
+    "root17": 20260817,
+    "root18": 20260818
+  },
+  "technical_question": "Do exact consumed technical-root bytes reproduce the SAFE_BRIDGE boundary deterministically without truth or a consumable output?",
+  "expected_ref_people_by_ancestry": {
+    "AFR": 30,
+    "EUR": 30,
+    "ASIA": 30
+  },
+  "f0_projection": {
+    "read_only": ["CHROM", "POS", "REF", "ALT", "ANP1", "ANP2"],
+    "ignored_source_fields": ["GT", "AN1", "AN2"],
+    "forbidden_outputs": ["GT", "AN1", "AN2", "sample_id", "target_rare_phase", "truth"]
+  },
+  "isolation": {
+    "inputs": "staged_snapshot_read_only_to_unprivileged_runner",
+    "runner_uid": 65534,
+    "container_network": false,
+    "container_credentials": false,
+    "container_rootfs_read_only": true,
+    "source_bucket_access_inside_bridge": false,
+    "oracles_visible_inside_bridge": false
+  },
+  "real_root_coverage_limits": {
+    "nonzero_rare_flare_overlap": false,
+    "target_missingness": false,
+    "reference_missingness": false,
+    "covered_by_synthetic_kat": true
+  },
+  "gates": {
+    "consumable": false,
+    "scientific_evidence": false,
+    "truth_read": false,
+    "materialize_authorized": false,
+    "ready_emitted": false,
+    "training_authorized": false,
+    "gcs_write": false
+  },
+  "execution": {
+    "both_roots_required": true,
+    "roots_parallel": true,
+    "cache": false,
+    "resume": false,
+    "retries": 0,
+    "cpus_per_root": 1,
+    "memory_gib_per_root": 4,
+    "timeout_minutes": 30,
+    "stop_rss_gib_per_root": 3.2
+  },
+  "pass_interpretation": "Technical compatibility only; not scientific replication, LAI improvement, model selection or validation."
+}
