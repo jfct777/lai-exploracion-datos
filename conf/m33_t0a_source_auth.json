@@ -1,0 +1,22 @@
+{
+  "git_commit": "1517719f31282f1aa18a2988225de7fa254ca696",
+  "source_sha256": {
+    "bin/m31_ordered_linear.py": "50e4c070ee39fb5581cbc31dc46640de61fd4853d852dccc32f224b4957bae01",
+    "bin/m33_m0_contract.py": "758aeb8daaeac2732c69598e1734a1705d4a45f8a79b01d4592f9d7a48a36be2",
+    "bin/m33_m0_factorized_lazy_technical_kat.py": "4fa3c6509def0a7df4b208f1aa20e5381a3e39640203f646ea73aee3c1e43144",
+    "bin/m33_materialize.py": "5db405a9d8eedf977c4860dda6c6bacf2f67a763e4784d09c02e400ddbd7a2c0",
+    "bin/m33_t0a_compare.py": "b96d1a8fa72cbe5bf87d8c15d97aeaa61de37dadfd75b1cbbedc0761ee54a88e",
+    "bin/m33_t0a_forward.py": "dea5830920fd2e12aa605333fd02800f3e6152b46d505c05bf752550487d9cdc",
+    "bin/m33_t0a_models.py": "236bbe035565c2b9625f16ff7b91f077eb37317eaf27d9d51154020aff7c1f2d",
+    "bin/m33_t0a_source_auth.py": "3410066cd8da2ec230a07f359436474a0ba7700e190bec3a219c7f574c4065fc",
+    "bin/m33_t0a_stress.py": "f19d620024bb112fc439dd371a5d493e52081b50343df8e29efe0b969ee54b0d",
+    "conf/m33_pre4_preregistration.json": "4308bbf33ae28f554f701da33efdc185264f9f407d62661e7048e0345687eb8b",
+    "conf/m33_t0a.config": "ef7de2673224ccea511d6bba5b7a84b20c9ad2f002d66b2101753ee68b48b299",
+    "containers/m33-t0a/Dockerfile": "9b3b354038cf53eb3226f74537f56b1b268cc0f29bf48f154f1a68d524407767",
+    "modules/33_T0A_FORWARD.nf": "c7f059e78d9f348677ee87cbed034c1e963822687869d6d9f56f17deafff1080",
+    "tests/test_m33_t0a.py": "2e876255c4a0d3533a6b203cf07aea03ce1c06e66b213d71204fa63c5f1c5c71",
+    "workflows/m33_t0a.nf": "ce8fe0fa29c92d22510920ab02ffec8512ff30eb3278744c2e071a86c82eac1d"
+  },
+  "stage": "M33_T0A_SOURCE_AUTH",
+  "status": "PASS_EXACT_COMMIT_AND_SOURCE_HASHES"
+}
