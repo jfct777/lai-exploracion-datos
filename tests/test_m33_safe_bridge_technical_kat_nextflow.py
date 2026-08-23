@@ -8,8 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 class TechnicalKatNextflowTests(unittest.TestCase):
     def test_workflow_requires_both_roots_and_exact_commit(self):
         workflow = (ROOT / "workflows/m33_safe_bridge_technical_kat.nf").read_text()
-        self.assertIn("rootTuple('root17', 20260817", workflow)
-        self.assertIn("rootTuple('root18', 20260818", workflow)
+        self.assertIn("tuple('root17', 20260817", workflow)
+        self.assertIn("tuple('root18', 20260818", workflow)
         self.assertIn("/[0-9a-f]{40}/", workflow)
 
     def test_process_is_unprivileged_offline_and_read_only(self):

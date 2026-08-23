@@ -26,28 +26,37 @@ workflow {
     def runnerTest = file("${repo}/tests/test_m33_safe_bridge_technical_kat.py", checkIfExists:true)
     def nextflowTest = file("${repo}/tests/test_m33_safe_bridge_technical_kat_nextflow.py", checkIfExists:true)
 
-    def rootTuple = { String label, int seed, String snapshot, String flareTbi ->
-        def base = file(snapshot, checkIfExists:true)
-        tuple(label, seed,
-              file("${base}/m28_sources.trees", checkIfExists:true),
-              file("${base}/m28_pools.private.tsv", checkIfExists:true),
-              file("${base}/m28_rare_catalog.tsv.gz", checkIfExists:true),
-              file("${base}/m28_rare_haplotypes.tsv.gz", checkIfExists:true),
-              file("${base}/m31_ordered_rare.sites.tsv.gz", checkIfExists:true),
-              file("${base}/m31_ordered_rare.target.tsv.gz", checkIfExists:true),
-              file("${base}/m28c_b0_reference.vcf.gz", checkIfExists:true),
-              file("${base}/m28c_b0_reference.vcf.gz.tbi", checkIfExists:true),
-              file("${base}/m28c_b0_reference_pairs.private.tsv", checkIfExists:true),
-              file("${base}/m28c_b0_reference.sample_map.tsv", checkIfExists:true),
-              file("${base}/genetic.map.chr22", checkIfExists:true),
-              file("${base}/${label}.flare.anc.vcf.gz", checkIfExists:true),
-              file(flareTbi, checkIfExists:true))
-    }
+    def root17 = file(params.m33_safe_bridge_technical_root17_snapshot, checkIfExists:true)
+    def root18 = file(params.m33_safe_bridge_technical_root18_snapshot, checkIfExists:true)
     def roots = Channel.of(
-        rootTuple('root17', 20260817, params.m33_safe_bridge_technical_root17_snapshot,
-                  params.m33_safe_bridge_technical_root17_flare_tbi),
-        rootTuple('root18', 20260818, params.m33_safe_bridge_technical_root18_snapshot,
-                  params.m33_safe_bridge_technical_root18_flare_tbi),
+        tuple('root17', 20260817,
+              file("${root17}/m28_sources.trees", checkIfExists:true),
+              file("${root17}/m28_pools.private.tsv", checkIfExists:true),
+              file("${root17}/m28_rare_catalog.tsv.gz", checkIfExists:true),
+              file("${root17}/m28_rare_haplotypes.tsv.gz", checkIfExists:true),
+              file("${root17}/m31_ordered_rare.sites.tsv.gz", checkIfExists:true),
+              file("${root17}/m31_ordered_rare.target.tsv.gz", checkIfExists:true),
+              file("${root17}/m28c_b0_reference.vcf.gz", checkIfExists:true),
+              file("${root17}/m28c_b0_reference.vcf.gz.tbi", checkIfExists:true),
+              file("${root17}/m28c_b0_reference_pairs.private.tsv", checkIfExists:true),
+              file("${root17}/m28c_b0_reference.sample_map.tsv", checkIfExists:true),
+              file("${root17}/genetic.map.chr22", checkIfExists:true),
+              file("${root17}/root17.flare.anc.vcf.gz", checkIfExists:true),
+              file(params.m33_safe_bridge_technical_root17_flare_tbi, checkIfExists:true)),
+        tuple('root18', 20260818,
+              file("${root18}/m28_sources.trees", checkIfExists:true),
+              file("${root18}/m28_pools.private.tsv", checkIfExists:true),
+              file("${root18}/m28_rare_catalog.tsv.gz", checkIfExists:true),
+              file("${root18}/m28_rare_haplotypes.tsv.gz", checkIfExists:true),
+              file("${root18}/m31_ordered_rare.sites.tsv.gz", checkIfExists:true),
+              file("${root18}/m31_ordered_rare.target.tsv.gz", checkIfExists:true),
+              file("${root18}/m28c_b0_reference.vcf.gz", checkIfExists:true),
+              file("${root18}/m28c_b0_reference.vcf.gz.tbi", checkIfExists:true),
+              file("${root18}/m28c_b0_reference_pairs.private.tsv", checkIfExists:true),
+              file("${root18}/m28c_b0_reference.sample_map.tsv", checkIfExists:true),
+              file("${root18}/genetic.map.chr22", checkIfExists:true),
+              file("${root18}/root18.flare.anc.vcf.gz", checkIfExists:true),
+              file(params.m33_safe_bridge_technical_root18_flare_tbi, checkIfExists:true)),
     )
     M33_SAFE_BRIDGE_TECHNICAL_KAT_ROOT(
         roots, contract, authorization, sourceAuth, runner, core, a0, linear, rare,
