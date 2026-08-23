@@ -5,7 +5,7 @@ process M33_T0A_FORWARD {
     publishDir { "${params.m33_t0a_results_dir}/${params.m33_t0a_run_id}" },
                mode: 'copy', overwrite: false
     cpus 1
-    memory '4 GB'
+    memory '6 GB'
     time '45m'
 
     input:
