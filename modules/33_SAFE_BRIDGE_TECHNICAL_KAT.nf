@@ -80,6 +80,7 @@ process M33_SAFE_BRIDGE_TECHNICAL_KAT_ROOT {
         --flare-anc '${flare_anc}' \
         --flare-tbi '${flare_tbi}' \
         --output-dir '${root_label}.technical_kat'
+    chown -R 1017:1020 '${root_label}.technical_kat'
     chmod 0500 '${root_label}.technical_kat'
     """
 }
