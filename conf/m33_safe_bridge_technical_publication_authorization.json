@@ -1,10 +1,10 @@
 {
   "schema_version": "1.0.0",
   "stage": "M33_SAFE_BRIDGE_TECHNICAL_PUBLICATION_AUTHORIZATION",
-  "status": "BLOCKED_PENDING_AUTHENTICATED_PUBLISHER",
+  "status": "AUTHORIZED_MINIMAL_APPEND_ONLY_AUDIT_PUBLICATION",
   "run_id": "m33-safe-bridge-technical-kat-20260823e",
-  "publisher_code_commit": "0000000000000000000000000000000000000000",
-  "publication_config_sha256": "PENDING",
+  "publisher_code_commit": "7c318de96b9cd83193eb1f4ba94fd8f7f10334b6",
+  "publication_config_sha256": "e63950fdc841a045ba26061737dcbe36fb63eb5e72a5cba578a4f901685d3b03",
   "base_storage_policy_sha256": "ff9143e29fe154cc5d793a7b36efe91cefc08ff012f8024ffa1c39b7b1adc1da",
   "publisher_principal": "jcalderonta@ime.usp.br",
   "destination_prefix": "gs://teams-usp/frank/lai-exploracion-datos/runs/m33-safe-bridge-technical-kat-20260823e/",
