@@ -1,0 +1,167 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_M0_FACTORIZED_LAZY_AMENDMENT_CONTRACT",
+  "status": "CONTRACT_AND_SYNTHETIC_EQUIVALENCE_ONLY_NO_REAL_ROOT_EXECUTION_NO_TRAINING",
+  "scope": "CHR22_DEVELOPMENT_PRE4_THREE_ROOTS",
+  "base_contracts": {
+    "materializer": {
+      "path": "conf/m33_m0_materializer_contract.json",
+      "raw_sha256": "fb74cd610a36b22fe54b8681238a13b48a0243642c9a24cd036597d161361614",
+      "semantic_sha256": "46f84a9015908f9056fa01555e3686c4efd5d23a3e6d3d842c28a87189f71c59"
+    },
+    "sanitized_f0_amendment": {
+      "path": "conf/m33_m0_f0_sanitized_amendment_contract.json",
+      "raw_sha256": "568965b67fb5c4153d8dd42d45465bfccd5c3c21d9b04f306c21acd427eb2be3",
+      "semantic_sha256": "124e8f6c4fea62af2e5be56760fc1659e9520aa556362170797a583e5821444e"
+    },
+    "pre4_preregistration": {
+      "path": "conf/m33_pre4_preregistration.json",
+      "raw_sha256": "4308bbf33ae28f554f701da33efdc185264f9f407d62661e7048e0345687eb8b",
+      "semantic_sha256": "0174d705a884abb49800a45862be75577a4c0c3888f91a03e47847aaff8851dc"
+    }
+  },
+  "proportionality_gate": {
+    "technical_anchor": "root17_occupancy_only_not_scientific_selection",
+    "target_samples": 30,
+    "context_locus_assignments_by_radius_cM": {
+      "0.05": 36229121,
+      "0.10": 58587636,
+      "0.20": 92883536,
+      "0.50": 175066132
+    },
+    "packed_token_bytes": 61,
+    "minimum_token_array_bytes_per_root_rotation": 663862557750,
+    "minimum_shards_per_root_rotation": 41520,
+    "development_root_rotation_copies": 9,
+    "projected_minimum_token_array_bytes_all_copies": 5974763019750,
+    "projected_minimum_shards_all_copies": 373680,
+    "verdict": "STOP_PERSISTENT_EXPANDED_CONTEXTS_USE_FACTORIZED_CANONICAL_STORAGE_AND_LAZY_RECONSTRUCTION"
+  },
+  "physical_amendment": {
+    "scientific_estimand_changed": false,
+    "persistent_packed_rare_context_shard": false,
+    "persistent_bundle_manifest_by_radius": false,
+    "persistent_materialization_receipt_for_expanded_shards": false,
+    "canonical_storage_definition": "persist_each_independent_axis_and_value_array_once_per_root_without_learned_factorization_or_lossy_compression",
+    "lazy_definition": "construct_one_packed_context_batch_in_memory_immediately_before_model_consumption_then_release_it",
+    "canonical_root_artifacts": [
+      "selected_loci_incremental",
+      "target_rare_diploid_incremental",
+      "reference_rare_summary_incremental",
+      "flare_f0_sanitized",
+      "marker_cM",
+      "context_intervals_all_frozen_radii",
+      "safe_bridge_receipt",
+      "safe_bridge_independent_verify_receipt",
+      "factorized_root_receipt"
+    ],
+    "rotation_artifacts": [
+      "fit_callable_normalization_manifest",
+      "lazy_context_recipe",
+      "factorized_READY"
+    ],
+    "forbidden_persistence": [
+      "rare_tokens",
+      "rare_mask",
+      "rare_locus_index",
+      "row_ptr",
+      "row_sample_index",
+      "row_marker_index"
+    ],
+    "output_namespace_template": "gs://teams-usp/frank/lai-exploracion-datos/runs/{run_id}/33_m0_factorized_lazy/"
+  },
+  "contract_precedence": {
+    "mode": "additive_amendment_replaces_only_named_physical_clauses",
+    "replaced_base_logical_outputs": ["packed_rare_context", "bundle_manifest_by_radius", "materialization_receipt", "READY"],
+    "replacement_logical_outputs": ["canonical_root_factors", "context_intervals_all_frozen_radii", "factorized_root_receipt", "fit_callable_normalization_manifest", "lazy_context_recipe", "factorized_READY"],
+    "base_clauses_preserved": ["root_registry", "incremental_partition", "reference_semantics", "sample_key_contract", "f0_contract", "control_views", "primary_transferable_input", "packed_loader", "privacy_contract"],
+    "pre4_preregistration_preserved_by_hash": true
+  },
+  "interval_artifact": {
+    "schema_id": "m33_m0_context_intervals_v1",
+    "arrays": {
+      "radii_cM": {"axes": ["radius"], "dtype": "<f8"},
+      "context_start": {"axes": ["radius", "marker"], "dtype": "<u8"},
+      "context_stop": {"axes": ["radius", "marker"], "dtype": "<u8"}
+    },
+    "radii_cM": [0.05, 0.1, 0.2, 0.5],
+    "interval": "inclusive_closed_marker_cM_minus_radius_to_marker_cM_plus_radius",
+    "ordering": "radius_then_authenticated_FLARE_marker_order",
+    "nested_radius_invariant": "larger_radius_start_le_smaller_radius_start_and_larger_radius_stop_ge_smaller_radius_stop",
+    "axis_binding": "receipt_binds_selected_locus_axis_semantic_sha256_and_FLARE_marker_axis_semantic_sha256",
+    "truncation": false,
+    "append_only_reopen_and_semantic_hash_required": true
+  },
+  "lazy_reconstruction": {
+    "channel_count": 13,
+    "channel_semantics": "exactly_m33_m0_materializer_contract_primary_transferable_input_channels",
+    "row_order": "sample_major_then_marker",
+    "token_order": "cM_then_bp_then_locus_id",
+    "person_batch_maximum": 8,
+    "valid_token_budget_per_batch": 262144,
+    "empty_context": "valid_zero_length_row",
+    "single_context_over_budget": "STOP_NO_TRUNCATION",
+    "minor_allele_orientation": "already_resolved_inside_SAFE_BRIDGE_for_both_minor_code_0_and_1",
+    "target_phase": "diploid_minor_dosage_only_no_rare_phase",
+    "normalization": "derive_max_callable_an_by_ancestry_from_exact_authenticated_FIT_roots_only",
+    "forbidden_dependencies": ["SCORE_ONLY", "EVAL", "truth", "hard_call", "AN1", "AN2", "raw_sample_id"]
+  },
+  "publication_contract": {
+    "append_only_precondition": "ifGenerationMatch=0",
+    "reopen_verify": true,
+    "write_order": ["canonical_root_factors", "context_intervals_all_frozen_radii", "factorized_root_receipt", "fit_callable_normalization_manifest", "lazy_context_recipe", "factorized_READY"],
+    "lazy_recipe_constants": {"central_marker_block": 256, "optimizer_update_rule": "accumulate_loss_numerator_denominator_and_gradients_across_all_microbatches_then_one_optimizer_step_after_last_microbatch_of_logical_block"},
+    "factorized_root_receipt_required_keys": ["stage", "schema_id", "status", "run_id", "root_seed", "git_commit", "oci_image_digest", "source_auth_sha256", "selected_locus_axis_semantic_sha256", "target_sample_axis_semantic_sha256", "FLARE_marker_axis_semantic_sha256", "artifact_raw_sha256_by_logical_id", "artifact_semantic_sha256_by_logical_id", "gcs_uri_generation_by_logical_id", "reopen_verified", "append_only"],
+    "lazy_context_recipe_required_keys": ["stage", "schema_id", "status", "run_id", "root_seed", "rotation_id", "role_in_rotation", "radii_cM", "person_batch_maximum", "valid_token_budget_per_batch", "central_marker_block", "microbatch_plan_semantic_sha256", "optimizer_update_rule", "row_order", "token_order", "channel_count", "factorized_root_receipt_sha256", "fit_callable_normalization_manifest_sha256", "source_auth_sha256", "semantic_sha256"],
+    "factorized_READY_required_keys": ["stage", "schema_id", "status", "run_id", "root_seed", "rotation_id", "role_in_rotation", "factorized_root_receipt_sha256", "fit_callable_normalization_manifest_sha256", "lazy_context_recipe_sha256", "source_auth_sha256"],
+    "READY_write_rule": "write_last_only_after_all_objects_reopen_and_hash_and_generation_verification"
+  },
+  "unchanged_scientific_contract": {
+    "development_roots": [386357765, 2024931463, 1324432253],
+    "rotations": {
+      "R0": {"fit_root_seeds": [2024931463, 1324432253], "score_only_root_seed": 386357765},
+      "R1": {"fit_root_seeds": [386357765, 1324432253], "score_only_root_seed": 2024931463},
+      "R2": {"fit_root_seeds": [386357765, 2024931463], "score_only_root_seed": 1324432253}
+    },
+    "forbidden_technical_roots": [20260817, 20260818],
+    "forbidden_eval_roots": [1341407242, 2049644864, 693524843, 1896826422, 166187460],
+    "radii_cM": [0.05, 0.1, 0.2, 0.5],
+    "channels_models_losses_metrics_controls": true,
+    "no_parameter_selection_from_technical_roots": true
+  },
+  "required_gates_before_real_roots": {
+    "synthetic_exact_equivalence": "all_arrays_equal_in_dtype_shape_and_C_order_bytes_for_all_radii_boundaries_missingness_and_empty_contexts",
+    "consumer_exact_equivalence": "fixed_weights_logits_loss_and_input_gradient_equal",
+    "fit_leakage_negative_test": "SCORE_ONLY_or_EVAL_normalization_input_must_STOP",
+    "technical_known_answer": "after_productive_adapter_compare_lazy_against_oracle_on_stratified_markers_from_root17_and_root18_without_scientific_selection",
+    "determinism": "two_independent_clean_runs_have_identical_semantic_hashes",
+    "performance_T0": "forward_only_no_gradient_no_truth_measure_peak_RSS_and_tokens_per_second_before_training",
+    "memory_warning_fraction": 0.7,
+    "memory_stop_fraction": 0.8
+  },
+  "ref_label_sham_dependency": {
+    "status": "NOT_DERIVABLE_FROM_AGGREGATED_REFERENCE_SUMMARIES",
+    "required_resolution": "derive_each_preregistered_permutation_inside_SAFE_BRIDGE_from_REF_genotypes_then_export_only_aggregated_permuted_reference_summaries",
+    "individual_reference_genotype_export": false,
+    "modeling_blocked_until_resolved": true
+  },
+  "execution_authorization": {
+    "contract_validation": true,
+    "synthetic_equivalence_tests": true,
+    "real_root_read": false,
+    "real_root_write": false,
+    "forward_T0": false,
+    "training": false,
+    "truth_scoring": false
+  },
+  "stop_rules": [
+    "STOP_if_any_base_contract_hash_differs",
+    "STOP_if_any_scientific_root_radius_channel_model_loss_metric_or_control_changes",
+    "STOP_if_lazy_and_oracle_views_are_not_byte_exact",
+    "STOP_if_SCORE_ONLY_or_EVAL_contributes_to_FIT_normalization",
+    "STOP_if_any_expanded_context_array_is_persisted",
+    "STOP_if_output_namespace_is_not_the_project_bucket",
+    "STOP_if_REF_label_sham_is_reconstructed_from_insufficient_aggregate_summaries",
+    "STOP_if_peak_RSS_reaches_0.8_of_available_memory"
+  ]
+}
