@@ -15,16 +15,23 @@ from pathlib import Path
 
 REQUIRED_SOURCES = {
     "bin/m33_materialize.py",
+    "bin/m33_m0_contract.py",
+    "bin/m31_ordered_linear.py",
     "bin/m33_m0_factorized_lazy_amendment.py",
     "bin/m33_m0_factorized_lazy_source_auth.py",
+    "bin/m33_m0_factorized_lazy_technical_kat.py",
     "conf/m33_m0_factorized_lazy_amendment_contract.json",
     "conf/m33_m0_factorized_lazy_contract.config",
     "modules/33_M0_FACTORIZED_LAZY_CONTRACT.nf",
+    "modules/33_M0_FACTORIZED_LAZY_TECHNICAL_KAT.nf",
     "workflows/m33_m0_factorized_lazy_contract.nf",
+    "workflows/m33_m0_factorized_lazy_technical_kat.nf",
     "tests/test_m33_materialize.py",
     "tests/test_m33_m0_factorized_lazy_amendment.py",
     "tests/test_m33_m0_factorized_lazy_nextflow.py",
     "tests/test_m33_m0_factorized_lazy_source_auth.py",
+    "tests/test_m33_m0_factorized_lazy_technical_kat.py",
+    "conf/m33_m0_factorized_lazy_technical_kat.config",
 }
 
 

@@ -221,6 +221,33 @@ def prepare_person_batch_channels(
     )
 
 
+def _resolve_prepared_channels(
+    target: Mapping[str, np.ndarray], reference: Mapping[str, np.ndarray],
+    max_callable_an: Mapping[str, int], person_start: int, person_end_exclusive: int,
+    locus_count: int, prepared_channels: PreparedChannelBatch | None,
+    expected_root_seed: int | None, expected_rotation_id: str | None,
+    expected_fit_normalization_manifest_sha256: str | None,
+) -> np.ndarray:
+    if prepared_channels is None:
+        return _calculate_person_batch_channels(
+            target, reference, max_callable_an, person_start, person_end_exclusive,
+        )
+    require(isinstance(prepared_channels, PreparedChannelBatch),
+            "prepared channel object differs")
+    require((prepared_channels.person_start, prepared_channels.person_end_exclusive) ==
+            (person_start, person_end_exclusive), "prepared person range differs")
+    require(prepared_channels.root_seed == expected_root_seed and
+            prepared_channels.rotation_id == expected_rotation_id and
+            prepared_channels.fit_normalization_manifest_sha256 ==
+            expected_fit_normalization_manifest_sha256,
+            "prepared provenance binding differs")
+    channels = np.asarray(prepared_channels.values)
+    _exact_dtype(channels, "<f4", "prepared_channels")
+    require(channels.shape == (person_end_exclusive - person_start, locus_count, 11),
+            "prepared channel axes differ")
+    return channels
+
+
 def build_interval_table(rare_cm: np.ndarray, marker_cm: np.ndarray) -> dict[str, np.ndarray]:
     """Build inclusive context bounds once for all four frozen radii."""
     rare_cm = np.ascontiguousarray(rare_cm, dtype="<f8")
@@ -336,7 +363,10 @@ def build_packed_shard(
     selected: Mapping[str, np.ndarray], target: Mapping[str, np.ndarray],
     reference: Mapping[str, np.ndarray], f0: Mapping[str, np.ndarray], marker_cm: np.ndarray,
     max_callable_an: Mapping[str, int], radius_cm: float, person_start: int,
-    person_end_exclusive: int, marker_start: int, marker_end_exclusive: int,
+    person_end_exclusive: int, marker_start: int, marker_end_exclusive: int, *,
+    prepared_channels: PreparedChannelBatch | None = None,
+    expected_root_seed: int | None = None, expected_rotation_id: str | None = None,
+    expected_fit_normalization_manifest_sha256: str | None = None,
 ) -> dict[str, np.ndarray]:
     """Build one exact packed shard through an independent eager oracle."""
     validate_inputs(selected, target, reference, f0, marker_cm)
@@ -350,7 +380,11 @@ def build_packed_shard(
     eager_bounds = contract.context_intervals(
         rare_cm.tolist(), np.asarray(marker_cm).tolist(), radius_cm,
     )
-    channels = base_channels(target, reference, max_callable_an)
+    channels = _resolve_prepared_channels(
+        target, reference, max_callable_an, person_start, person_end_exclusive,
+        rare_cm.size, prepared_channels, expected_root_seed, expected_rotation_id,
+        expected_fit_normalization_manifest_sha256,
+    )
     tokens: list[np.ndarray] = []
     locus_indexes: list[np.ndarray] = []
     row_ptr = [0]
@@ -362,7 +396,7 @@ def build_packed_shard(
             indexes = np.arange(left, right, dtype="<u8")
             block = np.empty((right - left, 13), dtype="<f4")
             if right > left:
-                block[:, :11] = channels[sample_index, left:right]
+                block[:, :11] = channels[sample_index - person_start, left:right]
                 block[:, 11] = np.clip(
                     (rare_cm[left:right] - marker_cm[marker_index]) / radius_cm, -1.0, 1.0,
                 ).astype("<f4")
@@ -430,24 +464,11 @@ def build_lazy_packed_shard(
     )
     require(valid_tokens_expected <= TOKEN_BUDGET,
             "shard exceeds frozen token budget before allocation")
-    if prepared_channels is None:
-        channels = _calculate_person_batch_channels(
-            target, reference, max_callable_an, person_start, person_end_exclusive,
-        )
-    else:
-        require(isinstance(prepared_channels, PreparedChannelBatch),
-                "prepared channel object differs")
-        require((prepared_channels.person_start, prepared_channels.person_end_exclusive) ==
-                (person_start, person_end_exclusive), "prepared person range differs")
-        require(prepared_channels.root_seed == expected_root_seed and
-                prepared_channels.rotation_id == expected_rotation_id and
-                prepared_channels.fit_normalization_manifest_sha256 ==
-                expected_fit_normalization_manifest_sha256,
-                "prepared provenance binding differs")
-        channels = np.asarray(prepared_channels.values)
-        _exact_dtype(channels, "<f4", "prepared_channels")
-        require(channels.shape == (batch_size, rare_cm.size, 11),
-                "prepared channel axes differ")
+    channels = _resolve_prepared_channels(
+        target, reference, max_callable_an, person_start, person_end_exclusive,
+        rare_cm.size, prepared_channels, expected_root_seed, expected_rotation_id,
+        expected_fit_normalization_manifest_sha256,
+    )
     tokens: list[np.ndarray] = []
     locus_indexes: list[np.ndarray] = []
     row_ptr = [0]
