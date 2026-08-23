@@ -1,0 +1,110 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_M0_F0_SANITIZED_AMENDMENT_CONTRACT",
+  "status": "CONTRACT_ONLY_NO_REAL_EXECUTION",
+  "scope": "CHR22_DEVELOPMENT_PRE4_THREE_ROOTS",
+  "base_contract": {
+    "path": "conf/m33_m0_materializer_contract.json",
+    "raw_sha256": "fb74cd610a36b22fe54b8681238a13b48a0243642c9a24cd036597d161361614",
+    "semantic_sha256": "46f84a9015908f9056fa01555e3686c4efd5d23a3e6d3d842c28a87189f71c59"
+  },
+  "development_roots": {
+    "exact_seeds": [386357765, 2024931463, 1324432253],
+    "rotations": {
+      "R0": {"fit_root_seeds": [2024931463, 1324432253], "score_only_root_seed": 386357765},
+      "R1": {"fit_root_seeds": [386357765, 1324432253], "score_only_root_seed": 2024931463},
+      "R2": {"fit_root_seeds": [386357765, 2024931463], "score_only_root_seed": 1324432253}
+    },
+    "forbidden_technical_seeds": [20260817, 20260818],
+    "forbidden_eval_seeds": [1341407242, 2049644864, 693524843, 1896826422, 166187460]
+  },
+  "sanitizer_boundary": {
+    "process": "SANITIZE_FLARE_F0",
+    "raw_inputs": ["a0_authenticated_flare_anc", "derived_flare_anc_tbi"],
+    "output_logical_id": "flare_f0_sanitized",
+    "truth_mounted": false,
+    "allowed_source_fields": ["root_seed", "sample_id", "chrom", "pos", "ref", "alt", "ANP1", "ANP2"],
+    "forbidden_source_fields": ["GT", "AN1", "AN2", "truth", "hard_call", "target_rare_phase"],
+    "probability_contract": {
+      "ancestry_order": ["AFR", "EUR", "ASIA"],
+      "raw_sum_range": [0.98, 1.02],
+      "operation": "renormalize_each_ANP_vector_to_exact_simplex_in_float64_then_cast_little_endian_float32",
+      "float32_simplex_absolute_tolerance": 0.000005,
+      "haplotype_axis_preserved": true
+    },
+    "identity_contract": {
+      "sample_key": "sha256_DNABR_M33_M0_SAMPLE_V1_pipe_plus_exact_sample_id",
+      "marker_key": ["chrom", "pos", "ref", "alt"],
+      "sample_axis": "exact_bijection_and_ordered_equality_with_TARGET_axis",
+      "marker_axis": "exact_identity_and_order_with_authenticated_FLARE_marker_axis",
+      "duplicate_missing_or_extra_identity": "STOP_BEFORE_WRITE"
+    },
+    "artifact": {
+      "schema_id": "m33_m0_flare_f0_sanitized_v1",
+      "format": "npz_uncompressed",
+      "privacy": "private",
+      "arrays": {
+        "sample_key_sha256": {"axes": ["sample"], "dtype": "|S64"},
+        "marker_chrom": {"axes": ["marker"], "dtype": "|u1"},
+        "marker_pos": {"axes": ["marker"], "dtype": "<i8"},
+        "marker_ref": {"axes": ["marker"], "dtype": "|S1"},
+        "marker_alt": {"axes": ["marker"], "dtype": "|S1"},
+        "F0": {"axes": ["sample", "haplotype", "marker", "ancestry"], "dtype": "<f4"}
+      },
+      "contains_raw_genotypes": false,
+      "contains_hard_calls": false,
+      "contains_truth": false,
+      "append_only": true,
+      "reopen_and_semantic_hash_required": true
+    }
+  },
+  "materialize_boundary": {
+    "removed_input_logical_ids": ["a0_authenticated_flare_anc", "derived_flare_anc_tbi"],
+    "added_input_logical_ids": ["flare_f0_sanitized", "safe_bridge_receipt", "safe_bridge_independent_verify_receipt"],
+    "exact_input_logical_ids_after_amendment": [
+      "selected_loci_incremental",
+      "target_rare_diploid_incremental",
+      "reference_rare_summary_incremental",
+      "flare_f0_sanitized",
+      "authenticated_genetic_map",
+      "authenticated_fit_callable_normalization_manifest",
+      "safe_bridge_receipt",
+      "safe_bridge_independent_verify_receipt"
+    ],
+    "forbidden_inputs": ["a0_authenticated_flare_anc", "derived_flare_anc_tbi", "GT", "AN1", "AN2", "truth", "hard_call", "target_rare_phase", "raw_sample_id"],
+    "required_receipt_bindings": ["root_seed", "source_auth_sha256", "artifact_semantic_sha256", "sample_axis_semantic_sha256", "marker_axis_semantic_sha256"],
+    "fit_callable_normalization_manifest_role": "required_precomputed_from_authenticated_FIT_roots_only_never_SCORE_ONLY_or_EVAL",
+    "genetic_map_role": "authenticated_context_geometry_only_no_labels_no_truth"
+  },
+  "unchanged_scientific_contract": {
+    "rare_representation": true,
+    "minor_allele_orientation": true,
+    "channel_count": 13,
+    "radii_cM": [0.05, 0.1, 0.2, 0.5],
+    "person_batch": 8,
+    "maximum_valid_tokens_per_shard": 262144,
+    "models_losses_metrics_controls": true,
+    "pre4_roots_and_rotations": true,
+    "no_parameter_selection_from_technical_roots": true
+  },
+  "execution_authorization": {
+    "contract_validation": true,
+    "synthetic_tests": true,
+    "real_asset_read": false,
+    "sanitize_f0": false,
+    "materialize": false,
+    "write_READY": false,
+    "forward": false,
+    "backward": false,
+    "training": false,
+    "truth_scoring": false
+  },
+  "stop_rules": [
+    "STOP_if_base_contract_hash_differs",
+    "STOP_if_any_scientific_parameter_or_root_registry_changes",
+    "STOP_if_MATERIALIZE_can_read_raw_FLARE_or_truth_bearing_fields",
+    "STOP_if_F0_sample_or_marker_axis_is_not_exact",
+    "STOP_if_SCORE_ONLY_or_EVAL_contributes_to_FIT_normalization",
+    "STOP_if_SAFE_BRIDGE_receipt_and_independent_verification_are_not_bound"
+  ]
+}
