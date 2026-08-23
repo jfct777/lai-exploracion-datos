@@ -2,9 +2,9 @@
   "schema_version": "1.0.0",
   "stage": "M33_M0_F0_SANITIZED_AMENDMENT_SOURCE_AUTH",
   "status": "AUTHORIZED_EXACT_CONTRACT_SOURCES",
-  "implementation_commit": "2ab211de636b2d2c29c8c4273fdafcc325d891be",
+  "implementation_commit": "45cce8d6585f5172edcf4e97a8ebcf95560259ce",
   "files": {
-    "bin/m33_m0_f0_sanitized_amendment.py": "cc9cc9d73d0bb51401638b45dd84fc92451c22e27b9a0acecd00785815bc33ab",
+    "bin/m33_m0_f0_sanitized_amendment.py": "6f6dd40bd34e71822cd62cf21dd7499099e25638420efff474b374f5e0524a21",
     "conf/m33_m0_f0_sanitized_amendment_contract.json": "568965b67fb5c4153d8dd42d45465bfccd5c3c21d9b04f306c21acd427eb2be3",
     "conf/m33_m0_materializer_contract.json": "fb74cd610a36b22fe54b8681238a13b48a0243642c9a24cd036597d161361614",
     "tests/test_m33_m0_f0_sanitized_amendment.py": "864a06c5041ebdec2e56dbb1787c19420b1c43622f049dde60d38e064b566774"
