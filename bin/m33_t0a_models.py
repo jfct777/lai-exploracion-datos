@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from typing import Iterable
 
 import torch
@@ -27,6 +28,10 @@ def require(condition: bool, message: str) -> None:
 
 def configure_deterministic_cpu() -> None:
     """Select deterministic single-thread CPU execution for cross-process checks."""
+    # Docker preserves the host UID, which may not exist in the image's passwd file.
+    # PyTorch consults the user name while configuring its deterministic CPU runtime.
+    os.environ.setdefault("USER", "m33_t0a")
+    os.environ.setdefault("LOGNAME", "m33_t0a")
     torch.set_num_threads(1)
     torch.set_num_interop_threads(1)
     torch.use_deterministic_algorithms(True)
