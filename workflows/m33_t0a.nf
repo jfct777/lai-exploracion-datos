@@ -17,14 +17,14 @@ workflow {
                   file(params.m33_t0a_root18_verify, checkIfExists:true),
                   file(params.m33_t0a_root18_map, checkIfExists:true)]
     cases = Channel.of(
-        tuple('root17', 20260817, 'local_linear', 0, *root17),
-        tuple('root17', 20260817, 'local_linear', 1, *root17),
-        tuple('root17', 20260817, 'small_residual_cnn_1d', 0, *root17),
-        tuple('root17', 20260817, 'small_residual_cnn_1d', 1, *root17),
-        tuple('root18', 20260818, 'local_linear', 0, *root18),
-        tuple('root18', 20260818, 'local_linear', 1, *root18),
-        tuple('root18', 20260818, 'small_residual_cnn_1d', 0, *root18),
-        tuple('root18', 20260818, 'small_residual_cnn_1d', 1, *root18)
+        tuple('root17', 20260817, 'local_linear', 0, root17[0], root17[1], root17[2]),
+        tuple('root17', 20260817, 'local_linear', 1, root17[0], root17[1], root17[2]),
+        tuple('root17', 20260817, 'small_residual_cnn_1d', 0, root17[0], root17[1], root17[2]),
+        tuple('root17', 20260817, 'small_residual_cnn_1d', 1, root17[0], root17[1], root17[2]),
+        tuple('root18', 20260818, 'local_linear', 0, root18[0], root18[1], root18[2]),
+        tuple('root18', 20260818, 'local_linear', 1, root18[0], root18[1], root18[2]),
+        tuple('root18', 20260818, 'small_residual_cnn_1d', 0, root18[0], root18[1], root18[2]),
+        tuple('root18', 20260818, 'small_residual_cnn_1d', 1, root18[0], root18[1], root18[2])
     )
     M33_T0A_FORWARD(
         cases,

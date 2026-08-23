@@ -124,6 +124,7 @@ class M33T0aTests(unittest.TestCase):
         self.assertIn("--network none", lowered)
         self.assertIn("maxforks = 2", lowered)
         self.assertIn("sha256", lowered)
+        self.assertNotIn("*root", lowered)
         for required in ("truth_read", "predictions_persisted", "source_auth"):
             self.assertIn(required, (ROOT / "bin/m33_t0a_compare.py").read_text().lower())
         for forbidden in ("truth", "optimizer", "backward", "gcloud", "gsutil"):
