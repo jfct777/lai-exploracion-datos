@@ -1,0 +1,114 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_SAFE_BRIDGE_KAT_CONTRACT",
+  "status": "DESIGN_ONLY_KAT_NO_REAL_ASSET_READ_NO_MATERIALIZE_NO_READY_NO_TRAINING",
+  "base_contract_sha256": "fb74cd610a36b22fe54b8681238a13b48a0243642c9a24cd036597d161361614",
+  "base_assertions": {
+    "i0_implemented": false,
+    "safe_bridge_implemented": false,
+    "safe_bridge_authorized": false,
+    "materialize_authorized": false
+  },
+  "effective_i0_facts": {
+    "status": "PASS_I0_TECHNICAL_ONLY",
+    "tabix_version": "1.16",
+    "tabix_oci": "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/m33-tabix@sha256:e730c35759e3851a92d7f3a6619333105331d97f1ae44a50dfa8d59745c43e54",
+    "record_count_per_root": 79791,
+    "publication_prefix": "gs://teams-usp/frank/lai-exploracion-datos/runs/m33-i0-real-20260822a/",
+    "publication_receipt_generation": "1787439897641803",
+    "publication_receipt_sha256": "024773196a33e4f70cebf3971e1a3550ef5caaf29e24f6d5cadb4a69419b9733"
+  },
+  "technical_roots": {
+    "root17": {
+      "root_seed": 20260817,
+      "a0_receipt_sha256": "4fe79f0dc648caa2c64b9d81c752e144af6d0c9db43e3fa3ae4274887ecfff93",
+      "a0_registry_sha256": "44311fe8ef9238c81f630343857439ac16e52b7569c1348a52fb65d744ad93cd",
+      "flare_vcf_sha256": "85dfd76df2c14cb8fe0a753910f25c49c88d38edc5708ec6d641053d95cc74e8",
+      "flare_vcf_generation": "1787175566795248",
+      "flare_tbi_sha256": "936a5d8256a2f1610898e2a3fe00523001c203cb014a7509c9c76911fe626e52",
+      "i0_receipt_sha256": "53425116ccf0e3d9d8df7b4eaab1e248efe425d0fd0d22041bbc330cbcbb3924"
+    },
+    "root18": {
+      "root_seed": 20260818,
+      "a0_receipt_sha256": "de1ea4ae2b67179acb9a6f56024bfe9bbb92b00663ef3684b280d077f1726b4b",
+      "a0_registry_sha256": "649993d6e098b3cf92260a95d5bfcf8a89a529f8438f753dce368598958773de",
+      "flare_vcf_sha256": "edc4bcdc62f5ce0ffe04bd27e9d6d6ee892e03282a1474639fc3082fbc3832c9",
+      "flare_vcf_generation": "1787175916753131",
+      "flare_tbi_sha256": "9f26af28898adbdcc8eec8ebddc10b321464923c8b244719e7c3b7a6d0dfacaf",
+      "i0_receipt_sha256": "c9a0a5bdc74ade07cb98cfadbfadf0ed9e274adca0c18cd4250de6fffce66984"
+    }
+  },
+  "kat_profiles": {
+    "minor0_overlap_missing_firewall": [
+      "minor_code_zero",
+      "nonzero_flare_overlap",
+      "target_and_reference_missingness",
+      "role_firewall_poison"
+    ]
+  },
+  "effective_safe_bridge": {
+    "truth_mounted": false,
+    "network_enabled": false,
+    "staged_inputs_not_modified_by_runner": true,
+    "physical_read_only_mount_proven": false,
+    "locus_key": ["chrom", "pos", "ref", "alt"],
+    "minor_code_domain": [0, 1],
+    "minor_code_binding": "exact_locus_id_from_authenticated_rare_catalog",
+    "target_missing": "dosage_0_observed_mask_0",
+    "reference_missing": "exclude_from_minor_ac_and_callable_an",
+    "role_firewall": "contributing_nodes_exactly_equal_authenticated_REF_nodes",
+    "raw_identifiers_exported": false,
+    "outputs": {
+      "kat_selected_loci_incremental": "tests_m33_m0_selected_loci_incremental_v1",
+      "kat_target_rare_diploid_incremental": "tests_m33_m0_target_rare_diploid_incremental_v1",
+      "kat_reference_rare_summary_incremental": "tests_m33_m0_reference_rare_summary_incremental_v1",
+      "kat_flare_f0_sanitized": "tests_m33_safe_bridge_flare_f0_sanitized_v1",
+      "safe_bridge_receipt": "m33_safe_bridge_kat_receipt_v1"
+    },
+    "raw_boundary_resolution": {
+      "base_tension": "base_MATERIALIZE_lists_raw_FLARE_VCF_TBI_despite_SAFE_BRIDGE_no_forward_rule",
+      "decision": "SAFE_BRIDGE_parses_only_ANP1_ANP2_and_emits_flare_f0_sanitized",
+      "future_materialize_replacement": "replace_raw_FLARE_VCF_TBI_with_flare_f0_sanitized",
+      "effective_now": false,
+      "requires_separate_materialize_amendment": true
+    },
+    "synthetic_limitations": [
+      "does_not_validate_real_VCF_TBI_parity",
+      "does_not_reproduce_A0_root17_root18_known_answers",
+      "does_not_authorize_real_or_technical_root_reads",
+      "does_not_prove_physical_read_only_mounts"
+    ],
+    "flare_f0_sanitized": {
+      "allowed_source_fields": ["ANP1", "ANP2"],
+      "required_identity_fields": ["root_seed", "sample_id", "chrom", "pos", "ref", "alt"],
+      "forbidden_source_fields": ["GT", "AN1", "AN2", "truth", "hard_call", "target_rare_phase"],
+      "ancestry_order": ["AFR", "EUR", "ASIA"],
+      "raw_sum_range": [0.98, 1.02],
+      "output_dtype": "<f4",
+      "output_axes": ["sample", "haplotype", "marker", "ancestry"]
+    }
+  },
+  "execution_authorization": {
+    "contract_validation": true,
+    "synthetic_kat": true,
+    "real_asset_read": false,
+    "technical_root_kat": false,
+    "materialize": false,
+    "write_ready": false,
+    "training": false,
+    "truth_scoring": false,
+    "gcs_write": false
+  },
+  "stop_rules": [
+    "base_contract_hash_or_assertion_drift",
+    "root_label_seed_or_receipt_swap",
+    "locus_duplicate_or_REF_ALT_mismatch",
+    "minor_code_outside_0_1",
+    "contributing_nodes_not_exactly_REF_nodes",
+    "truth_or_forbidden_FLARE_field_present",
+    "nonfinite_probability_or_simplex_outside_tolerance",
+    "unexpected_NPZ_member_dtype_shape_or_byte_order",
+    "raw_identifier_or_phase_export",
+    "materialize_ready_training_or_gcs_write_requested"
+  ]
+}

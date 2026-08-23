@@ -1,0 +1,69 @@
+{
+  "profile": "minor0_overlap_missing_firewall",
+  "root_seed": 424242,
+  "selected_loci": [
+    {"chrom": 22, "pos": 100, "ref": "A", "alt": "C", "locus_id": 1, "cM": 0.1},
+    {"chrom": 22, "pos": 200, "ref": "G", "alt": "T", "locus_id": 2, "cM": 0.2},
+    {"chrom": 22, "pos": 300, "ref": "C", "alt": "G", "locus_id": 3, "cM": 0.3}
+  ],
+  "rare_catalog_records": [
+    {"chrom": 22, "pos": 300, "ref": "C", "alt": "G", "locus_id": 3, "cM": 0.3, "minor_code": 1},
+    {"chrom": 22, "pos": 100, "ref": "A", "alt": "C", "locus_id": 1, "cM": 0.1, "minor_code": 0},
+    {"chrom": 22, "pos": 200, "ref": "G", "alt": "T", "locus_id": 2, "cM": 0.2, "minor_code": 1}
+  ],
+  "flare_loci": [
+    {"chrom": 22, "pos": 200, "ref": "G", "alt": "T", "locus_id": 20, "cM": 0.2}
+  ],
+  "genetic_map_records": [
+    {"chrom": 22, "pos": 100, "cM": 0.1},
+    {"chrom": 22, "pos": 200, "cM": 0.2},
+    {"chrom": 22, "pos": 300, "cM": 0.3}
+  ],
+  "target_sample_ids": ["T1", "T2"],
+  "target_haplotype_records": [
+    {"sample_id": "T2", "locus_id": 3, "haplotype": 1, "state": 1},
+    {"sample_id": "T1", "locus_id": 1, "haplotype": 0, "state": 0},
+    {"sample_id": "T2", "locus_id": 1, "haplotype": 0, "state": 0},
+    {"sample_id": "T1", "locus_id": 2, "haplotype": 0, "state": 0},
+    {"sample_id": "T1", "locus_id": 3, "haplotype": 1, "state": 1},
+    {"sample_id": "T2", "locus_id": 2, "haplotype": 1, "state": 1},
+    {"sample_id": "T1", "locus_id": 1, "haplotype": 1, "state": 0},
+    {"sample_id": "T2", "locus_id": 3, "haplotype": 0, "state": -1},
+    {"sample_id": "T1", "locus_id": 2, "haplotype": 1, "state": 1},
+    {"sample_id": "T2", "locus_id": 1, "haplotype": 1, "state": 1},
+    {"sample_id": "T1", "locus_id": 3, "haplotype": 0, "state": 1},
+    {"sample_id": "T2", "locus_id": 2, "haplotype": 0, "state": 1}
+  ],
+  "expected_ref_records": [
+    {"node_id": 10, "person_id": "RA1", "ancestry": "AFR"},
+    {"node_id": 11, "person_id": "RA1", "ancestry": "AFR"},
+    {"node_id": 20, "person_id": "RE1", "ancestry": "EUR"},
+    {"node_id": 21, "person_id": "RE1", "ancestry": "EUR"},
+    {"node_id": 30, "person_id": "RS1", "ancestry": "ASIA"},
+    {"node_id": 31, "person_id": "RS1", "ancestry": "ASIA"}
+  ],
+  "ref_state_records": [
+    {"node_id": 31, "locus_id": 3, "state": -1},
+    {"node_id": 10, "locus_id": 1, "state": 0},
+    {"node_id": 20, "locus_id": 2, "state": 0},
+    {"node_id": 11, "locus_id": 3, "state": 1},
+    {"node_id": 30, "locus_id": 1, "state": 1},
+    {"node_id": 21, "locus_id": 1, "state": 1},
+    {"node_id": 10, "locus_id": 2, "state": 0},
+    {"node_id": 31, "locus_id": 1, "state": 1},
+    {"node_id": 20, "locus_id": 3, "state": 0},
+    {"node_id": 11, "locus_id": 1, "state": 0},
+    {"node_id": 30, "locus_id": 3, "state": -1},
+    {"node_id": 21, "locus_id": 2, "state": 0},
+    {"node_id": 10, "locus_id": 3, "state": 1},
+    {"node_id": 31, "locus_id": 2, "state": 1},
+    {"node_id": 20, "locus_id": 1, "state": 0},
+    {"node_id": 11, "locus_id": 2, "state": 1},
+    {"node_id": 30, "locus_id": 2, "state": 1},
+    {"node_id": 21, "locus_id": 3, "state": 0}
+  ],
+  "f0_records": [
+    {"root_seed": 424242, "sample_id": "T2", "chrom": 22, "pos": 200, "ref": "G", "alt": "T", "ANP1": [0.3, 0.3, 0.4], "ANP2": [0.2, 0.5, 0.3]},
+    {"root_seed": 424242, "sample_id": "T1", "chrom": 22, "pos": 200, "ref": "G", "alt": "T", "ANP1": [0.7, 0.2, 0.1], "ANP2": [0.1, 0.2, 0.7]}
+  ]
+}
