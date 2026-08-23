@@ -19,7 +19,7 @@ workflow {
     def root18 = [file(params.m33_t0b_root18_dir, checkIfExists:true),
                   file(params.m33_t0b_root18_verify, checkIfExists:true),
                   file(params.m33_t0b_root18_map, checkIfExists:true)]
-    def t0aChildren = file(params.m33_t0b_t0a_child_receipts, checkIfExists:true)
+    def t0aChildren = files(params.m33_t0b_t0a_child_receipts, checkIfExists:true)
     if (t0aChildren.size() != 12) error 'T0b requires exactly 12 local T0a child receipts'
 
     M33_T0B_PREFLIGHT(
@@ -32,7 +32,7 @@ workflow {
         t0aChildren,
         root17[0], root18[0], root17[1], root18[1], root17[2], root18[2],
     )
-    preflightReceipt = M33_T0B_PREFLIGHT.out.receipt.first()
+    preflightReceipt = M33_T0B_PREFLIGHT.out.receipt
 
     cases = Channel.of(
         tuple('root17', 20260817, 'small_residual_cnn_1d', 0, root17[0], root17[1], root17[2]),
