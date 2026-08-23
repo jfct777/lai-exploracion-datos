@@ -21,7 +21,9 @@
     "forbidden_outputs": ["GT", "AN1", "AN2", "sample_id", "target_rare_phase", "truth"]
   },
   "isolation": {
-    "inputs": "staged_snapshot_read_only_to_unprivileged_runner",
+    "inputs": "nextflow_staged_copy_effectively_read_only_to_unprivileged_runner",
+    "physical_bind_read_only": false,
+    "effective_read_only_probes": true,
     "runner_uid": 65534,
     "container_network": false,
     "container_credentials": false,

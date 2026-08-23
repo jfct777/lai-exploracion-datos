@@ -92,6 +92,13 @@ class TechnicalKatTests(unittest.TestCase):
         self.assertIn("peak_rss_gib <= stop_rss_gib", source)
         self.assertIn('"rss_gate_passed": True', source)
 
+    def test_input_isolation_claim_matches_nextflow_staging(self):
+        contract = json.loads((ROOT / "conf/m33_safe_bridge_technical_kat_contract.json").read_text())
+        isolation = contract["isolation"]
+        self.assertFalse(isolation["physical_bind_read_only"])
+        self.assertTrue(isolation["effective_read_only_probes"])
+        self.assertIn("staged_copy_effectively_read_only", isolation["inputs"])
+
 
 if __name__ == "__main__":
     unittest.main()

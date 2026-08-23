@@ -445,6 +445,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "real_reference_missingness_exercised": False,
         "write_chmod_rename_probes_failed": True, "runner_uid": os.getuid(),
         "runner_euid": os.geteuid(), "network_disabled": True,
+        "physical_bind_read_only": False, "staged_copy_effective_read_only": True,
         "credential_environment_absent": True,
         "artifact_schema": SCHEMAS, "artifact_raw_sha256": raw_hashes,
         "artifact_semantic_sha256": semantic_hashes,
