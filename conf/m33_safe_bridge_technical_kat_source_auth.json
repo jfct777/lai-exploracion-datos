@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "stage": "M33_SAFE_BRIDGE_TECHNICAL_KAT_SOURCE_AUTH",
   "status": "AUTHORIZED_EXACT_TECHNICAL_KAT_SOURCES",
-  "implementation_commit": "2968f56a27f37897ceb24631d390321ac8e789c0",
+  "implementation_commit": "031a123ca6751e93092a3c5354b0ed6c7fc6aa32",
   "files": {
     "bin/m33_safe_bridge_technical_kat.py": "a2344aac8cf5c082fc8ae5253a0218f09762912322c65a5d4b0f649bf38689b1",
     "bin/m33_safe_bridge_core.py": "d5d22619dfc4b4254d1db4c921fb8679849497635c5e2fd0e607112b92f707f5",
@@ -11,11 +11,11 @@
     "bin/m31_ordered_rare_preflight.py": "962436f3def998ad0d0c32415c184997b9f6fecece4e42e7f6b53ea448381276",
     "conf/m33_safe_bridge_technical_kat_contract.json": "bf1e39c894f1a02f15307650e9da3c5fe8b0f46d39a3e68fe98b18b597ed1bd5",
     "conf/m33_safe_bridge_technical_kat_authorization.json": "651f8370190b199e53a2477803f9e49fb08bfad544f17e95fb9dcdd8e4bf7a95",
-    "conf/m33_safe_bridge_technical_kat.config": "40dcfaa0200778324a8ce93e6f30a65a70e5d2ba4bfe87b82c539c136dc1ee48",
-    "modules/33_SAFE_BRIDGE_TECHNICAL_KAT.nf": "24db82037d27c6b6fbf9b1ff64a237ea9765113e547fcdbeeb901d7c5351dc84",
+    "conf/m33_safe_bridge_technical_kat.config": "be6bba3daa507227b050cbfb599e64f2d9008f8136fbd097762b9dbfd15630ed",
+    "modules/33_SAFE_BRIDGE_TECHNICAL_KAT.nf": "8dc62405945a27ea3670ecf1f85a0a85fa1984c0d716da85fe1abb7cf06fa3b3",
     "workflows/m33_safe_bridge_technical_kat.nf": "b1c2b65d942ad17df57a70ff118fe2ba8a013a672ed4e14835c3b99d593c38c4",
     "tests/test_m33_safe_bridge_technical_kat.py": "a65fbc599818e13eb2a3ee482451b91c90195f24370db57a35324a3a1122be70",
-    "tests/test_m33_safe_bridge_technical_kat_nextflow.py": "2f09abef40e2bf8c8ee93bc4c4b9424763fa14349be4cfb10673d06a05da2daa"
+    "tests/test_m33_safe_bridge_technical_kat_nextflow.py": "3a4da0eb7f8da5b139f5adf6e66c6b887d56799bea78b820aebd41d73cea236f"
   },
   "independent_verifier_files": {
     "bin/m33_safe_bridge_technical_verify.py": "44cf2e1573d0e8bf57d0515657bf1cd965ec20add4111e629198cabe5961c8b4",
