@@ -397,8 +397,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "technical_kat_reference_rare_summary_incremental.npz": reference_arrays,
         "technical_kat_flare_f0_sanitized.npz": f0_arrays,
     }
-    require(not args.output_dir.exists() and args.output_dir.parent.is_dir(), "output directory must be new")
-    args.output_dir.mkdir(mode=0o700)
+    require(args.output_dir.is_dir() and not args.output_dir.is_symlink() and
+            not any(args.output_dir.iterdir()),
+            "output directory must be an existing empty isolated directory")
     raw_hashes: dict[str, str] = {}
     semantic_hashes: dict[str, str] = {}
     for name, arrays in outputs.items():

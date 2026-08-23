@@ -80,6 +80,11 @@ class TechnicalKatTests(unittest.TestCase):
         self.assertTrue(all(name.startswith("technical_kat_") for name in M33.SCHEMAS))
         self.assertTrue(all(schema.startswith("tests_") for schema in M33.SCHEMAS.values()))
 
+    def test_runner_requires_precreated_empty_output_directory(self):
+        source = (ROOT / "bin/m33_safe_bridge_technical_kat.py").read_text()
+        self.assertIn("existing empty isolated directory", source)
+        self.assertNotIn("args.output_dir.mkdir", source)
+
 
 if __name__ == "__main__":
     unittest.main()
