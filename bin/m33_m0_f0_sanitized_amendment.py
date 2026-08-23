@@ -219,6 +219,14 @@ def validate_contract(amendment: Mapping[str, Any], base: Mapping[str, Any], bas
     ], "amended MATERIALIZE additions changed")
     require(materialize["exact_input_logical_ids_after_amendment"] == EXPECTED_AMENDED_INPUTS,
             "amended MATERIALIZE input boundary changed")
+    derived_inputs = [
+        value for value in EXPECTED_BASE_INPUTS
+        if value not in materialize["removed_input_logical_ids"]
+    ]
+    derived_inputs[3:3] = materialize["added_input_logical_ids"][:1]
+    derived_inputs.extend(materialize["added_input_logical_ids"][1:])
+    require(derived_inputs == materialize["exact_input_logical_ids_after_amendment"],
+            "declared add/remove delta does not reconstruct amended MATERIALIZE inputs")
     joined = " ".join(materialize["exact_input_logical_ids_after_amendment"]).lower()
     for forbidden in materialize["forbidden_inputs"]:
         require(forbidden.lower() not in joined, f"forbidden MATERIALIZE input present: {forbidden}")
