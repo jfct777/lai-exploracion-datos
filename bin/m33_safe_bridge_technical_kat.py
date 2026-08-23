@@ -11,6 +11,7 @@ import json
 import math
 import os
 import re
+import resource
 import socket
 from collections import Counter
 from pathlib import Path
@@ -138,6 +139,10 @@ def validate_contract(contract: dict[str, Any]) -> None:
         "ignored_source_fields": ["GT", "AN1", "AN2"],
         "forbidden_outputs": ["GT", "AN1", "AN2", "sample_id", "target_rare_phase", "truth"],
     }, "F0 projection drifted")
+    execution = contract.get("execution", {})
+    require(execution.get("memory_gib_per_root") == 4 and
+            execution.get("stop_rss_gib_per_root") == 3.2,
+            "technical KAT memory gate drifted")
 
 
 def validate_authorization(payload: dict[str, Any], root_label: str, root_seed: int,
@@ -412,6 +417,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     input_hashes_post = {name: sha256_file(path) for name, path in sorted(inputs.items())}
     require(input_hashes_post == input_hashes_pre, "an input changed during SAFE_BRIDGE")
     legacy_target = np.where(observed, np.nansum(rare.hap_presence[keep], axis=2), -1).astype(np.int8)
+    peak_rss_gib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024.0 ** 2)
+    stop_rss_gib = float(contract["execution"]["stop_rss_gib_per_root"])
+    require(peak_rss_gib <= stop_rss_gib,
+            f"observed peak RSS exceeds stop rule: {peak_rss_gib:.6f} > {stop_rss_gib:.6f} GiB")
     receipt = {
         "stage": STAGE, "schema_id": "tests_m33_safe_bridge_technical_kat_receipt_v1",
         "status": STATUS, "root_label": args.root_label, "root_seed": args.root_seed,
@@ -444,6 +453,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "authorization_sha256": sha256_file(args.authorization),
         "source_auth_sha256": source_auth_sha, "git_commit": args.git_commit,
         "oci_digest": args.oci_digest, "nextflow_version": args.nextflow_version,
+        "peak_rss_gib_observed": peak_rss_gib,
+        "stop_rss_gib_per_root": stop_rss_gib,
+        "rss_gate_passed": True,
         "append_only": True, "reopen_verified": True,
     }
     write_exclusive_json(args.output_dir / "safe_bridge_technical_kat.receipt.json", receipt)

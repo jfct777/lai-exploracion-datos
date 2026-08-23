@@ -86,6 +86,12 @@ class TechnicalKatTests(unittest.TestCase):
         self.assertNotIn("args.output_dir.mkdir", source)
         self.assertNotIn("os.chmod(args.output_dir", source)
 
+    def test_runner_measures_and_enforces_peak_rss(self):
+        source = (ROOT / "bin/m33_safe_bridge_technical_kat.py").read_text()
+        self.assertIn("resource.getrusage(resource.RUSAGE_SELF).ru_maxrss", source)
+        self.assertIn("peak_rss_gib <= stop_rss_gib", source)
+        self.assertIn('"rss_gate_passed": True', source)
+
 
 if __name__ == "__main__":
     unittest.main()
