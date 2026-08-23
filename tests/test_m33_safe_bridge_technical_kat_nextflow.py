@@ -16,6 +16,7 @@ class TechnicalKatNextflowTests(unittest.TestCase):
         module = (ROOT / "modules/33_SAFE_BRIDGE_TECHNICAL_KAT.nf").read_text()
         config = (ROOT / "conf/m33_safe_bridge_technical_kat.config").read_text()
         self.assertIn("setpriv --reuid=65534 --regid=65534", module)
+        self.assertIn("chmod 0500 '${root_label}.technical_kat'", module)
         self.assertIn("env -u HOME -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_CONFIG", module)
         self.assertIn("--network=none", config)
         self.assertIn("--read-only", config)

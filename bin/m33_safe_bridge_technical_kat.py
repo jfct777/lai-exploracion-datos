@@ -447,7 +447,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "append_only": True, "reopen_verified": True,
     }
     write_exclusive_json(args.output_dir / "safe_bridge_technical_kat.receipt.json", receipt)
-    os.chmod(args.output_dir, 0o500)
     return receipt
 
 

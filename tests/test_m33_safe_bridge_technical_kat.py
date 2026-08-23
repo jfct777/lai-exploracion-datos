@@ -84,6 +84,7 @@ class TechnicalKatTests(unittest.TestCase):
         source = (ROOT / "bin/m33_safe_bridge_technical_kat.py").read_text()
         self.assertIn("existing empty isolated directory", source)
         self.assertNotIn("args.output_dir.mkdir", source)
+        self.assertNotIn("os.chmod(args.output_dir", source)
 
 
 if __name__ == "__main__":
