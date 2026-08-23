@@ -1,17 +1,24 @@
 {
-  "git_commit": "b3f24f28141b3f47c4ae690eac6fb27409fdcbfa",
+  "git_commit": "1117b406ea806564774510fcc0ad1ab98c10b629",
   "source_sha256": {
+    "bin/m31_ordered_linear.py": "50e4c070ee39fb5581cbc31dc46640de61fd4853d852dccc32f224b4957bae01",
+    "bin/m33_m0_contract.py": "758aeb8daaeac2732c69598e1734a1705d4a45f8a79b01d4592f9d7a48a36be2",
     "bin/m33_m0_factorized_lazy_amendment.py": "7e7456ce5e8033a924eb25713e2680e7224ee6ac23f39493cb1f3da4cf189e93",
-    "bin/m33_m0_factorized_lazy_source_auth.py": "46a9221a99b165c4af1d3ad8160129ded3000b318b39faa4a0823ca0bc7c099f",
-    "bin/m33_materialize.py": "02184cd7f5067892d9c64ebf6ecbc241058d86fc9b072cfc5f30f6b74aa4eded",
+    "bin/m33_m0_factorized_lazy_source_auth.py": "73045fab599659eb297fa1485390db09d7972d0a461f92f15fc69d385c94c8e6",
+    "bin/m33_m0_factorized_lazy_technical_kat.py": "4fa3c6509def0a7df4b208f1aa20e5381a3e39640203f646ea73aee3c1e43144",
+    "bin/m33_materialize.py": "5db405a9d8eedf977c4860dda6c6bacf2f67a763e4784d09c02e400ddbd7a2c0",
     "conf/m33_m0_factorized_lazy_amendment_contract.json": "9e125293f09580c1daa49dd9040e1e0e3047c9cafe2942e0a93c0e7bcf78df76",
     "conf/m33_m0_factorized_lazy_contract.config": "cb4e647de017a3311fc64cd1e0df474bfc423bbe3508c8e6412e14837086fc25",
+    "conf/m33_m0_factorized_lazy_technical_kat.config": "8c7f6d42a6d2f590adb0a73464e87f1c676bac3a7ddaf9874a3839ddccd6c357",
     "modules/33_M0_FACTORIZED_LAZY_CONTRACT.nf": "98347a57ee21c99c78268c9b5a8f22c43c9f1590de743190576c8e756d426aff",
+    "modules/33_M0_FACTORIZED_LAZY_TECHNICAL_KAT.nf": "3b7d404e5815172a3f44ed7b332e8dfb08db438e9f6abd4a1bad22485b396c88",
     "tests/test_m33_m0_factorized_lazy_amendment.py": "b262d00ca12c380834d36ee3c6c2d287ffd965f735f686bb2fcce2e6df2f035c",
     "tests/test_m33_m0_factorized_lazy_nextflow.py": "5d1dd2464b50e53f78b4e2fc5f6a633a990342231576523d3fc0cb4f75c6a557",
-    "tests/test_m33_m0_factorized_lazy_source_auth.py": "0528cd252f8213c2279a1e0476d781913bd7cc57150461b92f08ee9c6c0db7c1",
+    "tests/test_m33_m0_factorized_lazy_source_auth.py": "a436bb0fd1b62d626bc354d2b5b8ce92e5c5fdc6269b11cfbe89e589f086861f",
+    "tests/test_m33_m0_factorized_lazy_technical_kat.py": "0d790b9b52ff79e00139a9f0978f7b869128165f940ecc9e8f008144ffef559a",
     "tests/test_m33_materialize.py": "b443be68f6c351eaf101ea8333ecd196b0e956398f9bb31e54330ad232093a79",
-    "workflows/m33_m0_factorized_lazy_contract.nf": "08fcb6f0a581f5a3538f2a83618521ac5799a78aaef825202953973c73c78dd4"
+    "workflows/m33_m0_factorized_lazy_contract.nf": "08fcb6f0a581f5a3538f2a83618521ac5799a78aaef825202953973c73c78dd4",
+    "workflows/m33_m0_factorized_lazy_technical_kat.nf": "ebff648167401bec08b90a6d0a3d3f39cb20ef1bb91b88878c74ed5ac150c93a"
   },
   "stage": "M33_M0_FACTORIZED_LAZY_SOURCE_AUTH",
   "status": "PASS_EXACT_COMMIT_AND_SOURCE_HASHES"
