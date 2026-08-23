@@ -54,6 +54,25 @@ class PreparedChannelBatch(NamedTuple):
     fit_normalization_manifest_sha256: str
 
 
+class ValidatedIntervalTable(NamedTuple):
+    """Process-local proof that an exact interval table passed full validation."""
+    intervals_object_id: int
+    rare_cm_object_id: int
+    marker_cm_object_id: int
+    marker_count: int
+    member_binding: tuple[tuple[str, int, str, tuple[int, ...]], ...]
+
+
+def _interval_member_binding(
+    intervals: Mapping[str, np.ndarray],
+) -> tuple[tuple[str, int, str, tuple[int, ...]], ...]:
+    require(set(intervals) == {"radii_cM", "context_start", "context_stop"},
+            "interval members differ")
+    return tuple((name, id(intervals[name]), str(np.asarray(intervals[name]).dtype),
+                  tuple(np.asarray(intervals[name]).shape))
+                 for name in ("radii_cM", "context_start", "context_stop"))
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
@@ -303,6 +322,38 @@ def validate_interval_table(intervals: Mapping[str, np.ndarray], rare_cm: np.nda
                 "interval content differs from the cM axes")
 
 
+def authenticate_interval_table(
+    intervals: Mapping[str, np.ndarray], rare_cm: np.ndarray, marker_cm: np.ndarray,
+) -> ValidatedIntervalTable:
+    """Validate once and bind the table to its exact in-process source objects."""
+    validate_interval_table(intervals, rare_cm, marker_cm)
+    np.asarray(rare_cm).flags.writeable = False
+    np.asarray(marker_cm).flags.writeable = False
+    for value in intervals.values():
+        np.asarray(value).flags.writeable = False
+    return ValidatedIntervalTable(
+        intervals_object_id=id(intervals), rare_cm_object_id=id(rare_cm),
+        marker_cm_object_id=id(marker_cm), marker_count=int(marker_cm.size),
+        member_binding=_interval_member_binding(intervals),
+    )
+
+
+def build_authenticated_interval_table(
+    rare_cm: np.ndarray, marker_cm: np.ndarray,
+) -> tuple[dict[str, np.ndarray], ValidatedIntervalTable]:
+    """Build, fully validate once, and bind an interval table for repeated shards."""
+    intervals = build_interval_table(rare_cm, marker_cm)
+    np.asarray(rare_cm).flags.writeable = False
+    np.asarray(marker_cm).flags.writeable = False
+    for value in intervals.values():
+        np.asarray(value).flags.writeable = False
+    return intervals, ValidatedIntervalTable(
+        intervals_object_id=id(intervals), rare_cm_object_id=id(rare_cm),
+        marker_cm_object_id=id(marker_cm), marker_count=int(marker_cm.size),
+        member_binding=_interval_member_binding(intervals),
+    )
+
+
 def validate_reference_summary(reference: Mapping[str, np.ndarray]) -> None:
     """Validate the authenticated aggregate REF schema before normalization."""
     require(set(reference) == PRODUCTIVE_MEMBERS["reference"], "REF members differ")
@@ -442,6 +493,7 @@ def build_lazy_packed_shard(
     expected_root_seed: int | None = None, expected_rotation_id: str | None = None,
     expected_fit_normalization_manifest_sha256: str | None = None,
     inputs_already_validated: bool = False,
+    interval_validation: ValidatedIntervalTable | None = None,
 ) -> dict[str, np.ndarray]:
     """Rebuild one packed view from canonical factors without persisting it."""
     if not inputs_already_validated:
@@ -450,7 +502,20 @@ def build_lazy_packed_shard(
     sample_count = np.asarray(target["sample_key_sha256"]).size
     marker_count = np.asarray(f0["marker_pos"]).size
     rare_cm = np.asarray(selected["cM"])
-    validate_interval_table(intervals, rare_cm, np.asarray(marker_cm))
+    marker_cm = np.asarray(marker_cm)
+    if interval_validation is None:
+        validate_interval_table(intervals, rare_cm, marker_cm)
+    else:
+        require(inputs_already_validated and
+                isinstance(interval_validation, ValidatedIntervalTable) and
+                interval_validation == ValidatedIntervalTable(
+                    id(intervals), id(rare_cm), id(marker_cm), int(marker_cm.size),
+                    _interval_member_binding(intervals)),
+                "process-local interval validation binding differs")
+        require(all(not np.asarray(value).flags.writeable for value in intervals.values()),
+                "authenticated interval table became writeable")
+        require(not rare_cm.flags.writeable and not marker_cm.flags.writeable,
+                "authenticated interval source axis became writeable")
     require(0 <= person_start < person_end_exclusive <= sample_count and
             person_end_exclusive - person_start <= PERSON_BATCH, "person range differs")
     require(0 <= marker_start < marker_end_exclusive <= marker_count, "marker range differs")

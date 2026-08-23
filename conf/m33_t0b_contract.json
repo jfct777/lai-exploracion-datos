@@ -1,0 +1,105 @@
+{
+  "stage": "M33_T0B_FULL_CHR22_CONTRACT",
+  "status": "FROZEN_BEFORE_EXECUTION",
+  "scope": {
+    "purpose": "Verify that the two frozen residual model families can complete inference-only streaming over the full chromosome 22 marker axis.",
+    "scientific_evidence": false,
+    "training_or_model_selection": false,
+    "technical_roots": {
+      "root17": 20260817,
+      "root18": 20260818
+    },
+    "marker_count": 79791,
+    "radii_cM": [0.05, 0.1, 0.2, 0.5],
+    "model_families": ["local_linear", "small_residual_cnn_1d"],
+    "cases": [
+      ["root17", "local_linear", 0],
+      ["root18", "local_linear", 0],
+      ["root17", "small_residual_cnn_1d", 0],
+      ["root17", "small_residual_cnn_1d", 1],
+      ["root18", "small_residual_cnn_1d", 0]
+    ]
+  },
+  "authenticated_t0a": {
+    "aggregate_sha256": "28035d231f4c7be2040191ff7bd78092244506c33127e607878f05dd8f3d4915",
+    "source_auth_sha256": "7c80f58c394b05ebf4c9a1272aa9bb25df23de47d5765a755e7ce6a1060e901b",
+    "child_receipt_count": 12,
+    "total_receipt_count_including_aggregate": 13
+  },
+  "expected_inputs": {
+    "root17": {
+      "target_count": 30,
+      "rare_locus_count": 94029,
+      "bridge_receipt_sha256": "9074520aa7bd69d8b7d9e25cb2d13275dc16f52fceb2c70ed9323b586a02eb6d",
+      "independent_verify_receipt_sha256": "da1542830a01a13778c27d7bbc0823ea09b539ae05e12a5255801d4350f40aa6",
+      "genetic_map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+      "technical_npz_sha256": {
+        "technical_kat_flare_f0_sanitized.npz": "3ab0c7b079570ce536a089a30e579e33e711a50741e46b3f204510955fcfab90",
+        "technical_kat_reference_rare_summary_incremental.npz": "737aeb833c2347d98c1b51660f7a79f90e1c45367ed14bcae5bf0aaf00dfdc38",
+        "technical_kat_selected_loci_incremental.npz": "3eaedbd8d4e56cce113dffa691b3722b4bcc237e814f816cca95446840352b49",
+        "technical_kat_target_rare_diploid_incremental.npz": "a2bb40d0b0bb40706500fb8d21fda93be8f3534c8531b8090da420abb25cbe90"
+      }
+    },
+    "root18": {
+      "target_count": 30,
+      "rare_locus_count": 94703,
+      "bridge_receipt_sha256": "dbe8a4a931d6fb3c4f64cfddc5442b54f200ffeed2584f91663b20508a8f6a09",
+      "independent_verify_receipt_sha256": "d986890a7bce6bd0883d9d5667e4209f777bd0f3f670c7ac9eb9355a1f3f65b0",
+      "genetic_map_sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+      "technical_npz_sha256": {
+        "technical_kat_flare_f0_sanitized.npz": "bc7e4c90c22c5148ceaa59b9c2ea66a15d56ecc73aff7cb18088984886387767",
+        "technical_kat_reference_rare_summary_incremental.npz": "ca2010d949f48abe321face50a5727670eb6d23ec150a97fef71b9f6a74f3ae6",
+        "technical_kat_selected_loci_incremental.npz": "a74658b3e0adad9710748daaa99b6b2795d5cc825aabb3518dc7e7e0cf2198f2",
+        "technical_kat_target_rare_diploid_incremental.npz": "4832a6cde96ad39ae51039c3d5bdebe0a291138a44160697fbed5a88614ecdc2"
+      }
+    }
+  },
+  "execution": {
+    "device": "cpu",
+    "inference_only": true,
+    "zero_initialized_residual_head": true,
+    "maximum_padded_tokens_per_batch": 262144,
+    "process_memory_gib": 6,
+    "memory_warning_fraction": 0.70,
+    "memory_stop_fraction": 0.80,
+    "maximum_parallel_forward_processes": 3,
+    "minimum_preflight_mem_available_gib": 26,
+    "process_time_limit_hours": 10,
+    "network_disabled": true,
+    "persisted_outputs": "receipts_only"
+  },
+  "sentinel_replay": {
+    "marker_positions_per_radius": ["first", "middle", "last"],
+    "passes": 2,
+    "required_result": "byte_exact_semantic_hashes_and_counters"
+  },
+  "cross_process_gate": {
+    "exact_repeat_pair": ["root17", "small_residual_cnn_1d", [0, 1]],
+    "required_exact_fields": [
+      "output_semantic_sha256",
+      "feature_semantic_sha256",
+      "valid_tokens",
+      "padded_tokens",
+      "row_count",
+      "shard_count",
+      "maximum_valid_tokens_per_shard",
+      "sentinel_replay"
+    ],
+    "ranking_or_selection": false
+  },
+  "runtime_estimate_from_t0a": {
+    "local_linear_hours_per_process": [2.6, 2.8],
+    "small_residual_cnn_1d_hours_per_process": [5.2, 5.4],
+    "estimated_wall_hours_with_three_parallel_processes": [8, 10],
+    "interpretation": "Planning estimate scaled from the completed 512-marker T0a measurements; it is not an observed T0b runtime."
+  },
+  "stop_rules": [
+    "Stop before forward execution if the T0a aggregate, source authentication, or any of its 12 child receipts cannot be authenticated exactly.",
+    "Stop before forward execution if the full chromosome 22 marker count is not exactly 79791 for both roots.",
+    "Stop before launching three concurrent forward processes if MemAvailable is below 26 GiB.",
+    "Stop a forward process if peak RSS reaches 80 percent of its 6 GiB memory limit; flag a warning at 70 percent.",
+    "Stop if any truth, optimizer, training, gradient, prediction persistence, model ranking, or radius ranking path is observed.",
+    "Stop if any first, middle, or last marker sentinel differs between its two in-process replay passes.",
+    "Stop if root17 CNN repetitions 0 and 1 differ in any required full-run hash or counter."
+  ]
+}
