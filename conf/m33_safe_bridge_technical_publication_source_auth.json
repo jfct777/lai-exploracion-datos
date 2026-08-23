@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M33_SAFE_BRIDGE_TECHNICAL_PUBLICATION_SOURCE_AUTH",
+  "status": "AUTHORIZED_EXACT_PUBLICATION_SOURCES",
+  "files": {
+    "bin/m33_safe_bridge_technical_publish.py": "17f8827d0a1f84dcf99d3c95811fdcdcd64703bac12918163e679eb52bc85f7b",
+    "conf/m33_safe_bridge_technical_publication_authorization.json": "2b5a0124a6de56df66ca4c4e8fc2fbecb57a97de382e15a59a15699fc7b96637",
+    "conf/m33_safe_bridge_technical_publication_config.json": "e63950fdc841a045ba26061737dcbe36fb63eb5e72a5cba578a4f901685d3b03",
+    "conf/m33_storage_namespace_policy.json": "ff9143e29fe154cc5d793a7b36efe91cefc08ff012f8024ffa1c39b7b1adc1da",
+    "tests/test_m33_safe_bridge_technical_publish.py": "496f8d2df923e027b65d69c2b78c2925d24b91804ad68237278aa50b1a0aa91e"
+  }
+}
