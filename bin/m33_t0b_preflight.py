@@ -17,6 +17,8 @@ EXPECTED_T0A_SOURCE_AUTH_SHA256 = "7c80f58c394b05ebf4c9a1272aa9bb25df23de47d5765
 EXPECTED_MARKERS = 79_791
 EXPECTED_CHILDREN = 12
 MINIMUM_MEM_AVAILABLE_GIB = 26.0
+PROCESS_MEMORY_GIB = 8
+MAXIMUM_PARALLEL_FORWARD_PROCESSES = 3
 NPZ_NAMES = (
     "technical_kat_flare_f0_sanitized.npz",
     "technical_kat_reference_rare_summary_incremental.npz",
@@ -109,6 +111,13 @@ def run_preflight(args: argparse.Namespace) -> dict[str, Any]:
     require(contract.get("stage") == "M33_T0B_FULL_CHR22_CONTRACT" and
             contract.get("status") == "FROZEN_BEFORE_EXECUTION",
             "T0b contract identity differs")
+    execution = contract.get("execution", {})
+    require(execution.get("process_memory_gib") == PROCESS_MEMORY_GIB and
+            execution.get("maximum_parallel_forward_processes") ==
+            MAXIMUM_PARALLEL_FORWARD_PROCESSES and
+            execution.get("minimum_preflight_mem_available_gib") ==
+            MINIMUM_MEM_AVAILABLE_GIB,
+            "T0b contract resource identity differs")
     require(sha256_file(args.t0a_aggregate) == EXPECTED_AGGREGATE_SHA256 and
             sha256_file(args.t0a_source_auth) == EXPECTED_T0A_SOURCE_AUTH_SHA256,
             "authenticated T0a anchor differs")
@@ -164,7 +173,7 @@ def run_preflight(args: argparse.Namespace) -> dict[str, Any]:
         "input_identity_by_root": identities,
         "mem_available_gib": available,
         "minimum_mem_available_gib": MINIMUM_MEM_AVAILABLE_GIB,
-        "maximum_parallel_forward_processes": 3,
+        "maximum_parallel_forward_processes": MAXIMUM_PARALLEL_FORWARD_PROCESSES,
         "contract_sha256": sha256_file(args.contract),
         "implementation_commit": args.implementation_commit,
         "source_auth_sha256": source_auth_sha,

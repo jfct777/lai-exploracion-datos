@@ -33,6 +33,7 @@ EXACT_REPEAT_FIELDS = (
     "zero_residual_F0_max_abs", "simplex_max_abs", "invariance_checks",
     "sentinel_replay", "sentinel_replay_exact", "sentinel_passes",
     "memory_warning_fraction", "memory_stop_fraction", "device", "vram_applicable",
+    "memory_limit_gib",
     "torch_version", "oci_image", "implementation_commit", "source_auth_sha256",
     "contract_sha256", "preflight_receipt_sha256", "bridge_receipt_sha256",
 )
@@ -81,7 +82,10 @@ def compare_receipts(
     contract = load_json(contract_path)
     contract_sha = sha256_file(contract_path)
     require(contract.get("stage") == "M33_T0B_FULL_CHR22_CONTRACT" and
-            contract.get("status") == "FROZEN_BEFORE_EXECUTION",
+            contract.get("status") == "FROZEN_BEFORE_EXECUTION" and
+            contract.get("execution", {}).get("process_memory_gib") == 8 and
+            contract.get("execution", {}).get("maximum_parallel_forward_processes") == 3 and
+            contract.get("execution", {}).get("minimum_preflight_mem_available_gib") == 26,
             "T0b comparison contract differs")
     expected_inputs = contract.get("expected_inputs", {})
     require(set(expected_inputs) == {"root17", "root18"},
@@ -175,6 +179,8 @@ def compare_receipts(
                 "T0b child firewall differs")
         require(payload.get("memory_stop_fraction") == 0.80 and
                 payload.get("memory_warning_fraction") == 0.70 and
+                type(payload.get("memory_limit_gib")) in (int, float) and
+                math.isclose(payload["memory_limit_gib"], 8.0, abs_tol=0.1) and
                 type(payload.get("peak_rss_fraction")) in (int, float) and
                 math.isfinite(payload["peak_rss_fraction"]) and
                 0 <= payload["peak_rss_fraction"] < 0.80 and

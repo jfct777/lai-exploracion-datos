@@ -103,10 +103,32 @@ class M33T0bTests(unittest.TestCase):
         self.assertEqual(contract["scope"]["marker_count"], 79_791)
         self.assertEqual(contract["scope"]["radii_cM"], [0.05, 0.1, 0.2, 0.5])
         self.assertEqual(contract["execution"]["maximum_padded_tokens_per_batch"], 262_144)
-        self.assertEqual(contract["execution"]["process_memory_gib"], 6)
+        self.assertEqual(contract["execution"]["process_memory_gib"], 8)
         self.assertEqual(contract["execution"]["minimum_preflight_mem_available_gib"], 26)
         self.assertEqual(contract["execution"]["maximum_parallel_forward_processes"], 3)
         self.assertEqual(len(contract["scope"]["cases"]), 5)
+        amendment = contract["resource_amendment"]
+        self.assertEqual(amendment["evidence_run_id"], "m33-t0b-20260823c")
+        self.assertEqual(amendment["previous_process_memory_gib"], 6)
+        self.assertEqual(amendment["amended_process_memory_gib"], 8)
+        self.assertAlmostEqual(amendment["expected_fraction_at_measured_peak"], 0.607137)
+        self.assertFalse(amendment["scientific_parameters_changed"])
+
+    def test_forward_contract_rejects_resource_drift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "contract.json"
+            original = json.loads((ROOT / "conf/m33_t0b_contract.json").read_text())
+            for field, value in (
+                ("process_memory_gib", 6),
+                ("maximum_parallel_forward_processes", 2),
+                ("minimum_preflight_mem_available_gib", 24),
+            ):
+                with self.subTest(field=field):
+                    payload = json.loads(json.dumps(original))
+                    payload["execution"][field] = value
+                    path.write_text(json.dumps(payload), encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "frozen contract differs"):
+                        FORWARD.validate_contract(path)
 
     def test_source_inventory_covers_all_runtime_and_orchestration(self):
         expected = {
@@ -130,10 +152,10 @@ class M33T0bTests(unittest.TestCase):
         self.assertIn("preflightreceipt", workflow.lower())
         self.assertIn("maxforks 3", module.lower())
         self.assertIn("maxforks = 3", config.lower())
-        self.assertIn("memory '6 gb'", module.lower())
+        self.assertIn("memory '8 gb'", module.lower())
         self.assertIn("time '10h'", module.lower())
         self.assertIn("--network none", combined)
-        self.assertIn("--memory 6g", combined)
+        self.assertIn("--memory 8g", combined)
         self.assertIn("path root17_map, stageAs: 'root17-map/*'", module)
         self.assertIn("path root18_map, stageAs: 'root18-map/*'", module)
         cases = workflow.split("cases = Channel.of(", 1)[1].split("\n    )", 1)[0]
@@ -170,7 +192,8 @@ class M33T0bTests(unittest.TestCase):
             "implementation_commit": "b" * 40, "oci_image": OCI,
             "child_receipts": inventory,
         }), encoding="utf-8")
-        contract = ROOT / "conf/m33_t0b_contract.json"
+        contract = base / "m33_t0b_contract.json"
+        contract.write_bytes((ROOT / "conf/m33_t0b_contract.json").read_bytes())
         meminfo = base / "meminfo"
         meminfo.write_text("MemTotal:       33554432 kB\nMemAvailable:   29360128 kB\n")
         args = Namespace(
@@ -231,7 +254,7 @@ class M33T0bTests(unittest.TestCase):
                     PREFLIGHT.marker_count(root)
 
     def test_preflight_rejects_missing_marker_low_memory_and_tampered_source(self):
-        for mutation in ("marker", "memory", "source"):
+        for mutation in ("marker", "memory", "source", "contract_memory"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
                 base = Path(directory)
                 args, aggregate, t0a_auth = self.preflight_fixture(base)
@@ -245,6 +268,10 @@ class M33T0bTests(unittest.TestCase):
                         "MemTotal:       33554432 kB\nMemAvailable:   25165824 kB\n")
                 if mutation == "source":
                     (args.source_root / "bin/m33_t0b_preflight.py").write_text("# tampered\n")
+                if mutation == "contract_memory":
+                    payload = json.loads(args.contract.read_text())
+                    payload["execution"]["process_memory_gib"] = 6
+                    args.contract.write_text(json.dumps(payload), encoding="utf-8")
                 with mock.patch.object(PREFLIGHT, "EXPECTED_AGGREGATE_SHA256",
                                        sha256_file(aggregate)), \
                      mock.patch.object(PREFLIGHT, "EXPECTED_T0A_SOURCE_AUTH_SHA256",
@@ -359,7 +386,8 @@ class M33T0bTests(unittest.TestCase):
                 "invariance_checks": {"all": 0.0},
                 "sentinel_replay": sentinels, "sentinel_replay_exact": True,
                 "sentinel_passes": 2, "memory_warning_fraction": 0.70,
-                "memory_stop_fraction": 0.80, "peak_rss_fraction": 0.2,
+                "memory_stop_fraction": 0.80, "memory_limit_gib": 8.0,
+                "peak_rss_fraction": 0.2,
                 "memory_warning": False,
                 "device": "cpu", "vram_applicable": False, "torch_version": "test",
                 "oci_image": OCI, "implementation_commit": COMMIT,
@@ -386,7 +414,7 @@ class M33T0bTests(unittest.TestCase):
     def test_comparator_rejects_truth_identity_missing_case_sentinel_and_tampering(self):
         for mutation in ("truth", "identity", "missing", "sentinel", "source",
                          "parameter", "hash", "counter", "invariance", "boolean_metric",
-                         "root18_bridge", "preflight_identity"):
+                         "root18_bridge", "preflight_identity", "memory_limit"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
                 paths, auth, staged, contract, preflight = self.compare_fixture(Path(directory))
                 payload = json.loads(paths[0].read_text())
@@ -420,8 +448,10 @@ class M33T0bTests(unittest.TestCase):
                     preflight_payload = json.loads(preflight.read_text())
                     preflight_payload["input_identity_by_root"]["root18"]["rare_locus_count"] -= 1
                     preflight.write_text(json.dumps(preflight_payload), encoding="utf-8")
+                elif mutation == "memory_limit":
+                    payload["memory_limit_gib"] = 6.0
                 if mutation in {"truth", "identity", "sentinel", "parameter", "hash",
-                                "counter", "invariance", "boolean_metric"}:
+                                "counter", "invariance", "boolean_metric", "memory_limit"}:
                     paths[0].write_text(json.dumps(payload), encoding="utf-8")
                 with self.assertRaises(ValueError):
                     COMPARE.compare_receipts(paths, auth, staged, COMMIT, OCI,

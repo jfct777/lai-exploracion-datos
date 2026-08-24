@@ -31,6 +31,9 @@ EXPECTED_CASES = {
     ("root17", "small_residual_cnn_1d", 1),
     ("root18", "small_residual_cnn_1d", 0),
 }
+EXPECTED_PROCESS_MEMORY_GIB = 8.0
+EXPECTED_MAXIMUM_PARALLEL_PROCESSES = 3
+EXPECTED_MINIMUM_MEM_AVAILABLE_GIB = 26.0
 
 
 def require(condition: bool, message: str) -> None:
@@ -80,8 +83,13 @@ def validate_contract(path: Path) -> str:
             scope.get("radii_cM") == RADII_CM and
             {tuple(case) for case in scope.get("cases", [])} == EXPECTED_CASES and
             execution.get("maximum_padded_tokens_per_batch") == t0a.MAX_PADDED_TOKENS and
+            execution.get("process_memory_gib") == EXPECTED_PROCESS_MEMORY_GIB and
             execution.get("memory_warning_fraction") == 0.70 and
-            execution.get("memory_stop_fraction") == 0.80,
+            execution.get("memory_stop_fraction") == 0.80 and
+            execution.get("maximum_parallel_forward_processes") ==
+            EXPECTED_MAXIMUM_PARALLEL_PROCESSES and
+            execution.get("minimum_preflight_mem_available_gib") ==
+            EXPECTED_MINIMUM_MEM_AVAILABLE_GIB,
             "T0b frozen contract differs")
     return sha256_file(path)
 
@@ -93,8 +101,11 @@ def validate_preflight(path: Path, contract_sha256: str, implementation_commit: 
             payload.get("status") == "PASS_T0B_PREFLIGHT_THREE_WAY_ONLY" and
             payload.get("marker_count_by_root") == {
                 "root17": FULL_MARKER_COUNT, "root18": FULL_MARKER_COUNT} and
-            payload.get("maximum_parallel_forward_processes") == 3 and
-            payload.get("mem_available_gib", 0) >= 26.0 and
+            payload.get("maximum_parallel_forward_processes") ==
+            EXPECTED_MAXIMUM_PARALLEL_PROCESSES and
+            payload.get("minimum_mem_available_gib") ==
+            EXPECTED_MINIMUM_MEM_AVAILABLE_GIB and
+            payload.get("mem_available_gib", 0) >= EXPECTED_MINIMUM_MEM_AVAILABLE_GIB and
             payload.get("contract_sha256") == contract_sha256 and
             payload.get("implementation_commit") == implementation_commit and
             payload.get("source_auth_sha256") == source_auth_sha256,
@@ -247,8 +258,9 @@ def run_root(args: argparse.Namespace) -> dict[str, Any]:
     maxima = {name: int(reference["callable_an"][index].max())
               for index, name in enumerate(("AFR", "EUR", "ASIA"))}
     limit_bytes = t0a.memory_limit_bytes()
-    require(5.9 <= limit_bytes / (1024.0 ** 3) <= 6.1,
-            "T0b process memory limit is not 6 GiB")
+    observed_limit_gib = limit_bytes / (1024.0 ** 3)
+    require(abs(observed_limit_gib - EXPECTED_PROCESS_MEMORY_GIB) <= 0.1,
+            "T0b process memory limit differs from the frozen contract")
     started = time.monotonic()
     output_digest, feature_digest = hashlib.sha256(), hashlib.sha256()
     total_tokens = padded_tokens = total_rows = total_shards = maximum_valid_tokens = 0

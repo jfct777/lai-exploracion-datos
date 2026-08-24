@@ -48,7 +48,7 @@ process M33_T0B_FORWARD {
     publishDir { "${params.m33_t0b_results_dir}/${params.m33_t0b_run_id}" },
                mode: 'copy', overwrite: false
     cpus 1
-    memory '6 GB'
+    memory '8 GB'
     time '10h'
     maxForks 3
 

@@ -59,7 +59,7 @@
     "inference_only": true,
     "zero_initialized_residual_head": true,
     "maximum_padded_tokens_per_batch": 262144,
-    "process_memory_gib": 6,
+    "process_memory_gib": 8,
     "memory_warning_fraction": 0.70,
     "memory_stop_fraction": 0.80,
     "maximum_parallel_forward_processes": 3,
@@ -67,6 +67,27 @@
     "process_time_limit_hours": 10,
     "network_disabled": true,
     "persisted_outputs": "receipts_only"
+  },
+  "resource_amendment": {
+    "reason": "The first full-chromosome attempt reached the preregistered RSS stop at 0.809516 of a 6 GiB process limit; the measured peak was 4.857096 GiB.",
+    "evidence_run_id": "m33-t0b-20260823c",
+    "previous_process_memory_gib": 6,
+    "amended_process_memory_gib": 8,
+    "expected_fraction_at_measured_peak": 0.607137,
+    "scientific_parameters_changed": false,
+    "preserved": [
+      "marker_count",
+      "radii_cM",
+      "model_families",
+      "cases",
+      "roots",
+      "seeds",
+      "maximum_padded_tokens_per_batch",
+      "memory_warning_fraction",
+      "memory_stop_fraction",
+      "maximum_parallel_forward_processes",
+      "minimum_preflight_mem_available_gib"
+    ]
   },
   "sentinel_replay": {
     "marker_positions_per_radius": ["first", "middle", "last"],
@@ -97,7 +118,7 @@
     "Stop before forward execution if the T0a aggregate, source authentication, or any of its 12 child receipts cannot be authenticated exactly.",
     "Stop before forward execution if the full chromosome 22 marker count is not exactly 79791 for both roots.",
     "Stop before launching three concurrent forward processes if MemAvailable is below 26 GiB.",
-    "Stop a forward process if peak RSS reaches 80 percent of its 6 GiB memory limit; flag a warning at 70 percent.",
+    "Stop a forward process if peak RSS reaches 80 percent of its 8 GiB memory limit; flag a warning at 70 percent.",
     "Stop if any truth, optimizer, training, gradient, prediction persistence, model ranking, or radius ranking path is observed.",
     "Stop if any first, middle, or last marker sentinel differs between its two in-process replay passes.",
     "Stop if root17 CNN repetitions 0 and 1 differ in any required full-run hash or counter."
