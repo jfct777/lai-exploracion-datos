@@ -22,7 +22,10 @@ import numpy as np
 import m33_safe_bridge_core as bridge_core
 from m31_ordered_linear import load_genetic_map, load_ordered_rare, load_ref_minor_dosage
 from m31_ordered_rare_preflight import derive_freq_sites
-from m33_a0_real_adapter import audit_pools, audit_ref_mapping, audit_tbi, audit_tree_vcf, audit_vcf
+from m33_a0_real_adapter import (
+    audit_pools, audit_ref_mapping, audit_tbi, audit_tree_vcf, audit_vcf,
+    read_panel_map,
+)
 from m33_safe_bridge_core import (
     reopen_npz, semantic_arrays_sha256, write_deterministic_npz, write_exclusive_json,
 )
@@ -47,6 +50,10 @@ SCHEMAS = {
     "technical_kat_flare_f0_sanitized.npz":
         "tests_m33_safe_bridge_technical_kat_flare_f0_sanitized_v1",
 }
+for _seed in bridge_core.REF_LABEL_SHAM_SEEDS:
+    SCHEMAS[f"technical_kat_reference_rare_summary_ref_label_sham_{_seed}.npz"] = (
+        "tests_m33_safe_bridge_technical_kat_reference_rare_summary_ref_label_sham_v1"
+    )
 REQUIRED_SOURCE_PATHS = {
     "bin/m33_safe_bridge_technical_kat.py", "bin/m33_safe_bridge_core.py",
     "bin/m33_a0_real_adapter.py", "bin/m31_ordered_linear.py",
@@ -143,6 +150,16 @@ def validate_contract(contract: dict[str, Any]) -> None:
     require(execution.get("memory_gib_per_root") == 4 and
             execution.get("stop_rss_gib_per_root") == 3.2,
             "technical KAT memory gate drifted")
+    sham = contract.get("ref_label_sham_technical_integration", {})
+    require(sham.get("seeds") == list(bridge_core.REF_LABEL_SHAM_SEEDS) and
+            sham.get("unit") == "complete_diploid_REF_LAI_person" and
+            sham.get("input") == "minor_dosage_locus_by_person_integer_0_1_2_no_missing" and
+            sham.get("expected_people_by_ancestry") == {name: 30 for name in ANCESTRIES} and
+            sham.get("output_name_template") ==
+            "technical_kat_reference_rare_summary_ref_label_sham_<seed>.npz" and
+            sham.get("consumable") is False and sham.get("truth_read") is False and
+            sham.get("materialize_or_training") is False,
+            "REF-label sham technical integration drifted")
 
 
 def validate_authorization(payload: dict[str, Any], root_label: str, root_seed: int,
@@ -360,6 +377,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         inputs["tree_sequence"], inputs["pools"], rare, genetic_map,
     )
     ref_dosage = ref_dosage[keep]
+    panel_labels = read_panel_map(inputs["panel_map"])
+    require(set(ref_people) == set(ref_samples) == set(ref_nodes) == set(panel_labels),
+            "REF dosage, VCF, node mapping and authenticated panel person sets differ")
+    require(all(panel_labels[person] == label for person, label in zip(ref_people, ref_labels)),
+            "REF dosage ancestry labels differ from the authenticated panel map")
     label_array = np.asarray(ref_labels, dtype=object)
     require(Counter(ref_labels) == Counter({name: 30 for name in ANCESTRIES}) and len(ref_people) == 90,
             "REF role firewall ancestry/person counts differ")
@@ -372,6 +394,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     ref_observed = (ref_an > 0).astype("|u1")
     ref_no_support = ((ref_an > 0) & (ref_ac == 0)).astype("|u1")
     ref_af = np.divide(ref_ac, ref_an, out=np.zeros_like(ref_ac, dtype="<f8"), where=ref_an > 0)
+    reference_real_before = semantic_arrays_sha256(
+        "tests_m33_safe_bridge_technical_kat_reference_rare_summary_incremental_v1",
+        {
+            "ancestry": np.asarray(ANCESTRIES, dtype="|S4"),
+            "locus_key_sha256": keys, "minor_ac": ref_ac, "callable_an": ref_an,
+            "minor_af": ref_af, "observed_mask": ref_observed,
+            "no_support": ref_no_support,
+        },
+    )
+    sham_summaries, sham_diagnostics = (
+        bridge_core.summarize_diploid_dosage_reference_label_shams(
+            ref_dosage, ref_people, ref_labels, ref_nodes,
+            seeds=bridge_core.REF_LABEL_SHAM_SEEDS,
+            expected_people_by_ancestry={name: 30 for name in ANCESTRIES},
+        )
+    )
 
     selected_arrays = {
         "locus_key_sha256": keys, "chrom": np.full(len(keys), 22, dtype="|u1"),
@@ -402,6 +440,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "technical_kat_reference_rare_summary_incremental.npz": reference_arrays,
         "technical_kat_flare_f0_sanitized.npz": f0_arrays,
     }
+    for seed in bridge_core.REF_LABEL_SHAM_SEEDS:
+        outputs[f"technical_kat_reference_rare_summary_ref_label_sham_{seed}.npz"] = {
+            "ancestry": np.asarray(ANCESTRIES, dtype="|S4"),
+            "locus_key_sha256": keys,
+            **sham_summaries[seed],
+        }
+    reference_real_after = semantic_arrays_sha256(
+        "tests_m33_safe_bridge_technical_kat_reference_rare_summary_incremental_v1",
+        reference_arrays,
+    )
+    require(reference_real_after == reference_real_before,
+            "REF-label sham integration changed the real reference summary")
     require(args.output_dir.is_dir() and not args.output_dir.is_symlink() and
             not any(args.output_dir.iterdir()),
             "output directory must be an existing empty isolated directory")
@@ -438,6 +488,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "reference_ac_an_legacy_sha256": array_sha256(np.column_stack((
             ref_ac_locus_major.astype(np.int16), ref_an_locus_major.astype(np.int16),
         ))),
+        "ref_label_sham_seeds": list(bridge_core.REF_LABEL_SHAM_SEEDS),
+        "ref_label_sham_assignment_diagnostics": sham_diagnostics,
+        "ref_label_sham_artifact_semantic_sha256": {
+            str(seed): semantic_hashes[
+                f"technical_kat_reference_rare_summary_ref_label_sham_{seed}.npz"
+            ] for seed in bridge_core.REF_LABEL_SHAM_SEEDS
+        },
+        "ref_label_sham_complete_diploid_person_unit": True,
+        "ref_label_sham_pooled_ac_an_conserved": True,
+        "ref_label_sham_real_reference_summary_unchanged": True,
+        "reference_real_summary_semantic_sha256_before": reference_real_before,
+        "reference_real_summary_semantic_sha256_after": reference_real_after,
         "phase_swap_invariant": True, "f0_anp_only_projection": True,
         "f0_gt_an1_an2_ignored": True, "raw_identifiers_exported": False,
         "real_overlap_exercised": bool((~keep).sum()),

@@ -42,6 +42,19 @@ class M33ReferenceLabelShamTests(unittest.TestCase):
     def fixture(self):
         return KAT.synthetic_fixture()
 
+    def diploid_fixture(self):
+        people = tuple(f"P{index}" for index in range(6))
+        labels = ("AFR", "AFR", "EUR", "EUR", "ASIA", "ASIA")
+        nodes = {person: (2 * index, 2 * index + 1)
+                 for index, person in enumerate(people)}
+        dosage = np.asarray([
+            [0, 1, 2, 0, 1, 2],
+            [2, 2, 1, 0, 0, 1],
+            [0, 0, 0, 1, 1, 2],
+            [1, 0, 2, 1, 2, 0],
+        ], dtype="|i1")
+        return dosage, people, labels, nodes
+
     def test_contract_freezes_diagnostic_only_control_and_effective_schema(self):
         contract = KAT.load_contract(ROOT / "conf/m33_ref_label_sham_contract.json")
         self.assertEqual(contract["preregistered_seeds"], list(CORE.REF_LABEL_SHAM_SEEDS))
@@ -182,6 +195,75 @@ class M33ReferenceLabelShamTests(unittest.TestCase):
                 out=np.zeros_like(summary["minor_af"]), where=summary["callable_an"] > 0,
             )
             np.testing.assert_array_equal(summary["minor_af"], expected_af)
+
+    def test_diploid_dosage_shams_recompute_exact_complete_person_summaries(self):
+        dosage, people, labels, nodes = self.diploid_fixture()
+        dosage_before = dosage.copy()
+        shams, diagnostics = CORE.summarize_diploid_dosage_reference_label_shams(
+            dosage, people, labels, nodes,
+            expected_people_by_ancestry={"AFR": 2, "EUR": 2, "ASIA": 2},
+        )
+        self.assertEqual(set(shams), set(CORE.REF_LABEL_SHAM_SEEDS))
+        self.assertEqual(len({row["assignment_sha256"] for row in diagnostics}), 3)
+        np.testing.assert_array_equal(dosage, dosage_before)
+        diagnostic_text = json.dumps(diagnostics)
+        self.assertTrue(all(person not in diagnostic_text for person in people))
+        self.assertNotIn("node", diagnostic_text.lower())
+        pooled_ac = dosage.sum(axis=1)
+        for seed, summary in shams.items():
+            flat_nodes = [node for person in people for node in nodes[person]]
+            flat_people = [person for person in people for _ in range(2)]
+            flat_labels = [label for label in labels for _ in range(2)]
+            permuted_nodes, _ = CORE.permute_diploid_reference_labels(
+                flat_nodes, flat_people, flat_labels, seed,
+            )
+            permuted_people = np.asarray(permuted_nodes[::2], dtype=object)
+            oracle_ac = np.vstack([
+                dosage[:, permuted_people == ancestry].sum(axis=1)
+                for ancestry in CORE.ANCESTRIES
+            ]).astype("<u2")
+            np.testing.assert_array_equal(summary["minor_ac"], oracle_ac)
+            np.testing.assert_array_equal(summary["minor_ac"].sum(axis=0), pooled_ac)
+            np.testing.assert_array_equal(summary["callable_an"],
+                                          np.full((3, 4), 4, dtype="<u2"))
+            self.assertEqual(summary["minor_af"].dtype, np.dtype("<f8"))
+            self.assertEqual(summary["observed_mask"].dtype, np.dtype("|u1"))
+
+    def test_diploid_dosage_shams_fail_closed_on_axis_node_dosage_and_seed_drift(self):
+        dosage, people, labels, nodes = self.diploid_fixture()
+        with self.assertRaisesRegex(ValueError, "missing, non-integer or invalid"):
+            CORE.summarize_diploid_dosage_reference_label_shams(
+                dosage.astype(np.float64), people, labels, nodes)
+        invalid = dosage.copy()
+        invalid[0, 0] = -1
+        with self.assertRaisesRegex(ValueError, "missing, non-integer or invalid"):
+            CORE.summarize_diploid_dosage_reference_label_shams(
+                invalid, people, labels, nodes)
+        incomplete = dict(nodes)
+        incomplete.pop(people[-1])
+        with self.assertRaisesRegex(ValueError, "mapping differs"):
+            CORE.summarize_diploid_dosage_reference_label_shams(
+                dosage, people, labels, incomplete)
+        duplicate = dict(nodes)
+        duplicate[people[-1]] = duplicate[people[0]]
+        with self.assertRaisesRegex(ValueError, "duplicated across people"):
+            CORE.summarize_diploid_dosage_reference_label_shams(
+                dosage, people, labels, duplicate)
+        with self.assertRaisesRegex(ValueError, "seeds differ"):
+            CORE.summarize_diploid_dosage_reference_label_shams(
+                dosage, people, labels, nodes, seeds=(1, 2, 3))
+        with self.assertRaisesRegex(ValueError, "required firewall"):
+            CORE.summarize_diploid_dosage_reference_label_shams(
+                dosage, people, labels, nodes,
+                expected_people_by_ancestry={"AFR": 30, "EUR": 30, "ASIA": 30},
+            )
+
+        uninformative = np.zeros_like(dosage)
+        with self.assertRaisesRegex(ValueError, "identical to the real REF summary"):
+            CORE.summarize_diploid_dosage_reference_label_shams(
+                uninformative, people, labels, nodes,
+                expected_people_by_ancestry={"AFR": 2, "EUR": 2, "ASIA": 2},
+            )
 
     def write_runtime_source_auth(self, base: Path):
         staged = base / "staged"

@@ -37,6 +37,30 @@
     "reference_missingness": false,
     "covered_by_synthetic_kat": true
   },
+  "ref_label_sham_technical_integration": {
+    "seeds": [79351217, 202307732, 1737132171],
+    "unit": "complete_diploid_REF_LAI_person",
+    "input": "minor_dosage_locus_by_person_integer_0_1_2_no_missing",
+    "authenticated_mapping": "exact_REF_person_to_two_globally_unique_tree_node_ids",
+    "expected_people_by_ancestry": {
+      "AFR": 30,
+      "EUR": 30,
+      "ASIA": 30
+    },
+    "output_name_template": "technical_kat_reference_rare_summary_ref_label_sham_<seed>.npz",
+    "output_schema": "same_members_shapes_and_dtypes_as_real_reference_summary",
+    "invariants": [
+      "nonidentity_distinct_assignments",
+      "both_nodes_of_each_person_share_one_permuted_label",
+      "ancestry_person_counts_preserved",
+      "pooled_minor_AC_and_callable_AN_preserved_per_locus",
+      "real_reference_summary_unchanged",
+      "no_person_or_node_identifier_export"
+    ],
+    "consumable": false,
+    "truth_read": false,
+    "materialize_or_training": false
+  },
   "gates": {
     "consumable": false,
     "scientific_evidence": false,

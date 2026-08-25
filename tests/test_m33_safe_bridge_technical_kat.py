@@ -76,9 +76,51 @@ class TechnicalKatTests(unittest.TestCase):
             self.assertNotIn(forbidden, parser)
 
     def test_outputs_use_only_technical_test_namespace(self):
-        self.assertEqual(len(M33.SCHEMAS), 4)
+        self.assertEqual(len(M33.SCHEMAS), 7)
         self.assertTrue(all(name.startswith("technical_kat_") for name in M33.SCHEMAS))
         self.assertTrue(all(schema.startswith("tests_") for schema in M33.SCHEMAS.values()))
+
+    def test_ref_label_sham_is_add_only_and_keeps_legacy_schemas_exact(self):
+        legacy = {
+            "technical_kat_selected_loci_incremental.npz":
+                "tests_m33_safe_bridge_technical_kat_selected_loci_incremental_v1",
+            "technical_kat_target_rare_diploid_incremental.npz":
+                "tests_m33_safe_bridge_technical_kat_target_rare_diploid_incremental_v1",
+            "technical_kat_reference_rare_summary_incremental.npz":
+                "tests_m33_safe_bridge_technical_kat_reference_rare_summary_incremental_v1",
+            "technical_kat_flare_f0_sanitized.npz":
+                "tests_m33_safe_bridge_technical_kat_flare_f0_sanitized_v1",
+        }
+        self.assertEqual({name: M33.SCHEMAS[name] for name in legacy}, legacy)
+        expected_shams = {
+            f"technical_kat_reference_rare_summary_ref_label_sham_{seed}.npz"
+            for seed in M33.bridge_core.REF_LABEL_SHAM_SEEDS
+        }
+        self.assertEqual(set(M33.SCHEMAS) - set(legacy), expected_shams)
+        self.assertEqual(
+            {M33.SCHEMAS[name] for name in expected_shams},
+            {"tests_m33_safe_bridge_technical_kat_reference_rare_summary_ref_label_sham_v1"},
+        )
+
+    def test_ref_label_sham_contract_freezes_real_technical_firewall(self):
+        contract = json.loads((ROOT / "conf/m33_safe_bridge_technical_kat_contract.json").read_text())
+        M33.validate_contract(contract)
+        sham = contract["ref_label_sham_technical_integration"]
+        self.assertEqual(sham["seeds"], list(M33.bridge_core.REF_LABEL_SHAM_SEEDS))
+        self.assertEqual(sham["expected_people_by_ancestry"],
+                         {"AFR": 30, "EUR": 30, "ASIA": 30})
+        self.assertFalse(sham["consumable"])
+        self.assertFalse(sham["truth_read"])
+        self.assertFalse(sham["materialize_or_training"])
+
+    def test_runner_authenticates_diploid_ref_axis_before_sham_and_exports_no_ids(self):
+        source = (ROOT / "bin/m33_safe_bridge_technical_kat.py").read_text()
+        self.assertIn("set(ref_people) == set(ref_samples) == set(ref_nodes) == set(panel_labels)",
+                      source)
+        self.assertIn("panel_labels[person] == label", source)
+        self.assertIn("expected_people_by_ancestry={name: 30 for name in ANCESTRIES}", source)
+        self.assertIn('"raw_identifiers_exported": False', source)
+        self.assertIn('"ref_label_sham_real_reference_summary_unchanged": True', source)
 
     def test_runner_requires_precreated_empty_output_directory(self):
         source = (ROOT / "bin/m33_safe_bridge_technical_kat.py").read_text()

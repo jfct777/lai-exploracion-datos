@@ -394,6 +394,144 @@ def summarize_reference_label_shams(
     return summaries, diagnostics
 
 
+def summarize_diploid_dosage_reference_label_shams(
+    minor_dosage: np.ndarray,
+    people: Sequence[str],
+    labels: Sequence[str],
+    person_to_node_ids: Mapping[str, Sequence[int]],
+    *,
+    seeds: Sequence[int] = REF_LABEL_SHAM_SEEDS,
+    expected_people_by_ancestry: Mapping[str, int] | None = None,
+) -> tuple[dict[int, dict[str, np.ndarray]], list[dict[str, Any]]]:
+    """Aggregate complete-person REF-label shams from diploid minor dosage.
+
+    ``minor_dosage`` is locus x person and must contain exact integer states
+    0/1/2 with no missing values. The authenticated person-to-node mapping is
+    used only to bind both homologous nodes to the same permuted label; no
+    person or node identifier is returned.
+    """
+    dosage = np.asarray(minor_dosage)
+    person_axis = tuple(people)
+    label_axis = tuple(labels)
+    require(tuple(seeds) == REF_LABEL_SHAM_SEEDS,
+            "REF-label sham seeds differ from PRE4")
+    require(dosage.ndim == 2 and dosage.shape[1] == len(person_axis),
+            "diploid REF dosage must be locus x person")
+    require(dosage.dtype.kind in "iu" and np.all(np.isin(dosage, [0, 1, 2])),
+            "diploid REF dosage contains missing, non-integer or invalid state")
+    require(person_axis and len(person_axis) == len(label_axis) and
+            all(isinstance(person, str) and person and person == person.strip()
+                for person in person_axis) and len(set(person_axis)) == len(person_axis),
+            "diploid REF person axis is empty, duplicated or invalid")
+    require(all(isinstance(label, str) and label in ANCESTRIES for label in label_axis),
+            "diploid REF ancestry label is invalid")
+    require(isinstance(person_to_node_ids, Mapping) and
+            set(person_to_node_ids) == set(person_axis),
+            "authenticated REF person-to-node mapping differs from the dosage axis")
+
+    flat_nodes: list[int] = []
+    flat_people: list[str] = []
+    flat_labels: list[str] = []
+    for person, label in zip(person_axis, label_axis):
+        pair = person_to_node_ids[person]
+        require(isinstance(pair, Sequence) and not isinstance(pair, (str, bytes)) and
+                len(pair) == 2 and all(type(node) is int for node in pair) and
+                pair[0] != pair[1],
+                "each authenticated REF person must map to two distinct integer nodes")
+        flat_nodes.extend((pair[0], pair[1]))
+        flat_people.extend((person, person))
+        flat_labels.extend((label, label))
+    require(len(set(flat_nodes)) == len(flat_nodes),
+            "authenticated REF node is duplicated across people")
+
+    original_counts = {ancestry: label_axis.count(ancestry) for ancestry in ANCESTRIES}
+    if expected_people_by_ancestry is not None:
+        require(set(expected_people_by_ancestry) == set(ANCESTRIES) and
+                all(type(expected_people_by_ancestry[ancestry]) is int and
+                    expected_people_by_ancestry[ancestry] > 0 for ancestry in ANCESTRIES),
+                "expected REF ancestry counts are invalid")
+        require(original_counts == dict(expected_people_by_ancestry),
+                "REF ancestry/person counts differ from the required firewall")
+    require(2 * len(person_axis) <= np.iinfo(np.uint16).max,
+            "diploid REF cohort exceeds the uint16 summary schema")
+
+    def aggregate(person_labels: Sequence[str]) -> dict[str, np.ndarray]:
+        label_values = np.asarray(person_labels, dtype=object)
+        minor_ac_u64 = np.vstack([
+            dosage[:, label_values == ancestry].sum(axis=1, dtype=np.uint64)
+            for ancestry in ANCESTRIES
+        ])
+        require(np.all(minor_ac_u64 <= np.iinfo(np.uint16).max),
+                "diploid REF minor AC exceeds the uint16 summary schema")
+        minor_ac = minor_ac_u64.astype("<u2")
+        callable_an = np.vstack([
+            np.full(dosage.shape[0], 2 * int(np.sum(label_values == ancestry)), dtype="<u2")
+            for ancestry in ANCESTRIES
+        ])
+        require(np.all(minor_ac <= callable_an), "diploid REF minor AC exceeds callable AN")
+        minor_af = np.divide(
+            minor_ac, callable_an, out=np.zeros_like(minor_ac, dtype="<f8"),
+            where=callable_an > 0,
+        )
+        observed = (callable_an > 0).astype("|u1")
+        no_support = ((callable_an > 0) & (minor_ac == 0)).astype("|u1")
+        return {
+            "minor_ac": np.ascontiguousarray(minor_ac),
+            "callable_an": np.ascontiguousarray(callable_an),
+            "minor_af": np.ascontiguousarray(minor_af),
+            "observed_mask": np.ascontiguousarray(observed),
+            "no_support": np.ascontiguousarray(no_support),
+        }
+
+    original = aggregate(label_axis)
+    original_summary_hash = semantic_arrays_sha256(
+        "m33_ref_label_sham_diploid_reference_summary_v1", original,
+    )
+    genotype_hash = semantic_arrays_sha256(
+        "m33_ref_label_sham_diploid_minor_dosage_v1",
+        {"minor_dosage": np.ascontiguousarray(dosage)},
+    )
+    summaries: dict[int, dict[str, np.ndarray]] = {}
+    diagnostics: list[dict[str, Any]] = []
+    assignment_hashes: set[str] = set()
+    summary_hashes: set[str] = set()
+    for seed in seeds:
+        permuted_nodes, diagnostic = permute_diploid_reference_labels(
+            flat_nodes, flat_people, flat_labels, seed,
+        )
+        permuted_people: list[str] = []
+        for index in range(len(person_axis)):
+            first, second = permuted_nodes[2 * index:2 * index + 2]
+            require(first == second,
+                    "REF-label sham split the two authenticated nodes of one person")
+            permuted_people.append(first)
+        require({ancestry: permuted_people.count(ancestry) for ancestry in ANCESTRIES}
+                == original_counts, "REF-label sham changed ancestry person counts")
+        summary = aggregate(permuted_people)
+        require(np.array_equal(summary["minor_ac"].sum(axis=0),
+                               original["minor_ac"].sum(axis=0)) and
+                np.array_equal(summary["callable_an"].sum(axis=0),
+                               original["callable_an"].sum(axis=0)),
+                "REF-label sham changed pooled AC or AN")
+        require(diagnostic["assignment_sha256"] not in assignment_hashes,
+                "REF-label sham assignments are duplicated")
+        assignment_hashes.add(diagnostic["assignment_sha256"])
+        summary_hash = semantic_arrays_sha256(
+            "m33_ref_label_sham_diploid_reference_summary_v1", summary,
+        )
+        require(summary_hash != original_summary_hash,
+                "REF-label sham summary is identical to the real REF summary")
+        require(summary_hash not in summary_hashes,
+                "REF-label sham summaries are duplicated")
+        summary_hashes.add(summary_hash)
+        diagnostic["raw_diploid_minor_dosage_sha256"] = genotype_hash
+        diagnostic["aggregated_reference_summary_sha256"] = summary_hash
+        diagnostic["ancestry_person_counts"] = original_counts
+        summaries[seed] = summary
+        diagnostics.append(diagnostic)
+    return summaries, diagnostics
+
+
 def sanitize_f0(probabilities: np.ndarray) -> np.ndarray:
     values = np.asarray(probabilities, dtype="<f8")
     require(values.ndim == 4 and values.shape[1] == 2 and values.shape[3] == 3,
