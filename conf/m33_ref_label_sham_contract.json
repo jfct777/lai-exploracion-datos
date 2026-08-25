@@ -1,0 +1,89 @@
+{
+  "stage": "M33_REF_LABEL_SHAM_KAT_CONTRACT",
+  "status": "FROZEN_SYNTHETIC_ONLY_BEFORE_EXECUTION",
+  "purpose": "Validate the complete-diploid REF ancestry-label negative control before DEVELOPMENT roots.",
+  "upstream_contracts": {
+    "conf/m33_pre4_preregistration.json": "4308bbf33ae28f554f701da33efdc185264f9f407d62661e7048e0345687eb8b",
+    "conf/m33_m0_materializer_contract.json": "fb74cd610a36b22fe54b8681238a13b48a0243642c9a24cd036597d161361614"
+  },
+  "scope": {
+    "synthetic_only": true,
+    "scientific_evidence": false,
+    "training": false,
+    "truth_read": false,
+    "real_asset_read": false,
+    "persisted_outputs": "receipt_only"
+  },
+  "preregistered_seeds": [79351217, 202307732, 1737132171],
+  "operation": "nonidentity_group_size_preserving_permutation_of_complete_diploid_REF_labels_then_recompute_AC_AN_AF_from_complete_REF_genotypes",
+  "effective_reference_summary_schema": {
+    "one_artifact_per_seed": true,
+    "members": ["ancestry", "locus_id", "minor_ac", "callable_an", "minor_af", "observed_mask", "no_support"],
+    "dtypes": {
+      "ancestry": "|S4",
+      "locus_id": "<u8",
+      "minor_ac": "<u2",
+      "callable_an": "<u2",
+      "minor_af": "<f8",
+      "observed_mask": "|u1",
+      "no_support": "|u1"
+    },
+    "ancestry_order": ["AFR", "EUR", "ASIA"],
+    "schema_resolution": "effective_S4_labels_supersede_only_the_historical_u1_ancestry_encoding_at_the_materializer_boundary"
+  },
+  "preserves": [
+    "REF_raw_genotypes",
+    "REF_raw_missingness",
+    "two_nodes_per_diploid_person",
+    "locus_order",
+    "minor_code",
+    "global_LD",
+    "ancestry_group_sizes",
+    "TARGET_sentinel"
+  ],
+  "breaks": "REF_person_multilocus_genotype_to_ancestry_label_association",
+  "fixture": {
+    "diploid_people": 6,
+    "nodes": 12,
+    "people_per_ancestry": 2,
+    "loci": 4,
+    "minor_codes": [0, 1, 0, 1],
+    "includes": ["heterozygous", "homozygous", "minor_absent", "partial_missing", "complete_group_locus_missing"]
+  },
+  "pass_invariants": [
+    "same_seed_same_bytes",
+    "three_effective_assignments_distinct_and_nonidentity",
+    "at_least_one_cross_ancestry_reassignment_from_each_ancestry_per_seed",
+    "same_permuted_label_for_both_nodes_of_each_person",
+    "ancestry_person_counts_exactly_preserved",
+    "raw_genotype_missingness_locus_minor_code_and_TARGET_hashes_unchanged",
+    "pooled_AC_and_AN_conserved_per_locus",
+    "zero_le_AC_le_AN_and_AF_equals_AC_div_AN_with_zero_when_AN_zero",
+    "productive_summary_equals_independent_oracle",
+    "sham_summary_differs_from_real_on_informative_fixture",
+    "no_individual_REF_data_persisted"
+  ],
+  "interpretation": {
+    "diagnostic_only": true,
+    "permutation_p_value": false,
+    "future_rule": "real_REF_signal_must_exceed_max_of_three_REF_label_shams",
+    "does_not_demonstrate": ["LAI_improvement", "rare_variant_specificity", "NAM_validity"]
+  },
+  "execution": {
+    "device": "cpu",
+    "oci_image": "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/m33-t0a@sha256:c03864a9ed0c56b00fd1a234daee2d17ddfa57d4c426628bd59cd9daf351ee99",
+    "cpus": 1,
+    "memory_gib": 1,
+    "time_limit_minutes": 10,
+    "maximum_parallel_processes": 1,
+    "network_disabled": true
+  },
+  "stop_rules": [
+    "node_level_or_locus_level_permutation",
+    "ancestry_group_size_genotype_missingness_locus_minor_code_or_TARGET_change",
+    "reconstruction_from_aggregated_reference_summaries",
+    "identity_or_duplicate_sham_assignment",
+    "AC_AN_AF_or_mask_oracle_mismatch",
+    "truth_real_asset_training_or_individual_REF_export"
+  ]
+}

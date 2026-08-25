@@ -21,6 +21,8 @@ import numpy as np
 
 
 ANCESTRIES = ("AFR", "EUR", "ASIA")
+REF_LABEL_SHAM_SEEDS = (79351217, 202307732, 1737132171)
+REF_LABEL_SHAM_DOMAIN = b"DNABR_M33_PRE4_REF_LABEL_SHAM_V1|"
 SAMPLE_DOMAIN = b"DNABR_M33_M0_SAMPLE_V1|"
 LOCUS_FIELDS = ("chrom", "pos", "ref", "alt", "locus_id", "cM")
 FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
@@ -253,6 +255,143 @@ def summarize_reference(
         "observed_mask": np.ascontiguousarray(observed),
         "no_support": np.ascontiguousarray(no_support),
     }
+
+
+def permute_diploid_reference_labels(
+    node_ids: Sequence[int],
+    node_person_ids: Sequence[str],
+    node_ancestries: Sequence[str],
+    seed: int,
+) -> tuple[list[str], dict[str, Any]]:
+    """Permute complete-person REF labels with a version-stable hash ordering.
+
+    The two haploid nodes of one person always receive the same permuted label.
+    Only ancestry labels move; node order and genotypes are not touched.
+    """
+    require(type(seed) is int and 0 <= seed < 2**31, "REF-label sham seed is invalid")
+    require(len(node_ids) == len(node_person_ids) == len(node_ancestries) and node_ids,
+            "REF-label sham metadata axes differ")
+    require(len(set(node_ids)) == len(node_ids), "REF-label sham node IDs are duplicated")
+    people: dict[str, list[int]] = {}
+    for index, (person, ancestry) in enumerate(zip(node_person_ids, node_ancestries)):
+        require(isinstance(person, str) and person and ancestry in ANCESTRIES,
+                "REF-label sham person or ancestry is invalid")
+        people.setdefault(person, []).append(index)
+    require(len(people) >= 2, "REF-label sham needs at least two diploid people")
+    for indices in people.values():
+        require(len(indices) == 2 and
+                node_ancestries[indices[0]] == node_ancestries[indices[1]],
+                "REF-label sham requires two same-ancestry nodes per person")
+
+    ordered_people = sorted(
+        people,
+        key=lambda person: (person, tuple(sorted(node_ids[index] for index in people[person]))),
+    )
+    original = [node_ancestries[people[person][0]] for person in ordered_people]
+
+    def rank_key(index: int) -> bytes:
+        person = ordered_people[index]
+        nodes = ",".join(str(value) for value in sorted(node_ids[i] for i in people[person]))
+        payload = (REF_LABEL_SHAM_DOMAIN + str(seed).encode("ascii") + b"|" +
+                   person.encode("utf-8") + b"|" + nodes.encode("ascii"))
+        return hashlib.sha256(payload).digest()
+
+    source_order = sorted(range(len(ordered_people)), key=lambda index: (rank_key(index), index))
+    permuted = [original[index] for index in source_order]
+    if permuted == original:
+        for shift in range(1, len(original)):
+            candidate = original[shift:] + original[:shift]
+            if candidate != original:
+                permuted = candidate
+                break
+    require(permuted != original and sorted(permuted) == sorted(original),
+            "REF-label sham is identity or changed ancestry group sizes")
+    require(any(before != after for before, after in zip(original, permuted)),
+            "REF-label sham did not reassign any person across ancestry")
+
+    permuted_nodes = list(node_ancestries)
+    transition = {source: {target: 0 for target in ANCESTRIES} for source in ANCESTRIES}
+    moved = 0
+    for person, before, after in zip(ordered_people, original, permuted):
+        transition[before][after] += 1
+        moved += int(before != after)
+        for index in people[person]:
+            permuted_nodes[index] = after
+    require(all(
+        sum(transition[source][target] for target in ANCESTRIES if target != source) > 0
+        for source in ANCESTRIES
+    ), "REF-label sham left at least one ancestry without cross-ancestry reassignment")
+    require(all(permuted_nodes[indices[0]] == permuted_nodes[indices[1]]
+                for indices in people.values()),
+            "REF-label sham split the two nodes of one person")
+    assignment_payload = json.dumps(
+        {"seed": seed, "original": original, "permuted": permuted},
+        sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return permuted_nodes, {
+        "seed": seed,
+        "person_count": len(ordered_people),
+        "moved_person_count": moved,
+        "ancestry_transition_counts": transition,
+        "assignment_sha256": hashlib.sha256(assignment_payload).hexdigest(),
+    }
+
+
+def summarize_reference_label_shams(
+    raw_states: np.ndarray,
+    minor_codes: np.ndarray,
+    node_ids: Sequence[int],
+    node_person_ids: Sequence[str],
+    node_ancestries: Sequence[str],
+    expected_ref_records: Sequence[Mapping[str, Any]],
+    seeds: Sequence[int] = REF_LABEL_SHAM_SEEDS,
+) -> tuple[dict[int, dict[str, np.ndarray]], list[dict[str, Any]]]:
+    """Recompute three aggregated REF summaries after complete-person label shams."""
+    require(tuple(seeds) == REF_LABEL_SHAM_SEEDS,
+            "REF-label sham seeds differ from PRE4")
+    original = summarize_reference(
+        raw_states, minor_codes, node_ids, node_person_ids, node_ancestries,
+        expected_ref_records,
+    )
+    genotype_before = semantic_arrays_sha256(
+        "m33_ref_label_sham_raw_ref_v1",
+        {"raw_states": np.ascontiguousarray(raw_states),
+         "minor_codes": np.ascontiguousarray(minor_codes)},
+    )
+    summaries: dict[int, dict[str, np.ndarray]] = {}
+    diagnostics: list[dict[str, Any]] = []
+    assignment_hashes: set[str] = set()
+    for seed in seeds:
+        permuted_nodes, diagnostic = permute_diploid_reference_labels(
+            node_ids, node_person_ids, node_ancestries, seed,
+        )
+        permuted_expected = [
+            {"node_id": node, "person_id": person, "ancestry": ancestry}
+            for node, person, ancestry in zip(node_ids, node_person_ids, permuted_nodes)
+        ]
+        summary = summarize_reference(
+            raw_states, minor_codes, node_ids, node_person_ids, permuted_nodes,
+            permuted_expected,
+        )
+        require(np.array_equal(summary["minor_ac"].sum(axis=0),
+                               original["minor_ac"].sum(axis=0)) and
+                np.array_equal(summary["callable_an"].sum(axis=0),
+                               original["callable_an"].sum(axis=0)),
+                "REF-label sham changed pooled AC or AN")
+        genotype_after = semantic_arrays_sha256(
+            "m33_ref_label_sham_raw_ref_v1",
+            {"raw_states": np.ascontiguousarray(raw_states),
+             "minor_codes": np.ascontiguousarray(minor_codes)},
+        )
+        require(genotype_after == genotype_before,
+                "REF-label sham changed raw genotypes or minor codes")
+        require(diagnostic["assignment_sha256"] not in assignment_hashes,
+                "REF-label sham assignments are duplicated")
+        assignment_hashes.add(diagnostic["assignment_sha256"])
+        diagnostic["raw_genotype_minor_code_sha256"] = genotype_before
+        summaries[seed] = summary
+        diagnostics.append(diagnostic)
+    return summaries, diagnostics
 
 
 def sanitize_f0(probabilities: np.ndarray) -> np.ndarray:
