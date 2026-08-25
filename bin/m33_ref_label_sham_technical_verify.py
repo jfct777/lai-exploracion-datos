@@ -133,21 +133,29 @@ def map_ref_pseudonyms(ref_pairs_path: Path, panel_map_path: Path,
 def permute_labels(people: Sequence[str], labels: Sequence[str],
                    pairs: Mapping[str, Sequence[int]], seed: int) -> tuple[str, ...]:
     require(seed in SEEDS, "unregistered sham seed")
-    order = sorted(range(len(people)), key=lambda i: (
-        hashlib.sha256(DOMAIN + str(seed).encode() + b"|" + people[i].encode() + b"|" +
-                       ",".join(str(x) for x in sorted(pairs[people[i]])).encode()).digest(), i))
-    result = tuple(labels[i] for i in order)
-    if result == tuple(labels):
+    require(len(people) == len(labels) and len(set(people)) == len(people),
+            "invalid person/label axes")
+    label_by_person = dict(zip(people, labels))
+    ordered_people = tuple(sorted(
+        people, key=lambda person: (person, tuple(sorted(pairs[person]))),
+    ))
+    original = tuple(label_by_person[person] for person in ordered_people)
+    source_order = sorted(range(len(ordered_people)), key=lambda i: (
+        hashlib.sha256(DOMAIN + str(seed).encode() + b"|" + ordered_people[i].encode() + b"|" +
+                       ",".join(str(x) for x in sorted(pairs[ordered_people[i]])).encode()).digest(), i))
+    permuted = tuple(original[i] for i in source_order)
+    if permuted == original:
         for shift in range(1, len(labels)):
-            candidate = tuple(labels[shift:]) + tuple(labels[:shift])
-            if candidate != tuple(labels):
-                result = candidate
+            candidate = original[shift:] + original[:shift]
+            if candidate != original:
+                permuted = candidate
                 break
-    require(result != tuple(labels) and Counter(result) == Counter(labels),
+    require(permuted != original and Counter(permuted) == Counter(original),
             "sham is identity or changes group sizes")
-    require(all(any(a == source and b != source for a, b in zip(labels, result))
+    require(all(any(a == source and b != source for a, b in zip(original, permuted))
                 for source in ANCESTRIES), "an ancestry has no outgoing reassignment")
-    return result
+    assigned = dict(zip(ordered_people, permuted))
+    return tuple(assigned[person] for person in people)
 
 
 def aggregate(dosage: np.ndarray, labels: Sequence[str]) -> dict[str, np.ndarray]:

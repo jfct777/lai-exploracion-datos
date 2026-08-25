@@ -48,6 +48,18 @@ class IndependentShamVerifierTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid diploid"):
             VERIFY.aggregate(invalid, labels)
 
+    def test_permutation_is_person_stable_when_dosage_axis_is_not_sorted(self):
+        _dosage, people, labels, pairs = self.fixture()
+        expected = dict(zip(people, VERIFY.permute_labels(people, labels, pairs, VERIFY.SEEDS[0])))
+        order = (4, 1, 5, 0, 3, 2)
+        shuffled_people = tuple(people[i] for i in order)
+        shuffled_labels = tuple(labels[i] for i in order)
+        observed = dict(zip(
+            shuffled_people,
+            VERIFY.permute_labels(shuffled_people, shuffled_labels, pairs, VERIFY.SEEDS[0]),
+        ))
+        self.assertEqual(observed, expected)
+
     def test_source_is_independent_and_truth_free(self):
         source = (ROOT / "bin/m33_ref_label_sham_technical_verify.py").read_text()
         for forbidden in ("import m33_safe_bridge", "import m31", "import m33_a0", "lai_truth"):
