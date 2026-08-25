@@ -1,0 +1,88 @@
+{
+  "stage": "M33_T1_BACKWARD_DRY_RUN_CONTRACT",
+  "status": "FROZEN_BEFORE_EXECUTION",
+  "scope": {
+    "purpose": "Verify differentiability, deterministic gradients and bounded memory before any M33 training.",
+    "scientific_evidence": false,
+    "training_or_model_selection": false,
+    "synthetic_only": true,
+    "model_families": ["local_linear", "small_residual_cnn_1d"],
+    "cases": [
+      ["local_linear", 0],
+      ["local_linear", 1],
+      ["small_residual_cnn_1d", 0],
+      ["small_residual_cnn_1d", 1]
+    ],
+    "subcases": ["production_zero_head", "private_nonzero_probe_head"]
+  },
+  "authenticated_t0b": {
+    "aggregate_sha256": "4b62813194795c18483110ad43271ba187c2f032e5b2c3c9a3c7a1f401e62d5b",
+    "status": "PASS_T0B_FULL_CHR22_TECHNICAL_ONLY",
+    "child_receipt_count": 5
+  },
+  "synthetic_stress": {
+    "people": 8,
+    "central_markers": 256,
+    "rows": 2048,
+    "haplotypes": 2,
+    "ancestries": 3,
+    "channels": 13,
+    "maximum_context": 128,
+    "context_lengths": [0, 1, 64, 128],
+    "maximum_padded_tokens": 262144,
+    "loss": "weighted_per_haplotype_marker_cross_entropy",
+    "boundary_loss_weight_beta": 1.0,
+    "known_answer_boundary_loss_weights": [0.0, 1.0],
+    "targets": "balanced_deterministic_synthetic_labels_within_person_and_haplotype",
+    "target_class_counts": [1366, 1365, 1365],
+    "transition_count": 112,
+    "transition_count_per_person_haplotype": 7,
+    "boundary_weight_sum": 4208.0,
+    "f0": "synthetic_simplex_including_exact_zero_near_zero_and_regular_probabilities"
+  },
+  "gradient_gates": {
+    "production_zero_head": [
+      "finite_positive_loss",
+      "all_parameter_gradients_present_and_finite",
+      "positive_global_and_final_head_gradient_norm",
+      "cnn_upstream_gradient_norm_exactly_zero_on_first_backward"
+    ],
+    "private_nonzero_probe_head": [
+      "finite_positive_loss",
+      "all_parameter_gradients_present_and_finite",
+      "positive_gradient_norm_by_trainable_stage",
+      "positive_input_gradient_on_valid_tokens",
+      "zero_input_gradient_on_padding"
+    ],
+    "common": [
+      "parameter_value_hash_unchanged_after_backward",
+      "exact_repeat_within_model_family",
+      "no_optimizer_created_or_step",
+      "no_checkpoint_tensor_or_prediction_written"
+    ]
+  },
+  "execution": {
+    "device": "cpu",
+    "oci_image": "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/m33-t0a@sha256:c03864a9ed0c56b00fd1a234daee2d17ddfa57d4c426628bd59cd9daf351ee99",
+    "process_memory_gib": 8,
+    "memory_warning_fraction": 0.70,
+    "memory_stop_fraction": 0.80,
+    "maximum_parallel_processes": 1,
+    "minimum_preflight_mem_available_gib": 10,
+    "process_time_limit_minutes": 30,
+    "network_disabled": true,
+    "persisted_outputs": "receipts_only"
+  },
+  "stop_rules": [
+    "T0b_contract_source_container_or_receipt_hash_mismatch",
+    "truth_root17_root18_DEVELOPMENT_EVAL_or_real_data_path_available",
+    "optimizer_checkpoint_tensor_or_prediction_persisted",
+    "loss_or_any_gradient_nonfinite",
+    "final_head_or_global_gradient_norm_not_positive",
+    "private_probe_does_not_reach_each_trainable_stage",
+    "padding_input_gradient_not_exactly_zero",
+    "parameter_values_change_after_backward",
+    "repeat_hash_or_counter_differs",
+    "peak_memory_fraction_reaches_0.80"
+  ]
+}
