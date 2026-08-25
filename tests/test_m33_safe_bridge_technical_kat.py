@@ -115,12 +115,47 @@ class TechnicalKatTests(unittest.TestCase):
 
     def test_runner_authenticates_diploid_ref_axis_before_sham_and_exports_no_ids(self):
         source = (ROOT / "bin/m33_safe_bridge_technical_kat.py").read_text()
-        self.assertIn("set(ref_people) == set(ref_samples) == set(ref_nodes) == set(panel_labels)",
-                      source)
+        self.assertIn("map_ref_people_to_authenticated_samples", source)
+        self.assertIn("set(mapped) == set(ref_nodes) == set(panel_labels)", source)
         self.assertIn("panel_labels[person] == label", source)
         self.assertIn("expected_people_by_ancestry={name: 30 for name in ANCESTRIES}", source)
         self.assertIn('"raw_identifiers_exported": False', source)
         self.assertIn('"ref_label_sham_real_reference_summary_unchanged": True', source)
+
+    def test_private_ref_people_map_to_pseudonyms_only_through_node_pairs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pools = Path(directory) / "pools.tsv"
+            pools.write_text(
+                "role\tancestry\tindividual_id\tnode_id\tnode_identity_sha256\n"
+                "REF_LAI\tAFR\tprivate_a\t10\tx\n"
+                "REF_LAI\tAFR\tprivate_a\t11\ty\n"
+                "REF_LAI\tEUR\tprivate_b\t20\tz\n"
+                "REF_LAI\tEUR\tprivate_b\t21\tw\n",
+                encoding="utf-8",
+            )
+            observed = M33.map_ref_people_to_authenticated_samples(
+                pools,
+                ("private_a", "private_b"),
+                ("AFR", "EUR"),
+                {"REF_EUR_000": (21, 20), "REF_AFR_000": (10, 11)},
+                {"REF_AFR_000": "AFR", "REF_EUR_000": "EUR"},
+            )
+            self.assertEqual(observed, ("REF_AFR_000", "REF_EUR_000"))
+
+    def test_ref_identity_mapping_rejects_wrong_ancestry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pools = Path(directory) / "pools.tsv"
+            pools.write_text(
+                "role\tancestry\tindividual_id\tnode_id\tnode_identity_sha256\n"
+                "REF_LAI\tAFR\tprivate_a\t10\tx\n"
+                "REF_LAI\tAFR\tprivate_a\t11\ty\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "node pair or ancestry"):
+                M33.map_ref_people_to_authenticated_samples(
+                    pools, ("private_a",), ("AFR",),
+                    {"REF_EUR_000": (10, 11)}, {"REF_EUR_000": "EUR"},
+                )
 
     def test_runner_requires_precreated_empty_output_directory(self):
         source = (ROOT / "bin/m33_safe_bridge_technical_kat.py").read_text()

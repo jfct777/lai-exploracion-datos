@@ -319,6 +319,44 @@ def load_f0_projection(path: Path, expected_samples: tuple[str, ...]) -> tuple[l
     return loci, bridge_core.sanitize_f0(marker_major.transpose(1, 2, 0, 3))
 
 
+def map_ref_people_to_authenticated_samples(
+    pools_path: Path,
+    ref_people: tuple[str, ...],
+    ref_labels: tuple[str, ...],
+    ref_nodes: dict[str, tuple[int, int]],
+    panel_labels: dict[str, str],
+) -> tuple[str, ...]:
+    """Map private pool people to pseudonymous REF samples through exact node pairs."""
+    pool_pairs: dict[str, tuple[int, int]] = {}
+    with pools_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        require(reader.fieldnames is not None and
+                {"role", "individual_id", "node_id"}.issubset(reader.fieldnames),
+                "pool header differs while authenticating REF identities")
+        grouped: dict[str, list[int]] = {}
+        for row in reader:
+            if row["role"] == "REF_LAI":
+                grouped.setdefault(row["individual_id"], []).append(int(row["node_id"]))
+    for person, nodes in grouped.items():
+        require(len(nodes) == 2 and nodes[0] != nodes[1],
+                "REF person does not map to two distinct nodes")
+        pool_pairs[person] = tuple(sorted(nodes))
+    require(set(pool_pairs) == set(ref_people),
+            "REF dosage people differ from the authenticated pool")
+    by_pair = {tuple(sorted(pair)): sample for sample, pair in ref_nodes.items()}
+    require(len(by_pair) == len(ref_nodes), "two pseudonymous REF samples share a node pair")
+    mapped: list[str] = []
+    for person, label in zip(ref_people, ref_labels):
+        sample = by_pair.get(pool_pairs[person])
+        require(sample is not None and panel_labels.get(sample) == label,
+                "REF node pair or ancestry differs from the authenticated panel")
+        mapped.append(sample)
+    require(len(set(mapped)) == len(mapped) and
+            set(mapped) == set(ref_nodes) == set(panel_labels),
+            "REF node-pair mapping is not an exact pseudonymous bijection")
+    return tuple(mapped)
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     require(args.root_label in ROOTS and ROOTS[args.root_label] == args.root_seed,
             "root label/seed pair is invalid")
@@ -373,13 +411,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     target_observed = np.ascontiguousarray(observed.astype("|u1").T)
     target_keys = np.asarray([bridge_core.sample_key(sample) for sample in rare.samples], dtype="|S64")
 
-    ref_dosage, ref_people, ref_labels = load_ref_minor_dosage(
+    ref_dosage, private_ref_people, ref_labels = load_ref_minor_dosage(
         inputs["tree_sequence"], inputs["pools"], rare, genetic_map,
     )
     ref_dosage = ref_dosage[keep]
     panel_labels = read_panel_map(inputs["panel_map"])
-    require(set(ref_people) == set(ref_samples) == set(ref_nodes) == set(panel_labels),
-            "REF dosage, VCF, node mapping and authenticated panel person sets differ")
+    ref_people = map_ref_people_to_authenticated_samples(
+        inputs["pools"], private_ref_people, ref_labels, ref_nodes, panel_labels,
+    )
+    require(set(ref_people) == set(ref_samples),
+            "REF dosage and authenticated VCF sample sets differ")
     require(all(panel_labels[person] == label for person, label in zip(ref_people, ref_labels)),
             "REF dosage ancestry labels differ from the authenticated panel map")
     label_array = np.asarray(ref_labels, dtype=object)
