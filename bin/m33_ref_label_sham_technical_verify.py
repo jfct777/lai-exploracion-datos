@@ -159,6 +159,8 @@ def reconstruct_dosage(tree_path: Path, positions: np.ndarray, minor_codes: np.n
 
 
 def verify(args: argparse.Namespace) -> dict[str, Any]:
+    require(re.fullmatch(r"[0-9a-f]{40}", args.git_commit) is not None,
+            "git commit must be an exact lowercase SHA-1")
     selected = load_npz(args.selected_loci,
                         {"locus_key_sha256", "chrom", "pos", "ref", "alt", "cM", "minor_code"})
     require(np.all(selected["chrom"] == 22) and np.all(np.isin(selected["minor_code"], (0, 1))),
@@ -203,7 +205,9 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
             "selected_loci": int(len(selected["pos"])), "sham_semantic_sha256": observed_hashes,
             "tree_sequence_sha256": sha256_file(args.tree_sequence),
             "pools_sha256": sha256_file(args.pools),
-            "bridge_receipt_sha256": sha256_file(args.bridge_receipt)}
+            "bridge_receipt_sha256": sha256_file(args.bridge_receipt),
+            "verifier_git_commit": args.git_commit,
+            "verifier_source_sha256": sha256_file(Path(__file__).resolve())}
 
 
 def write_exclusive(path: Path, payload: dict[str, Any]) -> None:
@@ -226,6 +230,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tree-sequence", required=True, type=Path)
     parser.add_argument("--pools", required=True, type=Path)
     parser.add_argument("--bridge-receipt", required=True, type=Path)
+    parser.add_argument("--git-commit", required=True)
     parser.add_argument("--output", required=True, type=Path)
     return parser.parse_args()
 
