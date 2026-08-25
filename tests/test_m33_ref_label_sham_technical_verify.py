@@ -76,6 +76,12 @@ class IndependentShamVerifierTests(unittest.TestCase):
             self.assertEqual(mapped[-1], "REF_ASIA_029")
             self.assertEqual(mapped_pairs["REF_EUR_000"], (60, 61))
 
+    def test_genetic_map_start_is_read_without_importing_pipeline_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "map.tsv"
+            path.write_text("22\t15287922\t1.4\n22\t16370978\t1.5\n", encoding="utf-8")
+            self.assertEqual(VERIFY.genetic_map_start(path), 15287922)
+
 
 if __name__ == "__main__":
     unittest.main()

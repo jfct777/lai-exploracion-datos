@@ -164,22 +164,42 @@ def aggregate(dosage: np.ndarray, labels: Sequence[str]) -> dict[str, np.ndarray
             "no_support": ((an > 0) & (ac == 0)).astype("|u1")}
 
 
-def reconstruct_dosage(tree_path: Path, positions: np.ndarray, minor_codes: np.ndarray,
+def genetic_map_start(path: Path) -> int:
+    first: int | None = None
+    previous = -1
+    with path.open(encoding="utf-8") as handle:
+        for line_number, raw in enumerate(handle, 1):
+            if not raw.strip():
+                continue
+            fields = raw.split()
+            require(len(fields) >= 3 and fields[0].removeprefix("chr") == "22",
+                    f"invalid chr22 genetic map row {line_number}")
+            position = int(fields[1])
+            require(position > previous, "genetic-map positions are not strictly increasing")
+            if first is None:
+                first = position
+            previous = position
+    require(first is not None, "genetic map is empty")
+    return first
+
+
+def reconstruct_dosage(tree_path: Path, genetic_map_path: Path,
+                        positions: np.ndarray, minor_codes: np.ndarray,
                         people: Sequence[str], pairs: Mapping[str, Sequence[int]]) -> np.ndarray:
     import tskit
     ts = tskit.load(str(tree_path))
     sample_index = {int(node): i for i, node in enumerate(ts.samples())}
     indexes = np.asarray([sample_index[node] for person in people for node in pairs[person]], dtype=np.int64)
-    variants = list(ts.variants())
-    tree_pos = np.asarray([int(v.site.position) for v in variants], dtype=np.int64)
-    candidates = {0, int(positions[0] - tree_pos[0])}
+    tree_pos = np.fromiter((int(site.position) for site in ts.sites()), dtype=np.int64,
+                           count=ts.num_sites)
+    candidates = {0, genetic_map_start(genetic_map_path), int(positions[0] - tree_pos[0])}
     offsets = [offset for offset in candidates
                if set(positions.tolist()).issubset(set((tree_pos + offset).tolist()))]
     require(len(offsets) == 1, f"cannot identify one tree coordinate offset: {offsets}")
     by_pos = {int(pos): i for i, pos in enumerate(positions)}
     dosage = np.empty((len(positions), len(people)), dtype="|i1")
     seen: set[int] = set()
-    for variant, raw_pos in zip(variants, tree_pos):
+    for variant, raw_pos in zip(ts.variants(), tree_pos):
         absolute = int(raw_pos + offsets[0])
         index = by_pos.get(absolute)
         if index is None:
@@ -204,7 +224,8 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
     people, pairs = map_ref_pseudonyms(
         args.ref_pairs, args.panel_map, private_people, labels, private_pairs,
     )
-    dosage = reconstruct_dosage(args.tree_sequence, selected["pos"], selected["minor_code"],
+    dosage = reconstruct_dosage(args.tree_sequence, args.genetic_map,
+                                selected["pos"], selected["minor_code"],
                                 private_people, private_pairs)
     receipt = json.loads(args.bridge_receipt.read_text(encoding="utf-8"))
     real = load_npz(args.real_reference, MEMBERS)
@@ -242,6 +263,7 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
             "ref_people_by_ancestry": {a: 30 for a in ANCESTRIES},
             "selected_loci": int(len(selected["pos"])), "sham_semantic_sha256": observed_hashes,
             "tree_sequence_sha256": sha256_file(args.tree_sequence),
+            "genetic_map_sha256": sha256_file(args.genetic_map),
             "pools_sha256": sha256_file(args.pools),
             "ref_pairs_sha256": sha256_file(args.ref_pairs),
             "panel_map_sha256": sha256_file(args.panel_map),
@@ -268,6 +290,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--real-reference", required=True, type=Path)
     parser.add_argument("--sham", action="append", required=True)
     parser.add_argument("--tree-sequence", required=True, type=Path)
+    parser.add_argument("--genetic-map", required=True, type=Path)
     parser.add_argument("--pools", required=True, type=Path)
     parser.add_argument("--ref-pairs", required=True, type=Path)
     parser.add_argument("--panel-map", required=True, type=Path)
