@@ -1,4 +1,5 @@
 import importlib.util
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -51,6 +52,29 @@ class IndependentShamVerifierTests(unittest.TestCase):
         source = (ROOT / "bin/m33_ref_label_sham_technical_verify.py").read_text()
         for forbidden in ("import m33_safe_bridge", "import m31", "import m33_a0", "lai_truth"):
             self.assertNotIn(forbidden, source)
+
+    def test_private_people_are_mapped_to_pseudonyms_by_exact_node_pair(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private_people = tuple(f"private_{i:03d}" for i in range(90))
+            labels = tuple(("AFR", "EUR", "ASIA")[i // 30] for i in range(90))
+            private_pairs = {person: (2 * i, 2 * i + 1)
+                             for i, person in enumerate(private_people)}
+            panel = root / "panel.tsv"
+            pairs = root / "pairs.tsv"
+            with panel.open("w", encoding="utf-8") as handle:
+                for i, label in enumerate(labels):
+                    handle.write(f"REF_{label}_{i % 30:03d}\t{label}\n")
+            with pairs.open("w", encoding="utf-8") as handle:
+                handle.write("sample_id\tancestry\thaplotype_0_node\thaplotype_1_node\n")
+                for i, label in enumerate(labels):
+                    handle.write(f"REF_{label}_{i % 30:03d}\t{label}\t{2 * i}\t{2 * i + 1}\n")
+            mapped, mapped_pairs = VERIFY.map_ref_pseudonyms(
+                pairs, panel, private_people, labels, private_pairs,
+            )
+            self.assertEqual(mapped[0], "REF_AFR_000")
+            self.assertEqual(mapped[-1], "REF_ASIA_029")
+            self.assertEqual(mapped_pairs["REF_EUR_000"], (60, 61))
 
 
 if __name__ == "__main__":

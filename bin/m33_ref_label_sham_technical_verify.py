@@ -95,6 +95,41 @@ def load_ref_pool(path: Path) -> tuple[tuple[str, ...], tuple[str, ...], dict[st
     return people, tuple(labels[p] for p in people), pairs
 
 
+def map_ref_pseudonyms(ref_pairs_path: Path, panel_map_path: Path,
+                       private_people: Sequence[str], labels: Sequence[str],
+                       private_pairs: Mapping[str, Sequence[int]]) -> tuple[tuple[str, ...], dict[str, tuple[int, int]]]:
+    panel: dict[str, str] = {}
+    with panel_map_path.open(encoding="utf-8", newline="") as handle:
+        for row in csv.reader(handle, delimiter="\t"):
+            require(len(row) == 2 and row[0] not in panel and row[1] in ANCESTRIES,
+                    "invalid panel map")
+            panel[row[0]] = row[1]
+    node_pair_to_sample: dict[tuple[int, int], str] = {}
+    with ref_pairs_path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        require(reader.fieldnames is not None and
+                {"sample_id", "ancestry", "haplotype_0_node", "haplotype_1_node"}.issubset(reader.fieldnames),
+                "invalid REF pairs header")
+        for row in reader:
+            sample, ancestry = row["sample_id"], row["ancestry"]
+            pair = tuple(sorted((int(row["haplotype_0_node"]), int(row["haplotype_1_node"]))))
+            require(sample in panel and panel[sample] == ancestry and pair not in node_pair_to_sample,
+                    "REF pairs and panel map differ")
+            node_pair_to_sample[pair] = sample
+    mapped: list[str] = []
+    mapped_pairs: dict[str, tuple[int, int]] = {}
+    for person, label in zip(private_people, labels):
+        pair = tuple(sorted(private_pairs[person]))
+        sample = node_pair_to_sample.get(pair)
+        require(sample is not None and panel.get(sample) == label,
+                "private REF nodes do not map exactly to the pseudonymous panel")
+        mapped.append(sample)
+        mapped_pairs[sample] = pair
+    require(len(set(mapped)) == len(mapped) == 90 and set(mapped) == set(panel),
+            "REF pseudonym mapping is not a 90-person bijection")
+    return tuple(mapped), mapped_pairs
+
+
 def permute_labels(people: Sequence[str], labels: Sequence[str],
                    pairs: Mapping[str, Sequence[int]], seed: int) -> tuple[str, ...]:
     require(seed in SEEDS, "unregistered sham seed")
@@ -165,9 +200,12 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
                         {"locus_key_sha256", "chrom", "pos", "ref", "alt", "cM", "minor_code"})
     require(np.all(selected["chrom"] == 22) and np.all(np.isin(selected["minor_code"], (0, 1))),
             "selected locus scope/orientation differs")
-    people, labels, pairs = load_ref_pool(args.pools)
+    private_people, labels, private_pairs = load_ref_pool(args.pools)
+    people, pairs = map_ref_pseudonyms(
+        args.ref_pairs, args.panel_map, private_people, labels, private_pairs,
+    )
     dosage = reconstruct_dosage(args.tree_sequence, selected["pos"], selected["minor_code"],
-                                people, pairs)
+                                private_people, private_pairs)
     receipt = json.loads(args.bridge_receipt.read_text(encoding="utf-8"))
     real = load_npz(args.real_reference, MEMBERS)
     real_oracle = {"ancestry": np.asarray(ANCESTRIES, dtype="|S4"),
@@ -205,6 +243,8 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
             "selected_loci": int(len(selected["pos"])), "sham_semantic_sha256": observed_hashes,
             "tree_sequence_sha256": sha256_file(args.tree_sequence),
             "pools_sha256": sha256_file(args.pools),
+            "ref_pairs_sha256": sha256_file(args.ref_pairs),
+            "panel_map_sha256": sha256_file(args.panel_map),
             "bridge_receipt_sha256": sha256_file(args.bridge_receipt),
             "verifier_git_commit": args.git_commit,
             "verifier_source_sha256": sha256_file(Path(__file__).resolve())}
@@ -229,6 +269,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sham", action="append", required=True)
     parser.add_argument("--tree-sequence", required=True, type=Path)
     parser.add_argument("--pools", required=True, type=Path)
+    parser.add_argument("--ref-pairs", required=True, type=Path)
+    parser.add_argument("--panel-map", required=True, type=Path)
     parser.add_argument("--bridge-receipt", required=True, type=Path)
     parser.add_argument("--git-commit", required=True)
     parser.add_argument("--output", required=True, type=Path)
