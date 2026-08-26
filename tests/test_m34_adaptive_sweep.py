@@ -34,13 +34,13 @@ def contract():
 
 def record(
     family, config_id, arm, primary=0.70, guardrail=0.02, *, radius_cM=0.2,
-    sweep_stage="triage", maximum_updates=300,
+    sweep_stage="triage", maximum_updates=300, seed=1103, rotation="R0",
 ):
     return {
         "family": family,
         "config_id": config_id,
-        "seed": 1103,
-        "rotation": "R0",
+        "seed": seed,
+        "rotation": rotation,
         "arm": arm,
         "radius_cM": radius_cM,
         "sweep_stage": sweep_stage,
@@ -75,7 +75,8 @@ def record_for_task(task, primary):
     return record(
         task["family"], task["config_id"], task["arm"], primary=primary,
         radius_cM=task["radius_cM"], sweep_stage=task["sweep_stage"],
-        maximum_updates=task["maximum_updates"],
+        maximum_updates=task["maximum_updates"], seed=task["seed"],
+        rotation=task["rotation"],
     )
 
 
@@ -232,6 +233,13 @@ class M34AdaptiveSweepTests(unittest.TestCase):
         self.assertEqual({task["rotation"] for task in plan["tasks"]}, {"R0", "R1", "R2"})
         self.assertEqual({task["maximum_updates"] for task in plan["tasks"]}, {2000})
         self.assertEqual({task["radius_cM"] for task in plan["tasks"]}, {0.1})
+
+        append_plan_metrics(payload, plan)
+        finalist_pairs = SUBJECT.load_metric_pairs(value, payload)
+        self.assertEqual(
+            sum(key[-1] == "finalists" for key in finalist_pairs),
+            plan["task_count"] // 2,
+        )
 
     def test_guardrail_worsening_blocks_promotion(self):
         value = contract()

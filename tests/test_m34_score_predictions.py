@@ -74,6 +74,16 @@ class M34ScoringTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "marker axes"):
                 subject.score(prediction, truth)
 
+    def test_optional_task_identity_is_embedded_without_changing_metrics(self):
+        labels = np.zeros((1, 2, 3), dtype=np.int8)
+        task = {"family": "bilstm", "config_id": "bilstm_r1", "arm": "RE",
+                "seed": 1103, "rotation": "R0", "radius_cM": 0.05,
+                "sweep_stage": "radius_sensitivity", "maximum_updates": 800}
+        with tempfile.TemporaryDirectory() as directory:
+            prediction, truth = self.write_pair(Path(directory), labels)
+            result = subject.score(prediction, truth, task=task)
+        self.assertEqual(result["task"], task)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,8 @@ import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import m34_adaptive_sweep as adaptive
+
 
 PRIMARY_METRIC = "boundary_F1_0.2cM"
 PLAN_STAGE_SPECS = {
@@ -29,6 +31,13 @@ PLAN_STAGE_SPECS = {
         "report_stage": "M34_LOCAL_EXPANSION_REPORT",
         "report_status": "PASS_LOCAL_EXPANSION_REPORT_RENDERED",
         "label": "Expansión local exploratoria",
+    },
+    "M34_RADIUS_SENSITIVITY_PLAN": {
+        "sweep_stage": "radius_sensitivity",
+        "aggregate_status": "PASS_EXACT_RADIUS_SENSITIVITY_GRID_F0_RD_RE",
+        "report_stage": "M34_RADIUS_SENSITIVITY_REPORT",
+        "report_status": "PASS_RADIUS_SENSITIVITY_REPORT_RENDERED",
+        "label": "Sensibilidad exploratoria al radio",
     },
 }
 REQUIRED_COLUMNS = {
@@ -164,9 +173,27 @@ def _declared_configs(
     return declared
 
 
-def validate_plan(plan: Mapping[str, Any],
-                  contract: Mapping[str, Any]) -> list[tuple[str, str, int]]:
-    """Validate a triage/expansion plan and return its report order."""
+def _radius_plan_from_source(
+    plan: Mapping[str, Any], contract: Mapping[str, Any],
+    plan_source_metrics: Mapping[str, Any] | None,
+) -> None:
+    """Bind a radius plan to the accumulated metrics that selected it."""
+    require(plan_source_metrics is not None,
+            "radius sensitivity requires plan-source metrics")
+    try:
+        pairs = adaptive.load_metric_pairs(dict(contract), dict(plan_source_metrics))
+        expected = adaptive.radius_sensitivity_plan(dict(contract), pairs)
+    except (adaptive.ContractError, KeyError, TypeError, ValueError) as error:
+        raise ReportError("radius plan-source metrics are invalid") from error
+    require(dict(plan) == expected,
+            "radius plan differs from the contract and plan-source metrics")
+
+
+def validate_plan(
+    plan: Mapping[str, Any], contract: Mapping[str, Any],
+    plan_source_metrics: Mapping[str, Any] | None = None,
+) -> list[tuple[str, str, int, float]]:
+    """Validate an adaptive plan and return its stage-specific report order."""
     plan_stage = plan.get("stage")
     require(plan_stage in PLAN_STAGE_SPECS,
             f"unsupported report plan stage: {plan_stage}")
@@ -179,8 +206,10 @@ def validate_plan(plan: Mapping[str, Any],
 
     stage_spec = PLAN_STAGE_SPECS[str(plan_stage)]
     contract_stage = contract["stages"][stage_spec["sweep_stage"]]
+    if plan_stage == "M34_RADIUS_SENSITIVITY_PLAN":
+        _radius_plan_from_source(plan, contract, plan_source_metrics)
     declared = _declared_configs(contract)
-    task_pairs: dict[tuple[str, str], dict[str, Mapping[str, Any]]] = {}
+    task_pairs: dict[tuple[str, str, float], dict[str, Mapping[str, Any]]] = {}
     first_seen: dict[str, list[str]] = {
         family: [] for family in contract["families"]
     }
@@ -190,10 +219,13 @@ def validate_plan(plan: Mapping[str, Any],
         pair = (family, config_id)
         require(pair in declared,
                 f"plan configuration is absent from the contract: {pair}")
+        radius = finite_float(task.get("radius_cM"), f"{pair}/radius_cM")
+        identity = (family, config_id, radius)
         arm = task.get("arm")
-        require(arm in {"RD", "RE"} and arm not in task_pairs.setdefault(pair, {}),
-                f"plan arms are duplicated or malformed for {pair}")
-        task_pairs[pair][str(arm)] = task
+        require(arm in {"RD", "RE"} and
+                arm not in task_pairs.setdefault(identity, {}),
+                f"plan arms are duplicated or malformed for {identity}")
+        task_pairs[identity][str(arm)] = task
         if config_id not in first_seen[family]:
             first_seen[family].append(config_id)
 
@@ -201,11 +233,18 @@ def validate_plan(plan: Mapping[str, Any],
                 task.get("rotation") == contract_stage["rotation"] and
                 task.get("sweep_stage") == stage_spec["sweep_stage"] and
                 task.get("maximum_updates") == contract_stage["maximum_updates"],
-                f"plan task identity differs from the contract for {pair}/{arm}")
-        radius = finite_float(task.get("radius_cM"), f"{pair}/{arm}/radius_cM")
-        require(radius == finite_float(contract_stage["radius_cM"],
-                                       f"{stage_spec['sweep_stage']}/radius_cM"),
-                f"plan radius differs from the contract for {pair}/{arm}")
+                f"plan task identity differs from the contract for {identity}/{arm}")
+        if plan_stage == "M34_RADIUS_SENSITIVITY_PLAN":
+            allowed_radii = {
+                finite_float(value, "radius_sensitivity/new_radius_cM")
+                for value in plan.get("new_radii_cM", [])
+            }
+            require(radius in allowed_radii,
+                    f"plan radius differs from the contract for {identity}/{arm}")
+        else:
+            require(radius == finite_float(contract_stage["radius_cM"],
+                                           f"{stage_spec['sweep_stage']}/radius_cM"),
+                    f"plan radius differs from the contract for {identity}/{arm}")
         _, config = declared[pair]
         training = dict(contract["training"])
         overrides = config.get("training_overrides", {})
@@ -216,19 +255,45 @@ def validate_plan(plan: Mapping[str, Any],
                              f"{pair}/{arm}/learning_rate") ==
                 finite_float(training["learning_rate"], "training/learning_rate") and
                 finite_float(task.get("weight_decay"),
-                             f"{pair}/{arm}/weight_decay") ==
+                             f"{identity}/{arm}/weight_decay") ==
                 finite_float(training["weight_decay"], "training/weight_decay"),
-                f"plan optimizer settings differ from the contract for {pair}/{arm}")
+                f"plan optimizer settings differ from the contract for {identity}/{arm}")
 
     require(all(set(arms) == {"RD", "RE"} for arms in task_pairs.values()),
             "adaptive plan contains an incomplete RD/RE pair")
 
     if plan_stage == "M34_TRIAGE_PLAN":
-        expected = triage_config_order(contract)
-        require(set(task_pairs) == {(family, config_id)
-                                    for family, config_id, _ in expected},
+        radius = finite_float(contract_stage["radius_cM"], "triage/radius_cM")
+        expected = [(family, config_id, rank, radius)
+                    for family, config_id, rank in triage_config_order(contract)]
+        require(set(task_pairs) == {(family, config_id, radius_value)
+                                    for family, config_id, _, radius_value in expected},
                 "triage plan configuration grid differs from the contract")
         return expected
+
+    if plan_stage == "M34_RADIUS_SENSITIVITY_PLAN":
+        selected = plan.get("selected_architectures")
+        new_radii = plan.get("new_radii_cM")
+        require(isinstance(selected, list) and selected and
+                isinstance(new_radii, list) and new_radii,
+                "radius sensitivity selection is malformed")
+        ordered = []
+        for candidate in selected:
+            require(isinstance(candidate, Mapping),
+                    "radius sensitivity candidate is malformed")
+            family = str(candidate.get("family"))
+            config_id = str(candidate.get("config_id"))
+            require((family, config_id) in declared,
+                    f"radius candidate is absent from the contract: {family}/{config_id}")
+            rank = declared[(family, config_id)][0]
+            ordered.extend((family, config_id, rank,
+                            finite_float(radius, "radius_sensitivity/new_radius_cM"))
+                           for radius in new_radii)
+        require(set(task_pairs) == {
+            (family, config_id, radius)
+            for family, config_id, _rank, radius in ordered
+        }, "radius sensitivity task grid differs from its selection")
+        return ordered
 
     families = list(contract["families"])
     anchors = plan.get("anchor_config_ids_by_family")
@@ -238,7 +303,8 @@ def validate_plan(plan: Mapping[str, Any],
                 for member in (anchors, selected, medium)),
             "local expansion configuration maps differ from the contract")
     stage = contract["stages"]["local_expansion"]
-    ordered: list[tuple[str, str, int]] = []
+    radius = finite_float(stage["radius_cM"], "local_expansion/radius_cM")
+    ordered: list[tuple[str, str, int, float]] = []
     declared_pairs: set[tuple[str, str]] = set()
     for family in families:
         family_anchors = anchors[family]
@@ -266,29 +332,155 @@ def validate_plan(plan: Mapping[str, Any],
             pair = (family, config_id)
             require(pair in declared, f"undeclared local expansion pair: {pair}")
             declared_pairs.add(pair)
-            ordered.append((family, config_id, declared[pair][0]))
-    require(set(task_pairs) == declared_pairs,
+            ordered.append((family, config_id, declared[pair][0], radius))
+    require(set(task_pairs) == {(family, config_id, radius)
+                                for family, config_id in declared_pairs},
             "local expansion task grid differs from its configuration maps")
     return ordered
 
 
-def read_plan(path: Path, contract: Mapping[str, Any]) -> dict[str, Any]:
+def read_plan(
+    path: Path, contract: Mapping[str, Any],
+    plan_source_metrics: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     plan = strict_json(path)
-    validate_plan(plan, contract)
+    validate_plan(plan, contract, plan_source_metrics)
     return plan
+
+
+def validate_plan_source_metrics(
+    payload: Mapping[str, Any], contract: Mapping[str, Any],
+) -> dict[tuple[str, str, float, int, str, str], dict[str, dict[str, float]]]:
+    """Validate the accumulated expansion payload reused by radius sensitivity."""
+    expansion_pairs = len(contract["families"]) * (
+        int(contract["stages"]["local_expansion"]["anchor_count_per_family"]) +
+        int(contract["stages"]["local_expansion"]["maximum_new_configs_per_family"])
+    )
+    prior_pairs = len(triage_config_order(contract)) + expansion_pairs
+    require(payload.get("schema_version") == "1.0.0" and
+            payload.get("stage") == "M34_ADAPTIVE_STAGE_METRICS_PAYLOAD" and
+            payload.get("source_plan_stage") == "M34_LOCAL_EXPANSION_PLAN" and
+            payload.get("status") == "PASS_EXACT_LOCAL_EXPANSION_GRID" and
+            payload.get("claim_level") == "exploratory" and
+            payload.get("evaluation_split") == "VALID" and
+            payload.get("test_opened") is False,
+            "plan-source metrics identity differs")
+    records = payload.get("records")
+    require(isinstance(records, list) and
+            payload.get("record_count") == 2 * prior_pairs and
+            payload.get("pair_count") == prior_pairs and
+            payload.get("stage_record_count") == 2 * expansion_pairs and
+            payload.get("stage_pair_count") == expansion_pairs and
+            len(records) == 2 * prior_pairs,
+            "plan-source metrics dimensions differ")
+    try:
+        pairs = adaptive.load_metric_pairs(dict(contract), dict(payload))
+    except (adaptive.ContractError, KeyError, TypeError, ValueError) as error:
+        raise ReportError("plan-source metric records are invalid") from error
+    require(len(pairs) == prior_pairs,
+            "plan-source metrics contain an unexpected pair grid")
+    return pairs
+
+
+def report_order(
+    plan: Mapping[str, Any], contract: Mapping[str, Any],
+    plan_source_metrics: Mapping[str, Any] | None = None,
+) -> list[tuple[str, str, int, float]]:
+    """Return rows shown in the report, including the reused 0.2 cM radius."""
+    stage_order = validate_plan(plan, contract, plan_source_metrics)
+    if plan.get("stage") != "M34_RADIUS_SENSITIVITY_PLAN":
+        return stage_order
+    declared = _declared_configs(contract)
+    radii = [finite_float(value, "radius_sensitivity/radius_cM")
+             for value in contract["stages"]["radius_sensitivity"]["radii_cM"]]
+    selected = [(str(row["family"]), str(row["config_id"]))
+                for row in plan["selected_architectures"]]
+    return [
+        (family, config_id, declared[(family, config_id)][0], radius)
+        for family, config_id in selected
+        for radius in radii
+    ]
+
+
+def _baseline_by_metric(rows: Sequence[Mapping[str, str]]) -> dict[str, float]:
+    baseline: dict[str, float] = {}
+    for row in rows:
+        metric = str(row["metric"])
+        value = finite_float(row["F0"], f"F0/{metric}")
+        if metric in baseline:
+            require(abs(baseline[metric] - value) <= 1e-12,
+                    f"F0 differs across radius rows for {metric}")
+        else:
+            baseline[metric] = value
+    return baseline
+
+
+def reused_radius_rows(
+    comparison_rows: Sequence[Mapping[str, str]], plan: Mapping[str, Any],
+    contract: Mapping[str, Any], plan_source_metrics: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    """Materialize the frozen 0.2 cM rows from the accumulated expansion payload."""
+    pairs = validate_plan_source_metrics(plan_source_metrics, contract)
+    _radius_plan_from_source(plan, contract, plan_source_metrics)
+    baseline = _baseline_by_metric(comparison_rows)
+    required_metrics = [contract["metrics"]["primary"],
+                        *contract["metrics"]["sensitivities"],
+                        *contract["metrics"]["guardrails"]]
+    require(set(baseline) == set(required_metrics),
+            "comparison table does not define one F0 per declared metric")
+    radius_stage = contract["stages"]["radius_sensitivity"]
+    expansion_stage = contract["stages"]["local_expansion"]
+    reused_radius = finite_float(
+        plan.get("reused_radius_cM_from_local_expansion"),
+        "radius_sensitivity/reused_radius_cM",
+    )
+    require(reused_radius == finite_float(
+        radius_stage["reuse_radius_cM_from_local_expansion"],
+        "contract/reused_radius_cM",
+    ), "reused radius differs from the contract")
+    rows: list[dict[str, str]] = []
+    for candidate in plan["selected_architectures"]:
+        family, config_id = str(candidate["family"]), str(candidate["config_id"])
+        key = (family, config_id, reused_radius, expansion_stage["seed"],
+               expansion_stage["rotation"], "local_expansion")
+        require(key in pairs,
+                f"reused local-expansion pair is missing: {key}")
+        arms = pairs[key]
+        for metric in required_metrics:
+            f0, rd, re = baseline[metric], arms["RD"][metric], arms["RE"][metric]
+            rows.append({
+                "family": family, "config_id": config_id,
+                "seed": str(expansion_stage["seed"]),
+                "root": str(expansion_stage["rotation"]),
+                "radius_cM": str(reused_radius),
+                "sweep_stage": "local_expansion",
+                "maximum_updates": str(expansion_stage["maximum_updates"]),
+                "metric": metric, "F0": str(f0), "RD": str(rd), "RE": str(re),
+                "RE_minus_RD": str(re - rd), "RE_minus_F0": str(re - f0),
+            })
+    return rows
 
 
 def validate_aggregate_receipt(
     path: Path, comparison_path: Path, contract_path: Path, plan_path: Path,
     plan: Mapping[str, Any], contract: Mapping[str, Any],
+    plan_source_metrics_path: Path | None = None,
+    plan_source_metrics: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     receipt = strict_json(path)
     plan_stage = str(plan["stage"])
     specification = PLAN_STAGE_SPECS[plan_stage]
-    stage_pairs = len(validate_plan(plan, contract))
-    prior_pairs = 0 if plan_stage == "M34_TRIAGE_PLAN" else len(
-        triage_config_order(contract)
-    )
+    stage_pairs = len(validate_plan(plan, contract, plan_source_metrics))
+    if plan_stage == "M34_TRIAGE_PLAN":
+        prior_pairs = 0
+    elif plan_stage == "M34_LOCAL_EXPANSION_PLAN":
+        prior_pairs = len(triage_config_order(contract))
+    else:
+        require(plan_source_metrics_path is not None and
+                plan_source_metrics is not None,
+                "radius aggregate receipt requires plan-source metrics")
+        validate_plan_source_metrics(plan_source_metrics, contract)
+        prior_pairs = int(plan_source_metrics["pair_count"])
     pair_count = prior_pairs + stage_pairs
     metric_count = 1 + len(contract["metrics"]["sensitivities"]) + len(
         contract["metrics"]["guardrails"]
@@ -307,6 +499,10 @@ def validate_aggregate_receipt(
             input_hashes.get("triage_plan") == sha256_file(plan_path) and
             input_hashes.get("adaptive_contract") == sha256_file(contract_path),
             "aggregate receipt is not bound to the adaptive plan")
+    if plan_stage == "M34_RADIUS_SENSITIVITY_PLAN":
+        require(input_hashes.get("plan_source_metrics") ==
+                sha256_file(plan_source_metrics_path),
+                "aggregate receipt is not bound to plan-source metrics")
     require(isinstance(output_hashes, dict) and
             output_hashes.get("table") == sha256_file(comparison_path),
             "aggregate receipt is not bound to the comparison table")
@@ -321,25 +517,41 @@ def validate_aggregate_receipt(
 
 def summarize(rows: Sequence[Mapping[str, str]],
               contract: Mapping[str, Any],
-              plan: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Build one exact, ordered report row per family and configuration."""
+              plan: Mapping[str, Any],
+              plan_source_metrics: Mapping[str, Any] | None = None,
+              ) -> list[dict[str, Any]]:
+    """Build one exact report row per family, configuration and radius."""
     guardrails = list(contract["metrics"]["guardrails"])
     sensitivities = list(contract["metrics"]["sensitivities"])
     thresholds = contract["selection"]["maximum_guardrail_worsening"]
     required_metrics = {PRIMARY_METRIC, *sensitivities, *guardrails}
-    expected = validate_plan(plan, contract)
-    expected_pairs = {(family, config) for family, config, _ in expected}
-    task_by_pair = {
-        (str(task["family"]), str(task["config_id"])): task
+    expected = report_order(plan, contract, plan_source_metrics)
+    expected_pairs = {(family, config, radius)
+                      for family, config, _rank, radius in expected}
+    task_by_pair: dict[tuple[str, str, float], Mapping[str, Any]] = {
+        (str(task["family"]), str(task["config_id"]),
+         finite_float(task["radius_cM"], "plan/radius_cM")): task
         for task in plan["tasks"] if task["arm"] == "RD"
     }
-    by_config: dict[tuple[str, str], dict[str, Mapping[str, str]]] = {}
-    metadata: dict[tuple[str, str], tuple[str, ...]] = {}
+    if plan.get("stage") == "M34_RADIUS_SENSITIVITY_PLAN":
+        expansion = contract["stages"]["local_expansion"]
+        reused = finite_float(plan["reused_radius_cM_from_local_expansion"],
+                              "reused_radius_cM")
+        for candidate in plan["selected_architectures"]:
+            pair = (str(candidate["family"]), str(candidate["config_id"]), reused)
+            task_by_pair[pair] = {
+                "seed": expansion["seed"], "rotation": expansion["rotation"],
+                "radius_cM": reused, "sweep_stage": "local_expansion",
+                "maximum_updates": expansion["maximum_updates"],
+            }
+    by_config: dict[tuple[str, str, float], dict[str, Mapping[str, str]]] = {}
+    metadata: dict[tuple[str, str, float], tuple[str, ...]] = {}
 
     for index, row in enumerate(rows, start=2):
-        pair = (str(row["family"]), str(row["config_id"]))
+        pair = (str(row["family"]), str(row["config_id"]),
+                finite_float(row["radius_cM"], f"line_{index}/radius_cM"))
         require(pair in expected_pairs,
-                f"configuration absent from the adaptive plan on line {index}: {pair}")
+                f"configuration/radius absent from the adaptive plan on line {index}: {pair}")
         metric = str(row["metric"])
         require(metric in required_metrics,
                 f"undeclared metric on line {index}: {metric}")
@@ -358,8 +570,8 @@ def summarize(rows: Sequence[Mapping[str, str]],
     require(set(by_config) == expected_pairs,
             "comparison table contains an incomplete adaptive-stage grid")
     summaries: list[dict[str, Any]] = []
-    for family, config_id, complexity_rank in expected:
-        pair = (family, config_id)
+    for family, config_id, complexity_rank, expected_radius in expected:
+        pair = (family, config_id, expected_radius)
         observed = by_config[pair]
         require(set(observed) == required_metrics,
                 f"required metrics are incomplete for {pair}")
@@ -405,7 +617,7 @@ def summarize(rows: Sequence[Mapping[str, str]],
     return summaries
 
 
-def metric_values(row: Mapping[str, str], pair: tuple[str, str],
+def metric_values(row: Mapping[str, str], pair: tuple[str, str, float],
                   metric: str) -> dict[str, float]:
     values = {
         name: finite_float(row[name], f"{pair}/{metric}/{name}")
@@ -467,7 +679,12 @@ def render_figure(summaries: Sequence[Mapping[str, Any]],
     import numpy as np
 
     guardrails = list(contract["metrics"]["guardrails"])
-    labels = [f"{row['family']} | {row['config_id']}" for row in summaries]
+    show_radius = plan.get("stage") == "M34_RADIUS_SENSITIVITY_PLAN"
+    labels = [
+        f"{row['family']} | {row['config_id']} | r={row['radius_cM']:g} cM"
+        if show_radius else f"{row['family']} | {row['config_id']}"
+        for row in summaries
+    ]
     y = np.arange(len(summaries))
     f0 = np.asarray([row[f"F0_{PRIMARY_METRIC}"] for row in summaries])
     rd = np.asarray([row[f"RD_{PRIMARY_METRIC}"] for row in summaries])
@@ -582,7 +799,9 @@ def render_figure(summaries: Sequence[Mapping[str, Any]],
         f"{plan_spec['label']} con una raíz ({next(iter(roots))}), una semilla "
         f"({next(iter(seeds))}) y {next(iter(updates))} actualizaciones; VALID "
         "separado de FIT. F0: FLARE; RD: valores raros desactivados, conservando "
-        "loci y máscaras; RE: valores raros habilitados.",
+        "loci y máscaras; RE: valores raros habilitados."
+        + (" El radio 0,2 cM se reutiliza de la expansión local; los demás "
+           "pertenecen a la sensibilidad." if show_radius else ""),
         ha="left", fontsize=10.2, color=muted,
     )
     minimum_delta = float(contract["selection"]["provisional_minimum_delta_F1"])
@@ -609,19 +828,33 @@ def render_figure(summaries: Sequence[Mapping[str, Any]],
 def write_artifacts(comparison_path: Path, contract_path: Path, plan_path: Path,
                     aggregate_receipt_path: Path,
                     summary_path: Path, png_path: Path, pdf_path: Path,
-                    receipt_path: Path) -> dict[str, Any]:
+                    receipt_path: Path,
+                    plan_source_metrics_path: Path | None = None) -> dict[str, Any]:
     outputs = (summary_path, png_path, pdf_path, receipt_path)
     require(len({path.resolve() for path in outputs}) == len(outputs),
             "report output paths must be distinct")
     require(not any(path.exists() for path in outputs),
             "refusing to overwrite report outputs")
     contract = read_contract(contract_path)
-    plan = read_plan(plan_path, contract)
+    plan_source_metrics = (
+        strict_json(plan_source_metrics_path)
+        if plan_source_metrics_path is not None else None
+    )
+    plan = read_plan(plan_path, contract, plan_source_metrics)
     validate_aggregate_receipt(
         aggregate_receipt_path, comparison_path, contract_path, plan_path,
-        plan, contract,
+        plan, contract, plan_source_metrics_path, plan_source_metrics,
     )
-    summaries = summarize(read_rows(comparison_path), contract, plan)
+    comparison_rows = read_rows(comparison_path)
+    combined_rows = list(comparison_rows)
+    if plan["stage"] == "M34_RADIUS_SENSITIVITY_PLAN":
+        require(plan_source_metrics is not None,
+                "radius report requires plan-source metrics")
+        combined_rows.extend(reused_radius_rows(
+            comparison_rows, plan, contract, plan_source_metrics,
+        ))
+    summaries = summarize(combined_rows, contract, plan, plan_source_metrics)
+    stage_pair_count = len(validate_plan(plan, contract, plan_source_metrics))
     plan_spec = PLAN_STAGE_SPECS[str(plan["stage"])]
     temporary = tuple(path.with_name(f".{path.stem}.tmp{path.suffix}")
                       for path in outputs)
@@ -642,12 +875,18 @@ def write_artifacts(comparison_path: Path, contract_path: Path, plan_path: Path,
             "evaluation_split": "VALID",
             "test_opened": False,
             "configuration_count": len(summaries),
+            "stage_pair_count": stage_pair_count,
+            "reused_pair_count": len(summaries) - stage_pair_count,
             "primary_metric": PRIMARY_METRIC,
             "input_sha256": {
                 "comparison_table": sha256_file(comparison_path),
                 "adaptive_contract": sha256_file(contract_path),
                 "adaptive_plan": sha256_file(plan_path),
                 "aggregate_receipt": sha256_file(aggregate_receipt_path),
+                "plan_source_metrics": (
+                    sha256_file(plan_source_metrics_path)
+                    if plan_source_metrics_path is not None else None
+                ),
             },
             "output_sha256": {
                 "summary_table": sha256_file(temporary[0]),
@@ -673,6 +912,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--contract", type=Path, required=True)
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--aggregate-receipt", type=Path, required=True)
+    parser.add_argument("--plan-source-metrics", type=Path)
     parser.add_argument("--summary", type=Path, required=True)
     parser.add_argument("--png", type=Path, required=True)
     parser.add_argument("--pdf", type=Path, required=True)
@@ -684,7 +924,7 @@ def main() -> None:
     args = parse_args()
     receipt = write_artifacts(
         args.comparison, args.contract, args.plan, args.aggregate_receipt, args.summary,
-        args.png, args.pdf, args.receipt,
+        args.png, args.pdf, args.receipt, args.plan_source_metrics,
     )
     print(json.dumps({
         "status": receipt["status"],

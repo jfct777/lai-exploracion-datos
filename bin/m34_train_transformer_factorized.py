@@ -85,6 +85,7 @@ def run(args: Any) -> dict[str, Any]:
         "family": task["family"],
         "config_id": task["config_id"],
         "arm": task["arm"],
+        "task": task,
         "declared_maximum_rows_per_logical_microbatch": args.maximum_rows_per_batch,
         "effective_maximum_rows_per_physical_microbatch": min(
             args.maximum_rows_per_batch, cap,

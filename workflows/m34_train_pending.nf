@@ -5,6 +5,29 @@ String m34Sha256(target) {
         .digest(new File(target.toString()).bytes).encodeHex().toString()
 }
 
+String m34RadiusToken(value) {
+    def radius = new BigDecimal(value.toString()).stripTrailingZeros()
+    if (radius <= 0)
+        error 'radius_cM must be positive'
+    def plain = radius.toPlainString()
+    if (!(plain ==~ /[0-9]+(?:\.[0-9]+)?/))
+        error 'radius_cM cannot be represented as a safe path token'
+    return "r${plain.replace('.', 'p')}cM"
+}
+
+String m34TaskToken(task, String radiusToken) {
+    def components = [
+        task.sweep_stage as String,
+        task.rotation as String,
+        "seed${task.seed}",
+        "u${task.maximum_updates}",
+        radiusToken,
+    ]
+    if (!components.every { it ==~ /[A-Za-z0-9._-]+/ })
+        error 'task identity cannot be represented as a safe path token'
+    return components.join('_')
+}
+
 include { M34_NAM_TRAIN_FACTORIZED } from '../modules/34_NAM_TRAIN_FACTORIZED'
 include { M34_NAM_TRAIN_TRANSFORMER_FACTORIZED } from '../modules/34_NAM_TRAIN_TRANSFORMER_FACTORIZED'
 include { M34_NAM_SCORE_VALID } from '../modules/34_NAM_SCORE'
@@ -55,13 +78,18 @@ workflow {
     taskInputs = Channel.fromList(pending.pending_tasks.collect { task ->
         def encoded = groovy.json.JsonOutput.toJson(task)
             .getBytes('UTF-8').encodeBase64().toString()
+        def radiusCm = new BigDecimal(task.radius_cM.toString())
+        def radiusToken = m34RadiusToken(radiusCm)
+        def taskToken = m34TaskToken(task, radiusToken)
         tuple(task.family as String, task.config_id as String,
-              task.arm as String, encoded)
+              task.arm as String, radiusCm, radiusToken, taskToken, encoded)
     })
-    standardTaskInputs = taskInputs.filter { family, configId, arm, taskBase64 ->
+    standardTaskInputs = taskInputs.filter {
+        family, configId, arm, radiusCm, radiusToken, taskToken, taskBase64 ->
         family != 'transformer_small'
     }
-    transformerTaskInputs = taskInputs.filter { family, configId, arm, taskBase64 ->
+    transformerTaskInputs = taskInputs.filter {
+        family, configId, arm, radiusCm, radiusToken, taskToken, taskBase64 ->
         family == 'transformer_small'
     }
 
@@ -89,16 +117,26 @@ workflow {
 
     completedPredictions = Channel.fromList(pending.completed.collect { row ->
         def task = row.task
+        def encoded = groovy.json.JsonOutput.toJson(task)
+            .getBytes('UTF-8').encodeBase64().toString()
+        def radiusCm = new BigDecimal(task.radius_cM.toString())
+        def radiusToken = m34RadiusToken(radiusCm)
+        def taskToken = m34TaskToken(task, radiusToken)
         tuple(task.family as String, task.config_id as String, task.arm as String,
+              radiusCm, radiusToken, taskToken, encoded,
               file(row.prediction as String, checkIfExists: true))
     })
     standardPredictions = M34_NAM_TRAIN_FACTORIZED.out.trained.map {
-        family, configId, arm, prediction, receipt, model ->
-        tuple(family, configId, arm, prediction)
+        family, configId, arm, radiusCm, radiusToken, taskToken, taskBase64,
+        prediction, receipt, model ->
+        tuple(family, configId, arm, radiusCm, radiusToken, taskToken,
+              taskBase64, prediction)
     }
     transformerPredictions = M34_NAM_TRAIN_TRANSFORMER_FACTORIZED.out.trained.map {
-        family, configId, arm, prediction, receipt, model, batchingReceipt ->
-        tuple(family, configId, arm, prediction)
+        family, configId, arm, radiusCm, radiusToken, taskToken, taskBase64,
+        prediction, receipt, model, batchingReceipt ->
+        tuple(family, configId, arm, radiusCm, radiusToken, taskToken,
+              taskBase64, prediction)
     }
     allPredictions = completedPredictions
         .mix(standardPredictions)

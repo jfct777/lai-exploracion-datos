@@ -63,13 +63,18 @@ def score_payload(prediction_sha256: str, arm: str = "F0") -> dict:
 
 
 class Fixture:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, plan_payload: dict | None = None,
+                 plan_source_metrics: dict | None = None) -> None:
         self.root = root
         self.contract = root / "contract.json"
         self.contract.write_bytes(CONTRACT.read_bytes())
         contract = sweep.validate_contract(sweep.strict_json(self.contract))
-        self.plan_payload = sweep.triage_plan(contract)
+        self.plan_payload = plan_payload or sweep.triage_plan(contract)
         self.plan = write_json(root / "triage.plan.json", self.plan_payload)
+        self.plan_source_metrics = (
+            write_json(root / "plan-source.records.json", plan_source_metrics)
+            if plan_source_metrics is not None else None
+        )
         self.manifest = write_json(root / "factorized.manifest.json", {
             "schema_version": "1.0.0",
             "ancestry_names": ["AFR", "EUR", "NAM"],
@@ -100,7 +105,7 @@ class Fixture:
                 f"{task['family']}.{task['config_id']}.{task['arm']}.metrics.json"
             )
             self.metrics.append(write_json(
-                root / "metrics" / metric_name,
+                root / "metrics" / f"task-{index:02d}" / metric_name,
                 score_payload(prediction_hash, task["arm"]),
             ))
             paired_task = {name: value for name, value in task.items() if name != "arm"}
@@ -166,8 +171,46 @@ class Fixture:
     def aggregate(self):
         return subject.aggregate(
             self.contract, self.plan, self.manifest, self.baseline,
-            self.metrics, self.receipts, self.transformer_batching, None,
+            self.metrics, self.receipts, self.transformer_batching,
+            self.plan_source_metrics,
         )
+
+
+def record_for_task(task: dict, primary: float) -> dict:
+    guardrail = 0.02
+    return {
+        "family": task["family"], "config_id": task["config_id"],
+        "seed": task["seed"], "rotation": task["rotation"],
+        "arm": task["arm"], "radius_cM": task["radius_cM"],
+        "sweep_stage": task["sweep_stage"],
+        "maximum_updates": task["maximum_updates"],
+        "boundary_F1_0.1cM": primary - 0.03,
+        "boundary_F1_0.2cM": primary,
+        "boundary_F1_0.5cM": primary + 0.03,
+        "macro_ancestry_dose_MAE": guardrail,
+        "NAM_truth_present_MAE": guardrail,
+        "false_transitions_per_cM": guardrail,
+        "haplotype_Brier": guardrail,
+    }
+
+
+def radius_plan_fixture(contract: dict) -> tuple[dict, dict]:
+    records = []
+    triage = sweep.triage_plan(contract)
+    for task in triage["tasks"]:
+        primary = 0.70 if task["arm"] == "RD" else 0.701
+        records.append(record_for_task(task, primary))
+    expansion = sweep.expansion_plan(
+        contract, sweep.load_metric_pairs(contract, {"records": records}),
+    )
+    for task in expansion["tasks"]:
+        primary = 0.70 if task["arm"] == "RD" else 0.72
+        records.append(record_for_task(task, primary))
+    source = {"records": records}
+    plan = sweep.radius_sensitivity_plan(
+        contract, sweep.load_metric_pairs(contract, source),
+    )
+    return plan, source
 
 
 def mutate(path: Path, callback) -> None:
@@ -271,6 +314,38 @@ class M34AggregateTriageTests(unittest.TestCase):
             ))
             with self.assertRaisesRegex(subject.AggregateError, "VALID truth differs"):
                 fixture.aggregate()
+
+    def test_repeated_radii_require_embedded_task_identity(self):
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            contract = sweep.validate_contract(sweep.strict_json(CONTRACT))
+            plan, source = radius_plan_fixture(contract)
+            fixture = Fixture(base, plan, source)
+            with self.assertRaisesRegex(subject.AggregateError,
+                                        "legacy candidate metric filename.*ambiguous"):
+                fixture.aggregate()
+
+            for task, path in zip(plan["tasks"], fixture.metrics):
+                mutate(path, lambda value, exact=task: value.update(task=exact))
+            payload, _table, receipt = fixture.aggregate()
+            self.assertEqual(payload["stage_record_count"], plan["task_count"])
+            self.assertEqual(receipt["source_plan_stage"],
+                             "M34_RADIUS_SENSITIVITY_PLAN")
+
+    def test_embedded_identity_disambiguates_equal_prediction_hashes(self):
+        with tempfile.TemporaryDirectory() as raw:
+            fixture = Fixture(Path(raw))
+            shared = "a" * 64
+            for index in (0, 1):
+                task = fixture.plan_payload["tasks"][index]
+                mutate(fixture.metrics[index], lambda value, exact=task: (
+                    value.update(task=exact),
+                    value["input_sha256"].update(prediction=shared),
+                ))
+                mutate(fixture.receipts[index],
+                       lambda value: value.update(valid_prediction_sha256=shared))
+            payload, _table, _receipt = fixture.aggregate()
+            self.assertEqual(payload["stage_record_count"], 42)
 
     def test_update_budget_and_pair_hash_are_enforced(self):
         with tempfile.TemporaryDirectory() as raw:

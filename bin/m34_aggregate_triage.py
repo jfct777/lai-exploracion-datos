@@ -266,25 +266,6 @@ def aggregate(
     manifest_hash = sha256_file(manifest_path)
 
     expected_by_key = {task_key(task): task for task in tasks}
-    expected_names = {
-        f"{task['family']}.{task['config_id']}.{task['arm']}.metrics.json": task
-        for task in tasks
-    }
-    require(len(metric_paths) == len(expected_names),
-            "candidate metric count differs from the frozen plan")
-    metrics_by_key: dict[tuple[Any, ...], tuple[Path, dict[str, Any]]] = {}
-    observed_names: set[str] = set()
-    for path in metric_paths:
-        require(path.name in expected_names,
-                f"unexpected candidate metric filename: {path.name}")
-        require(path.name not in observed_names,
-                f"duplicate candidate metric filename: {path.name}")
-        observed_names.add(path.name)
-        task = expected_names[path.name]
-        metrics_by_key[task_key(task)] = (path, sweep.strict_json(path))
-    require(observed_names == set(expected_names),
-            "candidate metric filename grid is incomplete")
-
     require(len(receipt_paths) == len(expected_by_key),
             "training receipt count differs from the frozen plan")
     receipts_by_key: dict[tuple[Any, ...], tuple[Path, dict[str, Any]]] = {}
@@ -304,24 +285,80 @@ def aggregate(
     require(set(receipts_by_key) == set(expected_by_key),
             "training receipt task grid is incomplete")
 
+    require(len(metric_paths) == len(expected_by_key),
+            "candidate metric count differs from the frozen plan")
+    legacy_by_name: dict[str, list[tuple[Any, ...]]] = {}
+    for key, task in expected_by_key.items():
+        name = f"{task['family']}.{task['config_id']}.{task['arm']}.metrics.json"
+        legacy_by_name.setdefault(name, []).append(key)
+    metrics_by_key: dict[tuple[Any, ...], tuple[Path, dict[str, Any]]] = {}
+    for path in metric_paths:
+        metric = sweep.strict_json(path)
+        embedded_task = metric.get("task")
+        if embedded_task is not None:
+            require(isinstance(embedded_task, dict),
+                    f"candidate metric task is malformed: {path}")
+            key = task_key(embedded_task)
+            require(key in expected_by_key and embedded_task == expected_by_key[key],
+                    f"candidate metric contains an undeclared task: {path}")
+        else:
+            candidates = legacy_by_name.get(path.name, [])
+            require(len(candidates) == 1,
+                    f"legacy candidate metric filename is absent or ambiguous: {path.name}")
+            key = candidates[0]
+        require(key not in metrics_by_key,
+                f"duplicate candidate metric task: {task_id(expected_by_key[key])}")
+        prediction_hash = _sha256(
+            _nested(metric, ("input_sha256", "prediction"), str(path)),
+            f"{path}/prediction",
+        )
+        receipt = receipts_by_key[key][1]
+        require(prediction_hash == receipt["valid_prediction_sha256"],
+                f"{task_id(expected_by_key[key])} score is not bound to its training prediction")
+        metrics_by_key[key] = (path, metric)
+    require(set(metrics_by_key) == set(expected_by_key),
+            "candidate metric task grid is incomplete")
+
     transformer_tasks = {
-        (task["family"], task["config_id"], task["arm"]): task
+        task_key(task): task
         for task in tasks if task["family"] == "transformer_small"
     }
     require(len(transformer_batching_paths) == len(transformer_tasks),
             "Transformer batching receipt count differs from the frozen plan")
-    transformer_batching: dict[tuple[str, str, str], tuple[Path, dict[str, Any]]] = {}
+    transformer_by_legacy_identity: dict[tuple[str, str, str], list[tuple[Any, ...]]] = {}
+    transformer_receipts = [
+        (key, receipt[1]["task_sha256"])
+        for key, receipt in receipts_by_key.items() if key in transformer_tasks
+    ]
+    transformer_by_task_sha = {
+        receipt[1]["task_sha256"]: key
+        for key, receipt in receipts_by_key.items() if key in transformer_tasks
+    }
+    require(len(transformer_by_task_sha) == len(transformer_receipts),
+            "Transformer training task SHA-256 values are not unique")
+    transformer_batching: dict[tuple[Any, ...], tuple[Path, dict[str, Any]]] = {}
+    for key, task in transformer_tasks.items():
+        identity = (task["family"], task["config_id"], task["arm"])
+        transformer_by_legacy_identity.setdefault(identity, []).append(key)
     for path in transformer_batching_paths:
         batching = sweep.strict_json(path)
-        identity = (
-            batching.get("family"), batching.get("config_id"), batching.get("arm"),
-        )
-        require(identity in transformer_tasks,
-                f"unexpected Transformer batching receipt: {path}")
-        require(identity not in transformer_batching,
-                f"duplicate Transformer batching receipt: {identity}")
-        task = transformer_tasks[identity]
-        training_path, training = receipts_by_key[task_key(task)]
+        task_sha = batching.get("task_sha256")
+        key = transformer_by_task_sha.get(task_sha)
+        if key is None:
+            identity = (
+                batching.get("family"), batching.get("config_id"), batching.get("arm"),
+            )
+            candidates = transformer_by_legacy_identity.get(identity, [])
+            require(len(candidates) == 1,
+                    f"unexpected or ambiguous Transformer batching receipt: {path}")
+            key = candidates[0]
+        require(key not in transformer_batching,
+                f"duplicate Transformer batching receipt: {task_id(transformer_tasks[key])}")
+        task = transformer_tasks[key]
+        if "task" in batching:
+            require(batching["task"] == task,
+                    f"Transformer batching task differs from the plan: {path}")
+        training_path, training = receipts_by_key[key]
         require(
             batching.get("schema_version") == "1.0.0" and
             batching.get("stage") == TRANSFORMER_BATCH_STAGE and
@@ -342,10 +379,16 @@ def aggregate(
                 0 < batching["effective_maximum_rows_per_physical_microbatch"] <=
                 int(batching.get("declared_maximum_rows_per_logical_microbatch", 0)),
                 f"Transformer physical row cap differs: {path}")
-        transformer_batching[identity] = (path, batching)
-    for config_id in sorted({key[1] for key in transformer_tasks}):
-        rd = transformer_batching[("transformer_small", config_id, "RD")][1]
-        re = transformer_batching[("transformer_small", config_id, "RE")][1]
+        transformer_batching[key] = (path, batching)
+    transformer_pairs: dict[tuple[Any, ...], dict[str, dict[str, Any]]] = {}
+    for key, (_path, batching) in transformer_batching.items():
+        family, config_id, arm, seed, rotation, radius, stage, updates = key
+        pair_key = (family, config_id, seed, rotation, radius, stage, updates)
+        transformer_pairs.setdefault(pair_key, {})[arm] = batching
+    for pair_key, arms in transformer_pairs.items():
+        require(set(arms) == set(sweep.ARMS),
+                f"Transformer RD/RE batching pair is incomplete: {pair_key}")
+        rd, re = arms["RD"], arms["RE"]
         require(
             (rd.get("policy"),
              rd.get("declared_maximum_rows_per_logical_microbatch"),
@@ -355,7 +398,7 @@ def aggregate(
              re.get("declared_maximum_rows_per_logical_microbatch"),
              re.get("effective_maximum_rows_per_physical_microbatch"),
              re.get("maximum_tokens_per_microbatch")),
-            f"Transformer {config_id} RD/RE batching policies differ",
+            f"Transformer {pair_key} RD/RE batching policies differ",
         )
 
     baseline = sweep.strict_json(baseline_path)
@@ -388,9 +431,7 @@ def aggregate(
             "prediction_sha256": receipt["valid_prediction_sha256"],
             "task_sha256": receipt["task_sha256"],
         }
-        batching = transformer_batching.get(
-            (task["family"], task["config_id"], task["arm"])
-        )
+        batching = transformer_batching.get(key)
         if batching is not None:
             input_audit[label]["transformer_batching_receipt_sha256"] = (
                 sha256_file(batching[0])

@@ -1,9 +1,9 @@
 nextflow.enable.dsl=2
 
 process M34_NAM_TRAIN_FACTORIZED {
-    tag { "m34_train_${family}_${configId}_${arm}" }
+    tag { "m34_train_${family}_${configId}_${taskToken}_${arm}" }
     publishDir {
-        "${params.m34_inputs_results_dir}/${params.m34_inputs_run_id}/models/${family}/${configId}/${arm}"
+        "${params.m34_inputs_results_dir}/${params.m34_inputs_run_id}/models/${family}/${configId}/${taskToken}/${arm}"
     }, mode: 'copy', overwrite: false
     container params.m34_inputs_pytorch_image
     containerOptions { "--network none --user ${params.m34_inputs_container_user}" }
@@ -14,7 +14,8 @@ process M34_NAM_TRAIN_FACTORIZED {
     stageInMode 'symlink'
 
     input:
-    tuple val(family), val(configId), val(arm), val(taskBase64)
+    tuple val(family), val(configId), val(arm), val(radiusCm), val(radiusToken),
+          val(taskToken), val(taskBase64)
     path factorBundle
     path adaptiveContract
     path trainerPy
@@ -27,10 +28,11 @@ process M34_NAM_TRAIN_FACTORIZED {
     path m33ContractPy
 
     output:
-    tuple val(family), val(configId), val(arm),
-          path("m34_train_${family}_${configId}_${arm}/valid.prediction.npz"),
-          path("m34_train_${family}_${configId}_${arm}/train.receipt.json"),
-          path("m34_train_${family}_${configId}_${arm}/model.pt"),
+    tuple val(family), val(configId), val(arm), val(radiusCm), val(radiusToken),
+          val(taskToken), val(taskBase64),
+          path("m34_train_${family}_${configId}_${taskToken}_${arm}/valid.prediction.npz"),
+          path("m34_train_${family}_${configId}_${taskToken}_${arm}/train.receipt.json"),
+          path("m34_train_${family}_${configId}_${taskToken}_${arm}/model.pt"),
           emit: trained
 
     script:
@@ -51,7 +53,7 @@ process M34_NAM_TRAIN_FACTORIZED {
       --contract ${adaptiveContract} \
       --manifest ${factorBundle}/factorized.manifest.json \
       --task task.json \
-      --outdir m34_train_${family}_${configId}_${arm} \
+      --outdir m34_train_${family}_${configId}_${taskToken}_${arm} \
       --device ${params.m34_inputs_train_device} \
       --threads ${params.m34_inputs_train_cpus} \
       --sample-shard-size ${params.m34_inputs_train_sample_shard_size} \
@@ -64,10 +66,10 @@ process M34_NAM_TRAIN_FACTORIZED {
     stub:
     """
     set -euo pipefail
-    mkdir -p m34_train_${family}_${configId}_${arm}
+    mkdir -p m34_train_${family}_${configId}_${taskToken}_${arm}
     touch \
-      m34_train_${family}_${configId}_${arm}/valid.prediction.npz \
-      m34_train_${family}_${configId}_${arm}/train.receipt.json \
-      m34_train_${family}_${configId}_${arm}/model.pt
+      m34_train_${family}_${configId}_${taskToken}_${arm}/valid.prediction.npz \
+      m34_train_${family}_${configId}_${taskToken}_${arm}/train.receipt.json \
+      m34_train_${family}_${configId}_${taskToken}_${arm}/model.pt
     """
 }

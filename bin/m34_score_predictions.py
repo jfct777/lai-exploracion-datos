@@ -103,7 +103,8 @@ def ordered_matches(truth: Sequence[tuple[float, str, str]],
 
 
 def score(prediction_path: Path, truth_path: Path,
-          tolerances: Sequence[float] = (0.1, 0.2, 0.5)) -> dict[str, Any]:
+          tolerances: Sequence[float] = (0.1, 0.2, 0.5),
+          task: dict[str, Any] | None = None) -> dict[str, Any]:
     prediction, labels = load_inputs(prediction_path, truth_path)
     probabilities = prediction["probabilities"].astype(np.float64, copy=False)
     names = _decode(prediction["ancestry_names"])
@@ -169,6 +170,10 @@ def score(prediction_path: Path, truth_path: Path,
                           "truth": sha256_file(truth_path)},
         "truth_opened_only_by_scorer": True,
     }
+    if task is not None:
+        require(isinstance(task, dict) and task,
+                "scoring task identity must be a non-empty object")
+        result["task"] = task
     require(all(math.isfinite(value["f1"]) and
                 math.isfinite(value["false_transitions_per_cM"])
                 for value in boundary.values()) and math.isfinite(macro_mae) and
@@ -180,6 +185,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prediction", type=Path, required=True)
     parser.add_argument("--truth", type=Path, required=True)
+    parser.add_argument(
+        "--task", type=Path,
+        help="Exact adaptive task JSON embedded in the scoring receipt.",
+    )
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 
@@ -187,7 +196,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     require(not args.output.exists(), "refusing to overwrite scoring output")
-    result = score(args.prediction, args.truth)
+    task = None
+    if args.task is not None:
+        require(args.task.is_file(), "scoring task JSON is missing")
+        task = json.loads(args.task.read_text(encoding="utf-8"))
+        require(isinstance(task, dict), "scoring task JSON must contain an object")
+    result = score(args.prediction, args.truth, task=task)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True,
                                       allow_nan=False) + "\n", encoding="utf-8")

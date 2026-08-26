@@ -271,7 +271,9 @@ def load_metric_pairs(
         rotation = str(record.get("rotation"))
         radius_cM = _finite_number(record.get("radius_cM"), f"record {index}/radius_cM")
         sweep_stage = str(record.get("sweep_stage"))
-        if sweep_stage not in ("triage", "local_expansion", "radius_sensitivity"):
+        if sweep_stage not in (
+            "triage", "local_expansion", "radius_sensitivity", "finalists",
+        ):
             raise ContractError(f"invalid sweep stage in metric record {index}: {sweep_stage}")
         expected_updates = int(contract["stages"][sweep_stage]["maximum_updates"])
         if int(record.get("maximum_updates")) != expected_updates:

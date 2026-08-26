@@ -8,7 +8,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / "workflows" / "m34_train_pending.nf"
+STANDARD_MODULE = ROOT / "modules" / "34_NAM_TRAIN_FACTORIZED.nf"
 TRANSFORMER_MODULE = ROOT / "modules" / "34_NAM_TRAIN_TRANSFORMER_FACTORIZED.nf"
+SCORE_MODULE = ROOT / "modules" / "34_NAM_SCORE.nf"
 
 
 class PendingWorkflowTests(unittest.TestCase):
@@ -29,6 +31,21 @@ class PendingWorkflowTests(unittest.TestCase):
         self.assertIn("def runResults = file(", workflow)
         self.assertIn("checkIfExists: false", workflow)
         self.assertNotIn("def runResults = new File(", workflow)
+
+    def test_complete_task_identity_namespaces_models_and_metrics(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        standard = STANDARD_MODULE.read_text(encoding="utf-8")
+        transformer = TRANSFORMER_MODULE.read_text(encoding="utf-8")
+        score = SCORE_MODULE.read_text(encoding="utf-8")
+        self.assertIn("String m34RadiusToken", workflow)
+        self.assertIn("task.sweep_stage", workflow)
+        self.assertIn('"seed${task.seed}"', workflow)
+        self.assertIn('"u${task.maximum_updates}"', workflow)
+        self.assertIn("radiusCm, radiusToken, taskToken", workflow)
+        for module in (standard, transformer, score):
+            self.assertIn("val(radiusCm), val(radiusToken)", module)
+            self.assertIn("${taskToken}", module)
+        self.assertIn("--task task.json", score)
 
     def test_transformer_module_writes_batching_receipt_and_keeps_logical_limits(self):
         module = TRANSFORMER_MODULE.read_text(encoding="utf-8")
