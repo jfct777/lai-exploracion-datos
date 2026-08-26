@@ -1,0 +1,212 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "M34_NAM_ADAPTIVE_MODEL_SWEEP",
+  "status": "CONTRACT_ONLY_NO_REAL_RESULTS_NO_EXECUTION",
+  "scope": {
+    "chromosome": "chr22",
+    "ancestries": ["AFR", "EUR", "NAM"],
+    "arms": ["RD", "RE"],
+    "arm_pairing": "same_family_config_seed_rotation_initialization_optimizer_updates_and_input_geometry",
+    "rotation_field_semantics": "independent_mosaic_realization_root_not_donor_unit_rotation",
+    "claim_level": "exploratory"
+  },
+  "stages": {
+    "triage": {
+      "seed": 1103,
+      "rotation": "R0",
+      "radius_cM": 0.2,
+      "maximum_updates": 300,
+      "minimum_evaluated_configs_per_family": 3,
+      "purpose": "broad_capacity_spanning_screen"
+    },
+    "local_expansion": {
+      "seed": 1103,
+      "rotation": "R0",
+      "radius_cM": 0.2,
+      "maximum_updates": 800,
+      "anchor_count_per_family": 1,
+      "maximum_new_configs_per_family": 1,
+      "neighbor_definition": "adjacent_complexity_rank_within_declared_family_space",
+      "trend_rule": "expand_around_best_anchor_with_one_declared_neighbor_before_any_family_promotion"
+    },
+    "radius_sensitivity": {
+      "maximum_families": 2,
+      "seed": 1103,
+      "rotation": "R0",
+      "radii_cM": [0.05, 0.1, 0.2, 0.5],
+      "reuse_radius_cM_from_local_expansion": 0.2,
+      "maximum_updates": 800,
+      "one_architecture_config_per_family": true,
+      "purpose": "separate_radius_effect_from_architecture_search_without_cartesian_explosion"
+    },
+    "finalists": {
+      "maximum_families": 2,
+      "maximum_updates": 2000,
+      "seeds": [1103, 2207, 3301],
+      "rotations": ["R0", "R1", "R2"],
+      "one_config_per_family": true
+    }
+  },
+  "metrics": {
+    "primary": "boundary_F1_0.2cM",
+    "sensitivities": ["boundary_F1_0.1cM", "boundary_F1_0.5cM"],
+    "guardrails": [
+      "macro_ancestry_dose_MAE",
+      "NAM_truth_present_MAE",
+      "false_transitions_per_cM",
+      "haplotype_Brier"
+    ],
+    "paired_estimand": "RE_minus_RD",
+    "finite_values_required": true
+  },
+  "selection": {
+    "provisional_minimum_delta_F1": 0.005,
+    "strong_delta_F1": 0.01,
+    "threshold_interpretation": "pragmatic_exploratory_rules_not_biological_or_field_standard_cutoffs",
+    "maximum_guardrail_worsening": {
+      "macro_ancestry_dose_MAE": 0.002,
+      "NAM_truth_present_MAE": 0.005,
+      "false_transitions_per_cM": 0.001,
+      "haplotype_Brier": 0.002
+    },
+    "score_tiebreak_order": [
+      "maximize_RE_minus_RD_boundary_F1_0.2cM",
+      "maximize_min_RE_minus_RD_boundary_F1_sensitivity",
+      "minimize_RE_minus_RD_NAM_truth_present_MAE",
+      "minimize_RE_minus_RD_false_transitions_per_cM",
+      "minimize_declared_complexity_rank",
+      "family_then_config_id_lexical"
+    ],
+    "promotion_requires": [
+      "complete_RD_RE_pair",
+      "at_least_three_evaluated_configs_in_family",
+      "primary_delta_at_least_provisional_minimum",
+      "all_guardrails_within_declared_worsening",
+      "config_belongs_to_declared_finite_space"
+    ],
+    "rank_only_fallback": {
+      "enabled_only_if_zero_families_reach_provisional_minimum": true,
+      "maximum_families": 2,
+      "requires_positive_primary_delta": true,
+      "label": "exploratory_rank_only_not_promoted",
+      "maximum_guardrail_worsening": {
+        "macro_ancestry_dose_MAE": 0.004,
+        "NAM_truth_present_MAE": 0.01,
+        "false_transitions_per_cM": 0.002,
+        "haplotype_Brier": 0.004
+      },
+      "interpretation": "predeclared_noncatastrophic_fallback_for_radius_sensitivity_only"
+    },
+    "radius_selection": {
+      "requires_all_declared_radii": true,
+      "one_family_config_radius_tuple_per_family": true,
+      "uses_same_deterministic_score_tiebreak_order": true,
+      "no_family_or_architecture_replacement_after_radius_sensitivity": true
+    },
+    "no_p_values_during_screen": true,
+    "no_family_elimination_from_two_or_fewer_points": true,
+    "no_retuning_after_finalist_promotion": true
+  },
+  "training": {
+    "optimizer": "AdamW",
+    "learning_rate": 0.0003,
+    "learning_rate_policy": "one_common_rate_no_posthoc_family_specific_search",
+    "weight_decay": 0.0001,
+    "warmup_updates": 100,
+    "batch_people": 8,
+    "marker_shard_size": 256,
+    "maximum_rows_per_microbatch": 2048,
+    "maximum_padded_tokens_per_microbatch": 262144,
+    "validation_every_updates": 50,
+    "gradient_clip_norm": 1.0,
+    "deterministic_algorithms": true
+  },
+  "boundary_loss": {
+    "target_transition_weight_share": 0.01,
+    "formula": "beta=q*(1-p)/(p*(1-q))-1_fit_truth_only",
+    "provenance": "M33_PRE4B"
+  },
+  "model_spec_fields": ["hidden_dim", "depth", "kernel_size", "dilations", "dropout", "lstm_layers", "transformer_heads", "transformer_ff_dim", "transformer_max_tokens"],
+  "families": {
+    "local_linear": {
+      "triage_ids": ["linear_r0", "linear_r2", "linear_r4"],
+      "configs": [
+        {"id": "linear_r0", "complexity_rank": 0, "model_spec": {"hidden_dim": 4, "depth": 1, "kernel_size": 3, "dilations": [1], "dropout": 0.0, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}, "training_overrides": {"weight_decay": 0.0001}},
+        {"id": "linear_r1", "complexity_rank": 1, "model_spec": {"hidden_dim": 4, "depth": 1, "kernel_size": 3, "dilations": [1], "dropout": 0.0, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}, "training_overrides": {"weight_decay": 0.0003}},
+        {"id": "linear_r2", "complexity_rank": 2, "model_spec": {"hidden_dim": 4, "depth": 1, "kernel_size": 3, "dilations": [1], "dropout": 0.0, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}, "training_overrides": {"weight_decay": 0.001}},
+        {"id": "linear_r3", "complexity_rank": 3, "model_spec": {"hidden_dim": 4, "depth": 1, "kernel_size": 3, "dilations": [1], "dropout": 0.0, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}, "training_overrides": {"weight_decay": 0.003}},
+        {"id": "linear_r4", "complexity_rank": 4, "model_spec": {"hidden_dim": 4, "depth": 1, "kernel_size": 3, "dilations": [1], "dropout": 0.0, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}, "training_overrides": {"weight_decay": 0.01}}
+      ]
+    },
+    "residual_cnn_1d": {
+      "triage_ids": ["rescnn_r0", "rescnn_r2", "rescnn_r4"],
+      "configs": [
+        {"id": "rescnn_r0", "complexity_rank": 0, "model_spec": {"hidden_dim": 16, "depth": 2, "kernel_size": 5, "dilations": [1], "dropout": 0.0, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "rescnn_r1", "complexity_rank": 1, "model_spec": {"hidden_dim": 24, "depth": 3, "kernel_size": 5, "dilations": [1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "rescnn_r2", "complexity_rank": 2, "model_spec": {"hidden_dim": 32, "depth": 4, "kernel_size": 9, "dilations": [1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "rescnn_r3", "complexity_rank": 3, "model_spec": {"hidden_dim": 48, "depth": 4, "kernel_size": 15, "dilations": [1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "rescnn_r4", "complexity_rank": 4, "model_spec": {"hidden_dim": 64, "depth": 5, "kernel_size": 15, "dilations": [1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}}
+      ]
+    },
+    "lainns_cnn_1d": {
+      "triage_ids": ["lainns_r0", "lainns_r2", "lainns_r4"],
+      "configs": [
+        {"id": "lainns_r0", "complexity_rank": 0, "model_spec": {"hidden_dim": 16, "depth": 3, "kernel_size": 5, "dilations": [1, 1, 1], "dropout": 0.0, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "lainns_r1", "complexity_rank": 1, "model_spec": {"hidden_dim": 24, "depth": 4, "kernel_size": 5, "dilations": [1, 1, 1, 1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "lainns_r2", "complexity_rank": 2, "model_spec": {"hidden_dim": 32, "depth": 5, "kernel_size": 9, "dilations": [1, 1, 1, 1, 1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "lainns_r3", "complexity_rank": 3, "model_spec": {"hidden_dim": 48, "depth": 5, "kernel_size": 15, "dilations": [1, 1, 1, 1, 1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "lainns_r4", "complexity_rank": 4, "model_spec": {"hidden_dim": 64, "depth": 6, "kernel_size": 15, "dilations": [1, 1, 1, 1, 1, 1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}}
+      ]
+    },
+    "unet_1d": {
+      "triage_ids": ["unet_r0", "unet_r2", "unet_r4"],
+      "configs": [
+        {"id": "unet_r0", "complexity_rank": 0, "model_spec": {"hidden_dim": 8, "depth": 2, "kernel_size": 5, "dilations": [1, 1], "dropout": 0.0, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "unet_r1", "complexity_rank": 1, "model_spec": {"hidden_dim": 12, "depth": 2, "kernel_size": 5, "dilations": [1, 1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "unet_r2", "complexity_rank": 2, "model_spec": {"hidden_dim": 16, "depth": 3, "kernel_size": 5, "dilations": [1, 1, 1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "unet_r3", "complexity_rank": 3, "model_spec": {"hidden_dim": 24, "depth": 3, "kernel_size": 9, "dilations": [1, 1, 1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "unet_r4", "complexity_rank": 4, "model_spec": {"hidden_dim": 32, "depth": 4, "kernel_size": 9, "dilations": [1, 1, 1, 1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}}
+      ]
+    },
+    "bilstm": {
+      "triage_ids": ["bilstm_r0", "bilstm_r2", "bilstm_r4"],
+      "configs": [
+        {"id": "bilstm_r0", "complexity_rank": 0, "model_spec": {"hidden_dim": 16, "depth": 1, "kernel_size": 3, "dilations": [1], "dropout": 0.0, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "bilstm_r1", "complexity_rank": 1, "model_spec": {"hidden_dim": 24, "depth": 1, "kernel_size": 3, "dilations": [1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "bilstm_r2", "complexity_rank": 2, "model_spec": {"hidden_dim": 32, "depth": 2, "kernel_size": 3, "dilations": [1], "dropout": 0.1, "lstm_layers": 2, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "bilstm_r3", "complexity_rank": 3, "model_spec": {"hidden_dim": 48, "depth": 2, "kernel_size": 3, "dilations": [1], "dropout": 0.1, "lstm_layers": 2, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "bilstm_r4", "complexity_rank": 4, "model_spec": {"hidden_dim": 64, "depth": 3, "kernel_size": 3, "dilations": [1], "dropout": 0.1, "lstm_layers": 3, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}}
+      ]
+    },
+    "tcn": {
+      "triage_ids": ["tcn_r0", "tcn_r2", "tcn_r4"],
+      "configs": [
+        {"id": "tcn_r0", "complexity_rank": 0, "model_spec": {"hidden_dim": 16, "depth": 3, "kernel_size": 5, "dilations": [1, 2, 4], "dropout": 0.0, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "tcn_r1", "complexity_rank": 1, "model_spec": {"hidden_dim": 24, "depth": 4, "kernel_size": 5, "dilations": [1, 2, 4, 8], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "tcn_r2", "complexity_rank": 2, "model_spec": {"hidden_dim": 32, "depth": 5, "kernel_size": 9, "dilations": [1, 2, 4, 8, 16], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "tcn_r3", "complexity_rank": 3, "model_spec": {"hidden_dim": 48, "depth": 5, "kernel_size": 9, "dilations": [1, 2, 4, 8, 16], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "tcn_r4", "complexity_rank": 4, "model_spec": {"hidden_dim": 64, "depth": 6, "kernel_size": 15, "dilations": [1, 2, 4, 8, 16, 32], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 1, "transformer_ff_dim": 64, "transformer_max_tokens": 256}}
+      ]
+    },
+    "transformer_small": {
+      "triage_ids": ["transformer_r0", "transformer_r2", "transformer_r4"],
+      "configs": [
+        {"id": "transformer_r0", "complexity_rank": 0, "model_spec": {"hidden_dim": 32, "depth": 2, "kernel_size": 3, "dilations": [1], "dropout": 0.0, "lstm_layers": 1, "transformer_heads": 4, "transformer_ff_dim": 64, "transformer_max_tokens": 256}},
+        {"id": "transformer_r1", "complexity_rank": 1, "model_spec": {"hidden_dim": 48, "depth": 2, "kernel_size": 3, "dilations": [1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 4, "transformer_ff_dim": 96, "transformer_max_tokens": 256}},
+        {"id": "transformer_r2", "complexity_rank": 2, "model_spec": {"hidden_dim": 64, "depth": 3, "kernel_size": 3, "dilations": [1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 4, "transformer_ff_dim": 128, "transformer_max_tokens": 256}},
+        {"id": "transformer_r3", "complexity_rank": 3, "model_spec": {"hidden_dim": 80, "depth": 4, "kernel_size": 3, "dilations": [1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 8, "transformer_ff_dim": 160, "transformer_max_tokens": 256}},
+        {"id": "transformer_r4", "complexity_rank": 4, "model_spec": {"hidden_dim": 96, "depth": 4, "kernel_size": 3, "dilations": [1], "dropout": 0.1, "lstm_layers": 1, "transformer_heads": 8, "transformer_ff_dim": 192, "transformer_max_tokens": 256}}
+      ]
+    }
+  },
+  "stop_rules": [
+    "undeclared_family_or_config",
+    "missing_or_unpaired_RD_RE",
+    "nonfinite_metric",
+    "duplicate_metric_record",
+    "family_promotion_with_fewer_than_three_evaluated_configs",
+    "more_than_two_promoted_families",
+    "configuration_generated_outside_declared_space",
+    "retuning_after_finalist_promotion"
+  ]
+}
