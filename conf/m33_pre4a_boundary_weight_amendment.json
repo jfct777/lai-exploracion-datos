@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "M33_PRE4A_BOUNDARY_WEIGHT_AMENDMENT",
+  "status": "FROZEN_BEFORE_PRE4A_SCREEN",
+  "parent_contract": {
+    "path": "conf/m33_pre4_preregistration.json",
+    "sha256": "4308bbf33ae28f554f701da33efdc185264f9f407d62661e7048e0345687eb8b"
+  },
+  "delta_only": {
+    "preserved": [
+      "three_DEVELOPMENT_rotations",
+      "five_sealed_EVAL_roots",
+      "FLARE_0.6_F0",
+      "rare_disabled_and_rare_enabled_arms",
+      "target_and_REF_shams",
+      "four_radii_cM_0.05_0.1_0.2_0.5",
+      "local_linear_and_small_residual_CNN_families",
+      "training_seeds_1103_2207_3301",
+      "FIT_only_normalization",
+      "score_truth_barrier",
+      "primary_boundary_F1_at_0.2_cM",
+      "guardrails_and_promotion_rules"
+    ],
+    "changed": [
+      "boundary_weight_grid_is_parameterized_by_target_transition_weight_share",
+      "inner_validation_checkpoint_interval_is_200_updates_instead_of_50",
+      "a_200_update_single_rotation_single_seed_screen_precedes_the_full_rotation_grid"
+    ]
+  },
+  "observed_before_amendment": {
+    "scope": "DEVELOPMENT_only_no_EVAL",
+    "transition_counts": {
+      "386357765": {"transitions": 307, "possible_haplotype_marker_boundaries": 4787400},
+      "2024931463": {"transitions": 341, "possible_haplotype_marker_boundaries": 4787400},
+      "1324432253": {"transitions": 338, "possible_haplotype_marker_boundaries": 4787400}
+    },
+    "finding": "beta_1_doubles_transition_rows_but_leaves_their_total_loss_share_near_0.00014",
+    "pilot_R0_local_linear_radius_0.2_beta_1_seed_1103_update_200": {
+      "F0_boundary_F1_0.2cM": 0.6909667194928685,
+      "RD_boundary_F1_0.2cM": 0.6769706336939721,
+      "RE_boundary_F1_0.2cM": 0.6864274570982839,
+      "RE_minus_RD": 0.0094568234043118,
+      "RE_minus_F0": -0.0045392623945846,
+      "interpretation": "mechanistic_signal_but_no_LAI_improvement",
+      "metric_sha256": {
+        "F0": "931b267bb4d322da48cf9b747ea9ad8f283b84541ab735e5137729ab37dddcb4",
+        "RD": "ba80f56ac6b2247c15ee91583a8d0ceddb862910c5dc3c2e14710d924366b460",
+        "RE": "9b5e0c0fffd0b1c588fbf63671e1f0660a8e87be7fca98df42172971337c4559"
+      }
+    }
+  },
+  "boundary_weight_parameterization": {
+    "FIT_only_formula": "p=n_transition_rows/n_all_rows; multiplier=q*(1-p)/(p*(1-q)); beta=multiplier-1",
+    "target_transition_weight_share_q": [0.00007091531938003927, 0.01, 0.05, 0.2],
+    "first_value_semantics": "natural_unweighted_R0_prevalence_and_beta_0_in_every_rotation",
+    "derived_beta_by_rotation": {
+      "R0": [0.0, 141.42753008732387, 741.1223936128982, 3524.0813696612668],
+      "R1": [0.0, 148.93587033121915, 780.2447980416157, 3709.912790697674],
+      "R2": [0.0, 148.2416760194538, 776.6276803118908, 3692.7314814814813]
+    },
+    "reason": "cover_no_emphasis_low_moderate_and_strong_boundary_emphasis_without_making_boundaries_the_majority_of_loss"
+  },
+  "screen": {
+    "rotation": "R0",
+    "training_seed": 1103,
+    "updates": 200,
+    "checkpoint_updates": [200],
+    "families": ["local_linear", "small_residual_cnn_1d"],
+    "radii_cM": [0.05, 0.1, 0.2, 0.5],
+    "target_transition_weight_share_q": [0.00007091531938003927, 0.01, 0.05, 0.2],
+    "arms": ["RD", "RE"],
+    "candidate_count": 32,
+    "training_run_count": 64,
+    "short_circuit": "train_RD_and_RE_then_predict_SCORE_only_if_RE_inner_validation_loss_is_lower_than_RD_at_the_same_candidate",
+    "promotion_to_full_rotations": "retain_at_most_two_candidates_per_family_that_maximize_RE_minus_RD_boundary_F1_and_pass_F0_guardrails",
+    "no_claim_from_screen": true
+  },
+  "full_development": {
+    "maximum_updates": 2000,
+    "inner_validation_checkpoints": [200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000],
+    "same_three_rotations_and_three_training_seeds": true,
+    "same_selected_update_reused_by_RE_and_controls": true
+  },
+  "stop_rule": "stop_if_no_screen_candidate_has_RE_above_both_RD_and_F0_without_worsening_false_transitions_or_macro_ancestry_dose_MAE"
+}

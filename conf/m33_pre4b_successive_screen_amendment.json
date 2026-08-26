@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "M33_PRE4B_SUCCESSIVE_SCREEN",
+  "status": "FROZEN_BEFORE_STAGE2",
+  "parent": "conf/m33_pre4a_boundary_weight_amendment.json",
+  "preserved": [
+    "DEVELOPMENT_only_screen",
+    "R0_seed_1103_200_updates",
+    "paired_RD_RE",
+    "four_radii",
+    "two_model_families",
+    "F0_and_guardrail_comparison",
+    "no_EVAL_open",
+    "no_claim_from_screen"
+  ],
+  "stage1_observation_radius_0.2_local_linear": {
+    "q01": {"RD_F1": 0.6854460093896714, "RE_F1": 0.6895475819032761},
+    "q05": {"RD_F1": 0.6833073322932918, "RE_F1": 0.687402799377916},
+    "q20": {"RD_F1": 0.6885758998435054, "RE_F1": 0.6790697674418604},
+    "F0_F1": 0.6909667194928685,
+    "selection": "q01",
+    "reason": "highest_RE_F1_lowest_false_transition_rate_among_weighted_candidates"
+  },
+  "stage2": {
+    "target_transition_weight_share": 0.01,
+    "R0_beta": 141.42753008732387,
+    "local_linear_radii_cM": [0.05, 0.1, 0.5],
+    "small_residual_cnn_1d_radii_cM": [0.05, 0.1, 0.2, 0.5],
+    "arms": ["RD", "RE"],
+    "training_runs": 14
+  },
+  "stop_rule": "stop_family_if_no_radius_has_RE_above_both_paired_RD_and_F0_without_guardrail_worsening"
+}
