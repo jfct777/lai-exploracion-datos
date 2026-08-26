@@ -1,5 +1,10 @@
 nextflow.enable.dsl=2
 
+String m34Sha256(target) {
+    java.security.MessageDigest.getInstance('SHA-256')
+        .digest(new File(target.toString()).bytes).encodeHex().toString()
+}
+
 include { M34_NAM_TRAIN_FACTORIZED } from '../modules/34_NAM_TRAIN_FACTORIZED'
 include { M34_NAM_TRAIN_TRANSFORMER_FACTORIZED } from '../modules/34_NAM_TRAIN_TRANSFORMER_FACTORIZED'
 include { M34_NAM_SCORE_VALID } from '../modules/34_NAM_SCORE'
@@ -8,6 +13,9 @@ workflow {
     if (!params.m34_inputs_run_id ||
         !(params.m34_inputs_run_id ==~ /[a-z0-9][a-z0-9._-]{2,63}/))
         error 'm34_inputs_run_id must be a valid explicit run identifier'
+    if (params.m34_batch_region &&
+        !(params.m34_batch_region ==~ /[a-z]+-[a-z]+[0-9]/))
+        error 'm34_batch_region must be a valid Google Cloud region'
     if (!params.m34_inputs_results_dir || !params.m34_pending_factor_bundle ||
         !params.m34_inputs_adaptive_contract || !params.m34_pending_plan)
         error 'results, factor bundle, adaptive contract and pending plan are required'
@@ -27,10 +35,6 @@ workflow {
     def contractFile = file(params.m34_inputs_adaptive_contract, checkIfExists: true)
     def pendingFile = file(params.m34_pending_plan, checkIfExists: true)
     def pending = new groovy.json.JsonSlurper().parse(pendingFile)
-    def sha256 = { target ->
-        java.security.MessageDigest.getInstance('SHA-256')
-            .digest(new File(target.toString()).bytes).encodeHex().toString()
-    }
     if (pending.stage != 'M34_PENDING_TASK_SELECTION' ||
         pending.status != 'PASS_EXACT_COMPLEMENT' || pending.test_opened != false ||
         !(['M34_TRIAGE_PLAN', 'M34_LOCAL_EXPANSION_PLAN',
@@ -44,9 +48,9 @@ workflow {
 
     factorBundle = Channel.value(bundleFile)
     adaptiveContract = Channel.value(contractFile)
-    if (pending.input_sha256.contract != sha256(contractFile) ||
+    if (pending.input_sha256.contract != m34Sha256(contractFile) ||
         pending.input_sha256.factorized_manifest !=
-            sha256(bundleFile.resolve('factorized.manifest.json')))
+            m34Sha256(bundleFile.resolve('factorized.manifest.json')))
         error 'pending task selection is bound to different contract or factors'
     taskInputs = Channel.fromList(pending.pending_tasks.collect { task ->
         def encoded = groovy.json.JsonOutput.toJson(task)
