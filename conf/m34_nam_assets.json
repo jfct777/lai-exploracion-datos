@@ -1,0 +1,266 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M34_NAM_ASSET_REGISTRY",
+  "status": "CONTRACT_ONLY_OFFLINE_VALIDATION_NO_GCS_READ_NO_GENERATION_NO_TRAINING",
+  "chromosome": "22",
+  "genome_build": "GRCh38",
+  "ancestries": [
+    "AFR",
+    "EUR",
+    "NAM"
+  ],
+  "roles": [
+    "REF_TRAIN",
+    "SOURCE_VALID",
+    "SOURCE_TEST",
+    "DISCOVERY"
+  ],
+  "source_assets": {
+    "phased_chr22_vcf": {
+      "logical_id": "phased_chr22_vcf",
+      "gcs_uri": "gs://projects-usp/nam-diversity/shapeit/phased/natwgs.1000G.sgdp.hgdp.andamanese.hg38.22.norm.PHASED.vcf.gz",
+      "sha256": "71161973b2e233963321feb03db63eff04f14bc5c7a561a2f0dbce623fc05395",
+      "hash_evidence": {
+        "local_path": "/home/jose.tantalean/dnabr-lai/runs/m27e-ibd-rare-transfer-20260816-k7p9/results/27e_ibd_rare_transfer/audit/m27e_ibd_rare_transfer.manifest.json",
+        "manifest_key": "inputs.panel_chr22.vcf.gz"
+      },
+      "requires_live_hash_resolution": false
+    },
+    "panel_metadata": {
+      "logical_id": "panel_metadata",
+      "gcs_uri": "gs://projects-usp/nam-diversity/natwgs.1000G.sgdp.hgdp.hg38/metadata_complete_revised.txt",
+      "sha256": "d5035d2effa9855999ec684309b9d3d4a3db07184fbb089e73e74957e6fe13d0",
+      "hash_evidence": {
+        "local_path": "/home/jose.tantalean/dnabr-lai/runs/m27d-pass0-20260815a/public/m27d_sample_strata.manifest.json",
+        "manifest_key": "inputs.metadata_complete_revised.txt"
+      },
+      "requires_live_hash_resolution": false
+    },
+    "m27f_private_split": {
+      "logical_id": "m27f_private_split",
+      "gcs_uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m27f-blind-split-20260816a/results/27f_blind_split/m27f_split.private.tsv",
+      "sha256": "7e4abe2aa57c7375023268e56e3c1dbf9c7bbedc31c3acf1e07b4b07dabfdd07",
+      "hash_evidence": {
+        "local_path": "/home/jose.tantalean/dnabr-lai/runs/m27f-blind-split-20260816a/results/27f_blind_split/m27f_split.manifest.json",
+        "manifest_key": "sha256.m27f_split.private.tsv"
+      },
+      "requires_live_hash_resolution": false
+    },
+    "genetic_map_chr22": {
+      "logical_id": "genetic_map_chr22",
+      "gcs_uri": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/maps/genetic.map.chr22",
+      "sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+      "hash_evidence": {
+        "local_path": "/home/jose.tantalean/dnabr-lai/runs/m27e-ibd-rare-transfer-20260816-k7p9/results/27e_ibd_rare_transfer/audit/m27e_ibd_rare_transfer.manifest.json",
+        "manifest_key": "inputs.genetic.map.chr22"
+      },
+      "requires_live_hash_resolution": false
+    },
+    "pcrelate_retained_people": {
+      "logical_id": "pcrelate_retained_people",
+      "gcs_uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m27d-pass0-20260815a/27d_donor_kinship_audit/pass0/private/m27d_pass0_training_set.private.txt",
+      "sha256": "bbe3a9b8dc69700e0602e6e3c42cceec5f9564aeea2c7b05b4db17e5e40dfb08",
+      "hash_evidence": {
+        "local_path": "/home/jose.tantalean/dnabr-lai/runs/m27d-pass0-20260815a/public/m27d_pass0.manifest.json",
+        "manifest_key": "sha256.m27d_pass0_training_set.private.txt"
+      },
+      "requires_live_hash_resolution": false
+    }
+  },
+  "allowed_derived_uri_prefix": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-assets-20260826a/",
+  "derived_destinations": {
+    "resolved_asset_registry": {
+      "logical_id": "resolved_asset_registry",
+      "gcs_uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-assets-20260826a/provenance/m34_nam_assets.resolved.json",
+      "sha256": null,
+      "status": "PLANNED_NOT_GENERATED",
+      "requires_live_hash_resolution": true
+    },
+    "roles_private": {
+      "logical_id": "roles_private",
+      "gcs_uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-assets-20260826a/private/m34_roles.private.tsv",
+      "sha256": null,
+      "status": "PLANNED_NOT_GENERATED",
+      "requires_live_hash_resolution": true
+    },
+    "mosaic_events": {
+      "logical_id": "mosaic_events",
+      "gcs_uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-assets-20260826a/private/m34_mosaic_events.chr22.tsv.gz",
+      "sha256": null,
+      "status": "PLANNED_NOT_GENERATED",
+      "requires_live_hash_resolution": true
+    },
+    "mosaic_haplotypes": {
+      "logical_id": "mosaic_haplotypes",
+      "gcs_uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-assets-20260826a/private/m34_mosaic_haplotypes.chr22.zarr.zip",
+      "sha256": null,
+      "status": "PLANNED_NOT_GENERATED",
+      "requires_live_hash_resolution": true
+    },
+    "mosaic_truth": {
+      "logical_id": "mosaic_truth",
+      "gcs_uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-assets-20260826a/private/m34_mosaic_truth.chr22.tsv.gz",
+      "sha256": null,
+      "status": "PLANNED_NOT_GENERATED",
+      "requires_live_hash_resolution": true
+    },
+    "flare_reference_vcf": {
+      "logical_id": "flare_reference_vcf",
+      "gcs_uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-assets-20260826a/private/flare_reference.chr22.vcf.gz",
+      "sha256": null,
+      "status": "PLANNED_NOT_GENERATED",
+      "requires_live_hash_resolution": true
+    },
+    "flare_reference_tbi": {
+      "logical_id": "flare_reference_tbi",
+      "gcs_uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-assets-20260826a/private/flare_reference.chr22.vcf.gz.tbi",
+      "sha256": null,
+      "status": "PLANNED_NOT_GENERATED",
+      "requires_live_hash_resolution": true
+    },
+    "flare_target_vcf": {
+      "logical_id": "flare_target_vcf",
+      "gcs_uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-assets-20260826a/private/flare_target.chr22.vcf.gz",
+      "sha256": null,
+      "status": "PLANNED_NOT_GENERATED",
+      "requires_live_hash_resolution": true
+    },
+    "flare_target_tbi": {
+      "logical_id": "flare_target_tbi",
+      "gcs_uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-assets-20260826a/private/flare_target.chr22.vcf.gz.tbi",
+      "sha256": null,
+      "status": "PLANNED_NOT_GENERATED",
+      "requires_live_hash_resolution": true
+    },
+    "flare_sample_map": {
+      "logical_id": "flare_sample_map",
+      "gcs_uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-assets-20260826a/private/flare_reference.sample_map.tsv",
+      "sha256": null,
+      "status": "PLANNED_NOT_GENERATED",
+      "requires_live_hash_resolution": true
+    },
+    "training_factors": {
+      "logical_id": "training_factors",
+      "gcs_uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-assets-20260826a/private/m34_training_factors.chr22.npz",
+      "sha256": null,
+      "status": "PLANNED_NOT_GENERATED",
+      "requires_live_hash_resolution": true
+    },
+    "training_factor_manifest": {
+      "logical_id": "training_factor_manifest",
+      "gcs_uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-assets-20260826a/provenance/m34_training_factors.manifest.json",
+      "sha256": null,
+      "status": "PLANNED_NOT_GENERATED",
+      "requires_live_hash_resolution": true
+    }
+  },
+  "relatedness_contract": {
+    "source_methods": [
+      "PC-Relate",
+      "Refined IBD"
+    ],
+    "pcrelate_without_king": true,
+    "king_used": false,
+    "forbidden_methods": [
+      "KING"
+    ],
+    "ibd_atomic_unit_definition": "connected_component_of_canonical_population_and_primary_ibd_edges",
+    "ibd_max_segment_floor_cm": 10.0,
+    "ibd_kinship_floor": 0.04419417382415922
+  },
+  "role_contract": {
+    "input_columns": [
+      "sample_id",
+      "source",
+      "ancestry",
+      "population",
+      "canonical_population",
+      "atomic_unit_id",
+      "role",
+      "exclusion_reason"
+    ],
+    "input_ancestry_aliases": {
+      "AFR": "AFR",
+      "African": "AFR",
+      "EUR": "EUR",
+      "European": "EUR",
+      "NAM": "NAM",
+      "Native_American": "NAM"
+    },
+    "expected_people": {
+      "AFR": {
+        "REF_TRAIN": 341,
+        "SOURCE_VALID": 141,
+        "SOURCE_TEST": 135,
+        "DISCOVERY": 0
+      },
+      "EUR": {
+        "REF_TRAIN": 387,
+        "SOURCE_VALID": 151,
+        "SOURCE_TEST": 151,
+        "DISCOVERY": 0
+      },
+      "NAM": {
+        "REF_TRAIN": 25,
+        "SOURCE_VALID": 14,
+        "SOURCE_TEST": 11,
+        "DISCOVERY": 149
+      }
+    },
+    "expected_atomic_units": {
+      "AFR": {
+        "REF_TRAIN": 9,
+        "SOURCE_VALID": 5,
+        "SOURCE_TEST": 5,
+        "DISCOVERY": 0
+      },
+      "EUR": {
+        "REF_TRAIN": 15,
+        "SOURCE_VALID": 8,
+        "SOURCE_TEST": 8,
+        "DISCOVERY": 0
+      },
+      "NAM": {
+        "REF_TRAIN": 4,
+        "SOURCE_VALID": 2,
+        "SOURCE_TEST": 2,
+        "DISCOVERY": 44
+      }
+    },
+    "expected_populations": {
+      "AFR": {
+        "REF_TRAIN": 9,
+        "SOURCE_VALID": 5,
+        "SOURCE_TEST": 5,
+        "DISCOVERY": 0
+      },
+      "EUR": {
+        "REF_TRAIN": 15,
+        "SOURCE_VALID": 8,
+        "SOURCE_TEST": 8,
+        "DISCOVERY": 0
+      },
+      "NAM": {
+        "REF_TRAIN": 4,
+        "SOURCE_VALID": 2,
+        "SOURCE_TEST": 2,
+        "DISCOVERY": 45
+      }
+    },
+    "nam_disjointness_keys": [
+      "sample_id",
+      "canonical_population",
+      "atomic_unit_id"
+    ],
+    "source_test_is_confirmatory": false,
+    "source_test_status": "CONSUMED_BY_LATER_EXPLORATORY_SPLIT"
+  },
+  "execution_authorization": {
+    "registry_validation": true,
+    "local_fixture_read": true,
+    "gcs_read": false,
+    "asset_generation": false,
+    "training": false,
+    "source_test_open": false
+  }
+}

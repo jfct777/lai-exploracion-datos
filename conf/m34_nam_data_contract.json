@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M34_GENERIC_RARE_CONTEXT_MATERIALIZER",
+  "status": "CONTRACT_ONLY_NO_CLOUD_NO_TRAINING",
+  "ancestry_names": ["AFR", "EUR", "NAM"],
+  "sample_count_policy": "derive_from_authenticated_TARGET_and_F0_axes_never_configure",
+  "sample_shard_size": 8,
+  "radii_cM": [0.05, 0.1, 0.2, 0.5],
+  "control_pair_policy": "RD_and_RE_share_exact_axes_masks_geometry_and_F0"
+}

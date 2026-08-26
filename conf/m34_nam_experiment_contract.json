@@ -1,0 +1,118 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "M34_NAM_EXPLORATORY_CHR22",
+  "status": "CONTRACT_ONLY_NO_REAL_RESULTS",
+  "scientific_question": "Does locus-ordered minor-allele information improve chr22 AFR/EUR/NAM local-ancestry boundary localization over the same model with rare values disabled?",
+  "claim_level": "exploratory",
+  "chromosome": "22",
+  "genome_build": "GRCh38",
+  "ancestry_order": [
+    "AFR",
+    "EUR",
+    "NAM"
+  ],
+  "baseline": {
+    "method": "FLARE",
+    "version": "0.6.0",
+    "probability_fields": [
+      "ANP1",
+      "ANP2"
+    ],
+    "parameters": {
+      "array": false,
+      "probs": true,
+      "em": true,
+      "min_mac": 1,
+      "min_maf": 0.0,
+      "generations": 12.0,
+      "update_p": false,
+      "panel_probs": false,
+      "seed": 3401103,
+      "nthreads": 4
+    },
+    "truth_available_during_inference": false
+  },
+  "roles": {
+    "reference_and_frequency": "REF_TRAIN",
+    "mosaic_fit_donors": "SOURCE_VALID",
+    "mosaic_valid_donors": "SOURCE_TEST",
+    "source_test": "OPENED_ONLY_AS_EXPLORATORY_VALID_DONORS_AFTER_CONFIRMATORY_STATUS_WAS_LOST",
+    "validation_claim": "exploratory_generalization_across_disjoint_population_and_IBD_units",
+    "disjointness_unit": "M27F_atomic_unit_id",
+    "relatedness_sources": [
+      "PC-Relate",
+      "Refined IBD"
+    ],
+    "king_used": false
+  },
+  "rare_definition": {
+    "frequency_scope": "REF_TRAIN_only",
+    "orientation": "minor_allele_recomputed_from_callable_REF_TRAIN_haplotypes",
+    "minimum_mac": 2,
+    "maximum_maf_exclusive": 0.01,
+    "target_genotypes_used_for_selection": false,
+    "truth_or_baseline_used_for_selection": false,
+    "limitation": "REF_TRAIN also supplies the LAI reference because an independent three-ancestry FREQ role is unavailable; this is acceptable only for the declared exploratory pilot"
+  },
+  "mosaics": {
+    "primary_mixture_proportions": {
+      "AFR": 0.25,
+      "EUR": 0.60,
+      "NAM": 0.15
+    },
+    "primary_admixture_generations": 12,
+    "generation_sensitivity": [
+      9,
+      12,
+      17
+    ],
+    "rationale": "The primary proportions represent a published three-way Brazilian scenario; 9, 12 and 17 generations cover the benchmarked range from longer to shorter ancestry tracts",
+    "truth": "half_open_haplotype_segments_from_recorded_recombination_events",
+    "target_sizes": {
+      "small": {
+        "people": 32,
+        "fit": 24,
+        "valid": 8,
+        "purpose": "same-day triage"
+      },
+      "medium": {
+        "people": 256,
+        "fit": 192,
+        "valid": 64,
+        "purpose": "rerun only promoted families"
+      }
+    },
+    "seeds": {
+      "derivation": "uint31(first_4_bytes_sha256('DNABR_M34|MOSAIC|ROLE'))",
+      "R0_FIT": 1439610605,
+      "R0_VALID": 1702577247,
+      "R1_FIT": 667875703,
+      "R1_VALID": 513710823,
+      "R2_FIT": 348301061,
+      "R2_VALID": 1179260632
+    }
+  },
+  "paired_arms": {
+    "RD": "rare carrier and reference-value channels disabled while geometry and masks remain intact",
+    "RE": "same loci, geometry, masks, baseline and model with rare values enabled",
+    "estimand": "RE_minus_RD"
+  },
+  "model_screen_contract": "conf/m34_adaptive_sweep_contract.json",
+  "materializer_contract": "conf/m34_nam_data_contract.json",
+  "asset_registry": "conf/m34_nam_assets.json",
+  "execution_order": [
+    "small_R0_primary_generation_triage",
+    "adaptive_local_expansion",
+    "radius_sensitivity_for_at_most_two_families",
+    "medium_scale_for_promoted_families_only",
+    "three_seed_and_mosaic_root_stability_if_time_allows"
+  ],
+  "rotation_semantics": "independent_mosaic_realization_root_not_donor_unit_rotation",
+  "interpretation_limits": [
+    "FIT and VALID each contain only two NAM population_or_IBD donor units",
+    "Synthetic targets reuse a limited donor genealogy across generated people",
+    "SOURCE_TEST had already lost its original confirmatory status and is used here only for exploratory validation",
+    "Results cannot establish generalization to DNABR real samples",
+    "Results cannot support a confirmatory claim without an independent NAM panel or separately generated parental genealogy"
+  ]
+}
