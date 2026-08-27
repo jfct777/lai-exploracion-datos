@@ -25,8 +25,8 @@ def write_npz(path: Path, values: dict[str, np.ndarray]) -> Path:
 
 
 def factor_files(root: Path, split: str, people: int,
-                 reference: Path) -> dict[str, Path]:
-    prefix = f"M34_R0_{split}"
+                 reference: Path, root_id: str = "R0") -> dict[str, Path]:
+    prefix = f"M34_{root_id}_{split}"
     keys = np.asarray(
         [f"{prefix}-{index:04d}".encode().ljust(64, b"0") for index in range(people)],
         dtype="|S64",
@@ -84,10 +84,13 @@ def write_json(path: Path, value: dict) -> Path:
     return path
 
 
-def split_receipts(root: Path, split: str, files: dict[str, Path]) -> dict[str, Path]:
-    people = 24 if split == "FIT" else 8
+def split_receipts(
+    root: Path, split: str, files: dict[str, Path],
+    root_id: str = "R0", people: int | None = None,
+) -> dict[str, Path]:
+    people = people if people is not None else (24 if split == "FIT" else 8)
     donor_role = "SOURCE_VALID" if split == "FIT" else "SOURCE_TEST"
-    prefix = f"M34_R0_{split}"
+    prefix = f"M34_{root_id}_{split}"
     mosaic_target = {"sha256": ("1" if split == "FIT" else "2") * 64, "bytes": 101}
     mosaic = {
         "stage": "M34_NAM_EXPLORATORY_MOSAICS",
@@ -97,7 +100,7 @@ def split_receipts(root: Path, split: str, files: dict[str, Path]) -> dict[str, 
         "parameters": {
             "chromosome": "22", "rotation": 0, "target_prefix": prefix,
             "target_individuals": people,
-            "seed": 1439610605 if split == "FIT" else 1702577247,
+            "seed": subject.ROOT_SEEDS[root_id][split],
             "transition_parameterization": "pulse_generations",
             "transitions_per_morgan": 12.0,
             "mixture_proportions": {"AFR": 0.25, "EUR": 0.60, "NAM": 0.15},
@@ -198,7 +201,9 @@ def split_receipts(root: Path, split: str, files: dict[str, Path]) -> dict[str, 
     }
 
 
-def fixture(root: Path) -> tuple[subject.SplitPaths, subject.SplitPaths]:
+def fixture(
+    root: Path, root_id: str = "R0", fit_people: int = 24, valid_people: int = 8,
+) -> tuple[subject.SplitPaths, subject.SplitPaths]:
     loci = np.asarray([101, 202], dtype="<u8")
     reference = write_npz(root / "reference.shared.npz", {
         "ancestry": np.asarray([b"AFR", b"EUR", b"NAM"], dtype="|S4"),
@@ -210,9 +215,9 @@ def fixture(root: Path) -> tuple[subject.SplitPaths, subject.SplitPaths]:
         "no_support": np.zeros((3, 2), dtype="|u1"),
     })
     result = []
-    for split, people in (("FIT", 24), ("VALID", 8)):
-        files = factor_files(root, split, people, reference)
-        receipts = split_receipts(root, split, files)
+    for split, people in (("FIT", fit_people), ("VALID", valid_people)):
+        files = factor_files(root, split, people, reference, root_id)
+        receipts = split_receipts(root, split, files, root_id, people)
         result.append(subject.SplitPaths(**files, **receipts))
     return result[0], result[1]
 
@@ -224,6 +229,26 @@ def mutate(path: Path, callback) -> None:
 
 
 class M34FactorizedManifestTests(unittest.TestCase):
+    def test_root_and_128_split_sizes_are_parameterized(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            fit, valid = fixture(root, "R2", 96, 32)
+            manifest, receipt = subject.build(
+                fit, valid, root, root="R2", fit_people=96, valid_people=32,
+            )
+            self.assertEqual(manifest["rotation"], "R2")
+            self.assertEqual(receipt["root"], "R2")
+            self.assertEqual(receipt["split_people"], {"FIT": 96, "VALID": 32})
+
+    def test_cross_root_seed_and_prefix_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            fit, valid = fixture(root, "R2", 96, 32)
+            with self.assertRaisesRegex(ValueError, "root|seed"):
+                subject.build(
+                    fit, valid, root, root="R1", fit_people=96, valid_people=32,
+                )
+
     def test_known_answer_emits_manifest_consumed_by_current_trainer(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

@@ -582,7 +582,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     require(
         args.validation_every
-        == int(contract["training"]["validation_every_updates"]),
+        == int(packed_train.training_parameter(
+            contract, task, "validation_every_updates")),
         "validation cadence differs from the frozen training contract",
     )
     input_hashes = _input_hashes(manifest)
@@ -635,7 +636,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         weight_decay=float(task["weight_decay"]),
     )
     maximum_updates = int(task["maximum_updates"])
-    warmup = min(int(contract["training"]["warmup_updates"]), maximum_updates)
+    warmup = min(int(packed_train.training_parameter(
+        contract, task, "warmup_updates")), maximum_updates)
     best_loss = float("inf")
     best_update = 0
     best_state = _state_to_cpu(model.state_dict())

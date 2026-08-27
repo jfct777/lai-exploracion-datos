@@ -64,6 +64,19 @@ class M34TrainPackedTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         torch.set_num_threads(1)
 
+    def test_replication_stage_scales_schedule_without_changing_historical_defaults(self):
+        contract = sweep.validate_contract(sweep.strict_json(CONTRACT))
+        replication = {"sweep_stage": "replication_128"}
+        triage = {"sweep_stage": "triage"}
+        self.assertEqual(subject.training_parameter(
+            contract, replication, "warmup_updates"), 400)
+        self.assertEqual(subject.training_parameter(
+            contract, replication, "validation_every_updates"), 200)
+        self.assertEqual(subject.training_parameter(
+            contract, triage, "warmup_updates"), 100)
+        self.assertEqual(subject.training_parameter(
+            contract, triage, "validation_every_updates"), 50)
+
     def fixture(self, base: Path, family: str, config_id: str) -> Namespace:
         fit, fit_truth = base / "fit.npz", base / "fit.truth.npz"
         valid, valid_truth = base / "valid.npz", base / "valid.truth.npz"

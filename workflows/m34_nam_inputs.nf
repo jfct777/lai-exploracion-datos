@@ -1,5 +1,33 @@
 nextflow.enable.dsl=2
 
+String m34Sha256(target) {
+    java.security.MessageDigest.getInstance('SHA-256')
+        .digest(new File(target.toString()).bytes).encodeHex().toString()
+}
+
+String m34RadiusToken(value) {
+    def radius = new BigDecimal(value.toString()).stripTrailingZeros()
+    if (radius <= 0)
+        error 'radius_cM must be positive'
+    def plain = radius.toPlainString()
+    if (!(plain ==~ /[0-9]+(?:\.[0-9]+)?/))
+        error 'radius_cM cannot be represented as a safe path token'
+    return "r${plain.replace('.', 'p')}cM"
+}
+
+String m34TaskToken(task, String radiusToken) {
+    def components = [
+        task.sweep_stage as String,
+        task.rotation as String,
+        "seed${task.seed}",
+        "u${task.maximum_updates}",
+        radiusToken,
+    ]
+    if (!components.every { it ==~ /[A-Za-z0-9._-]+/ })
+        error 'task identity cannot be represented as a safe path token'
+    return components.join('_')
+}
+
 include { M34_NAM_VALIDATE_EXPERIMENT_CONTRACT } from '../modules/34_NAM_EXPERIMENT_CONTRACT'
 include { M34_NAM_GENERATE_MOSAICS } from '../modules/34_NAM_MOSAICS'
 include { M34_NAM_PREPARE_PANEL_FACTORS } from '../modules/34_NAM_PANEL_FACTORS'
@@ -21,6 +49,10 @@ workflow {
         error 'm34_inputs_run_id must be a valid explicit run identifier'
     if (!params.m34_inputs_results_dir)
         error 'm34_inputs_results_dir is required'
+    if (!(['R0', 'R1', 'R2'].contains(params.m34_inputs_root)))
+        error 'm34_inputs_root must be R0, R1 or R2'
+    if (!(['small', 'pilot_128', 'medium'].contains(params.m34_inputs_target_size)))
+        error 'm34_inputs_target_size must be small, pilot_128 or medium'
     if (!params.m34_inputs_phased_vcf ||
         !params.m34_inputs_split_tsv ||
         !params.m34_inputs_genetic_map ||
@@ -36,14 +68,15 @@ workflow {
         params.m34_inputs_flare_jar,
         params.m34_inputs_experiment_contract,
         params.m34_inputs_adaptive_contract,
-        params.m34_inputs_results_dir,
     ]
+    if (params.m34_inputs_task_plan)
+        localInputs.add(params.m34_inputs_task_plan)
     if (localInputs.any { it.toString().contains('://') })
         error 'm34_nam_inputs accepts local paths only'
 
-    def runResults = new File(
-        params.m34_inputs_results_dir.toString(),
-        params.m34_inputs_run_id.toString(),
+    def runResults = file(
+        "${params.m34_inputs_results_dir}/${params.m34_inputs_run_id}",
+        checkIfExists: false,
     )
     if (runResults.exists())
         error 'the run-specific results directory already exists; outputs are append-safe'
@@ -67,7 +100,9 @@ workflow {
     def mixture = experiment.mosaics.primary_mixture_proportions
     def generations = experiment.mosaics.primary_admixture_generations
     def seeds = experiment.mosaics.seeds
-    def small = experiment.mosaics.target_sizes.small
+    def rootId = params.m34_inputs_root as String
+    def targetSizeId = params.m34_inputs_target_size as String
+    def targetSize = experiment.mosaics.target_sizes[targetSizeId]
     def roles = experiment.roles
     if (experiment.experiment_id != 'M34_NAM_EXPLORATORY_CHR22' ||
         experiment.status != 'CONTRACT_ONLY_NO_REAL_RESULTS' ||
@@ -75,26 +110,32 @@ workflow {
         experiment.ancestry_order != ['AFR', 'EUR', 'NAM'] ||
         mixture != [AFR: 0.25, EUR: 0.60, NAM: 0.15] ||
         generations != 12 ||
-        seeds.R0_FIT != 1439610605 || seeds.R0_VALID != 1702577247 ||
-        small.fit != 24 || small.valid != 8 || small.people != 32 ||
+        seeds[rootId + '_FIT'] == null || seeds[rootId + '_VALID'] == null ||
+        targetSize == null || targetSize.people != targetSize.fit + targetSize.valid ||
+        targetSize.fit % 8 != 0 || targetSize.valid % 8 != 0 ||
         roles.mosaic_fit_donors != 'SOURCE_VALID' ||
         roles.mosaic_valid_donors != 'SOURCE_TEST' ||
         experiment.rare_definition.minimum_mac != 2 ||
         experiment.rare_definition.maximum_maf_exclusive != 0.01)
-        error 'M34 R0 scientific inputs differ from the authenticated experiment contract'
+        error 'M34 selected-root scientific inputs differ from the authenticated experiment contract'
+    if ((params.m34_inputs_fit_people as Integer) != (targetSize.fit as Integer) ||
+        (params.m34_inputs_valid_people as Integer) != (targetSize.valid as Integer))
+        error 'M34 manifest split sizes differ from the selected target size'
     def mixtureArgument = "AFR=${mixture.AFR},EUR=${mixture.EUR},NAM=${mixture.NAM}"
 
     def splitCases = [
         tuple(
             'FIT', roles.mosaic_fit_donors as String,
             roles.mosaic_valid_donors as String, 'all',
-            seeds.R0_FIT as Integer, small.fit as Integer, 'M34_R0_FIT',
+            seeds[rootId + '_FIT'] as Integer, targetSize.fit as Integer,
+            "M34_${rootId}_FIT" as String,
             mixtureArgument, generations as Double,
         ),
         tuple(
             'VALID', roles.mosaic_valid_donors as String,
             roles.mosaic_fit_donors as String, 'all',
-            seeds.R0_VALID as Integer, small.valid as Integer, 'M34_R0_VALID',
+            seeds[rootId + '_VALID'] as Integer, targetSize.valid as Integer,
+            "M34_${rootId}_VALID" as String,
             mixtureArgument, generations as Double,
         ),
     ]
@@ -131,6 +172,8 @@ workflow {
         experimentContract,
         validatorPy,
         params.m34_inputs_experiment_contract_sha256,
+        rootId,
+        targetSizeId,
     )
     validatedExperiment = M34_NAM_VALIDATE_EXPERIMENT_CONTRACT.out.validated.map {
         contract, receipt, sha256 -> contract
@@ -204,27 +247,64 @@ workflow {
     }
     M34_NAM_BUILD_FACTORIZED_MANIFEST(fitFactors, validFactors, manifestBuilderPy)
 
-    M34_NAM_BUILD_TRIAGE_PLAN(adaptiveContract, adaptiveSweepPy)
-    taskInputs = M34_NAM_BUILD_TRIAGE_PLAN.out.plan.flatMap { planPath ->
-        def plan = new groovy.json.JsonSlurper().parse(planPath.toFile())
-        if (plan.stage != 'M34_TRIAGE_PLAN' ||
-            plan.status != 'PLAN_ONLY_NO_EXECUTION' ||
-            plan.task_count != plan.tasks.size())
-            error 'M34 triage plan identity or task count differs'
-        plan.tasks.collect { task ->
-            def taskJson = groovy.json.JsonOutput.toJson(task)
-            def taskBase64 = taskJson.getBytes('UTF-8').encodeBase64().toString()
+    if (params.m34_inputs_task_plan) {
+        def planFile = file(params.m34_inputs_task_plan, checkIfExists: true)
+        if (!params.m34_inputs_task_plan_sha256 ||
+            m34Sha256(planFile) != params.m34_inputs_task_plan_sha256)
+            error 'M34 replication task-plan SHA-256 differs'
+        def plan = new groovy.json.JsonSlurper().parse(planFile)
+        if (plan.stage != 'M34_EXPLORATORY_128_REPLICATION_PLAN' ||
+            plan.status != 'PLAN_ONLY_NO_EXECUTION_TEST_CLOSED' ||
+            plan.claim_level != 'exploratory' || plan.test_opened != false ||
+            plan.target_size != [people: 128, fit: 96, valid: 32] ||
+            plan.task_count != plan.tasks.size() || plan.task_count != 12)
+            error 'M34 128-mosaic replication plan identity differs'
+        def rootTasks = plan.tasks.findAll { task -> task.rotation == rootId }
+        if (rootTasks.size() != 4 ||
+            rootTasks.collect { it.config_id }.toSet() != ['bilstm_r1', 'unet_r1'].toSet() ||
+            rootTasks.collect { it.arm }.toSet() != ['RD', 'RE'].toSet() ||
+            !rootTasks.every { task ->
+                task.seed == 1103 && task.radius_cM == 0.2 &&
+                task.sweep_stage == 'replication_128' && task.maximum_updates == 3200
+            } || targetSizeId != 'pilot_128')
+            error 'M34 selected-root replication tasks differ from the PRE plan'
+        taskInputs = Channel.fromList(rootTasks.collect { task ->
+            def taskBase64 = groovy.json.JsonOutput.toJson(task)
+                .getBytes('UTF-8').encodeBase64().toString()
+            def radiusCm = new BigDecimal(task.radius_cM.toString())
+            def radiusToken = m34RadiusToken(radiusCm)
+            def taskToken = m34TaskToken(task, radiusToken)
             tuple(task.family as String, task.config_id as String,
-                  task.arm as String, taskBase64)
+                  task.arm as String, radiusCm, radiusToken, taskToken, taskBase64)
+        })
+    } else {
+        M34_NAM_BUILD_TRIAGE_PLAN(adaptiveContract, adaptiveSweepPy)
+        taskInputs = M34_NAM_BUILD_TRIAGE_PLAN.out.plan.flatMap { planPath ->
+            def plan = new groovy.json.JsonSlurper().parse(planPath.toFile())
+            if (plan.stage != 'M34_TRIAGE_PLAN' ||
+                plan.status != 'PLAN_ONLY_NO_EXECUTION' ||
+                plan.task_count != plan.tasks.size())
+                error 'M34 triage plan identity or task count differs'
+            plan.tasks.collect { task ->
+                def taskBase64 = groovy.json.JsonOutput.toJson(task)
+                    .getBytes('UTF-8').encodeBase64().toString()
+                def radiusCm = new BigDecimal(task.radius_cM.toString())
+                def radiusToken = m34RadiusToken(radiusCm)
+                def taskToken = m34TaskToken(task, radiusToken)
+                tuple(task.family as String, task.config_id as String,
+                      task.arm as String, radiusCm, radiusToken, taskToken, taskBase64)
+            }
         }
     }
     factorBundle = M34_NAM_BUILD_FACTORIZED_MANIFEST.out.bundle.map {
         bundle, manifest, receipt -> bundle
     }.first()
-    standardTaskInputs = taskInputs.filter { family, configId, arm, taskBase64 ->
+    standardTaskInputs = taskInputs.filter {
+        family, configId, arm, radiusCm, radiusToken, taskToken, taskBase64 ->
         family != 'transformer_small'
     }
-    transformerTaskInputs = taskInputs.filter { family, configId, arm, taskBase64 ->
+    transformerTaskInputs = taskInputs.filter {
+        family, configId, arm, radiusCm, radiusToken, taskToken, taskBase64 ->
         family == 'transformer_small'
     }
     M34_NAM_TRAIN_FACTORIZED(
@@ -252,14 +332,34 @@ workflow {
         .first()
     M34_NAM_PACK_BASELINE(validF0, packBaselinePy, bridgeCorePy)
     standardPredictions = M34_NAM_TRAIN_FACTORIZED.out.trained.map {
-        family, configId, arm, prediction, receipt, model ->
-        tuple(family, configId, arm, prediction)
+        family, configId, arm, radiusCm, radiusToken, taskToken, taskBase64,
+        prediction, receipt, model ->
+        tuple(family, configId, arm, radiusCm, radiusToken, taskToken,
+              taskBase64, prediction)
     }
     transformerPredictions = M34_NAM_TRAIN_TRANSFORMER_FACTORIZED.out.trained.map {
-        family, configId, arm, prediction, receipt, model, batchingReceipt ->
-        tuple(family, configId, arm, prediction)
+        family, configId, arm, radiusCm, radiusToken, taskToken, taskBase64,
+        prediction, receipt, model, batchingReceipt ->
+        tuple(family, configId, arm, radiusCm, radiusToken, taskToken,
+              taskBase64, prediction)
     }
     trainedPredictions = standardPredictions.mix(transformerPredictions)
-    scoringInputs = trainedPredictions.mix(M34_NAM_PACK_BASELINE.out.prediction)
+    baselinePredictions = M34_NAM_PACK_BASELINE.out.prediction.map {
+        family, configId, arm, prediction ->
+        def task = [
+            family: family, config_id: configId, arm: arm,
+            seed: 0, rotation: rootId, radius_cM: 0.2,
+            sweep_stage: 'baseline', maximum_updates: 0,
+            learning_rate: 0.0, weight_decay: 0.0,
+        ]
+        def taskBase64 = groovy.json.JsonOutput.toJson(task)
+            .getBytes('UTF-8').encodeBase64().toString()
+        def radiusCm = new BigDecimal('0.2')
+        def radiusToken = m34RadiusToken(radiusCm)
+        def taskToken = "baseline_${rootId}_${radiusToken}"
+        tuple(family, configId, arm, radiusCm, radiusToken, taskToken,
+              taskBase64, prediction)
+    }
+    scoringInputs = trainedPredictions.mix(baselinePredictions)
     M34_NAM_SCORE_VALID(scoringInputs, validTruth, scorerPy)
 }

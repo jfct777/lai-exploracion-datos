@@ -16,6 +16,8 @@ process M34_NAM_VALIDATE_EXPERIMENT_CONTRACT {
     path experimentContract
     path validatorPy
     val expectedSha256
+    val experimentRoot
+    val targetSize
 
     output:
     tuple path(experimentContract),
@@ -29,6 +31,8 @@ process M34_NAM_VALIDATE_EXPERIMENT_CONTRACT {
     python3 ${validatorPy} \
       --contract ${experimentContract} \
       --expected-sha256 ${expectedSha256} \
+      --root ${experimentRoot} \
+      --target-size ${targetSize} \
       --receipt m34_experiment_contract.receipt.json
     """
 

@@ -1,7 +1,7 @@
 nextflow.enable.dsl=2
 
 process M34_NAM_BUILD_FACTORIZED_MANIFEST {
-    tag 'm34_factorized_manifest_R0'
+    tag { "m34_factorized_manifest_${params.m34_inputs_root}" }
     publishDir {
         "${params.m34_inputs_results_dir}/${params.m34_inputs_run_id}/manifest"
     }, mode: 'copy', overwrite: false,
@@ -63,6 +63,9 @@ process M34_NAM_BUILD_FACTORIZED_MANIFEST {
       --valid-mosaic-receipt factor_bundle/VALID/mosaic.receipt.json \
       --valid-bridge-receipt factor_bundle/VALID/bridge.receipt.json \
       --valid-flare-receipt factor_bundle/VALID/flare/m34_flare.receipt.json \
+      --root ${params.m34_inputs_root} \
+      --fit-people ${params.m34_inputs_fit_people} \
+      --valid-people ${params.m34_inputs_valid_people} \
       --manifest factor_bundle/factorized.manifest.json \
       --receipt factor_bundle/factorized.manifest.receipt.json
     cp factor_bundle/factorized.manifest.json m34_factorized_manifest.json

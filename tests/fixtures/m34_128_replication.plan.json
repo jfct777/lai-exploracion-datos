@@ -1,0 +1,22 @@
+{
+  "claim_level": "exploratory",
+  "stage": "M34_EXPLORATORY_128_REPLICATION_PLAN",
+  "status": "PLAN_ONLY_NO_EXECUTION_TEST_CLOSED",
+  "target_size": {"people": 128, "fit": 96, "valid": 32},
+  "task_count": 12,
+  "test_opened": false,
+  "tasks": [
+    {"family":"bilstm","config_id":"bilstm_r1","seed":1103,"rotation":"R0","arm":"RD","radius_cM":0.2,"sweep_stage":"replication_128","maximum_updates":3200,"learning_rate":0.0003,"weight_decay":0.0001},
+    {"family":"bilstm","config_id":"bilstm_r1","seed":1103,"rotation":"R0","arm":"RE","radius_cM":0.2,"sweep_stage":"replication_128","maximum_updates":3200,"learning_rate":0.0003,"weight_decay":0.0001},
+    {"family":"unet_1d","config_id":"unet_r1","seed":1103,"rotation":"R0","arm":"RD","radius_cM":0.2,"sweep_stage":"replication_128","maximum_updates":3200,"learning_rate":0.0003,"weight_decay":0.0001},
+    {"family":"unet_1d","config_id":"unet_r1","seed":1103,"rotation":"R0","arm":"RE","radius_cM":0.2,"sweep_stage":"replication_128","maximum_updates":3200,"learning_rate":0.0003,"weight_decay":0.0001},
+    {"family":"bilstm","config_id":"bilstm_r1","seed":1103,"rotation":"R1","arm":"RD","radius_cM":0.2,"sweep_stage":"replication_128","maximum_updates":3200,"learning_rate":0.0003,"weight_decay":0.0001},
+    {"family":"bilstm","config_id":"bilstm_r1","seed":1103,"rotation":"R1","arm":"RE","radius_cM":0.2,"sweep_stage":"replication_128","maximum_updates":3200,"learning_rate":0.0003,"weight_decay":0.0001},
+    {"family":"unet_1d","config_id":"unet_r1","seed":1103,"rotation":"R1","arm":"RD","radius_cM":0.2,"sweep_stage":"replication_128","maximum_updates":3200,"learning_rate":0.0003,"weight_decay":0.0001},
+    {"family":"unet_1d","config_id":"unet_r1","seed":1103,"rotation":"R1","arm":"RE","radius_cM":0.2,"sweep_stage":"replication_128","maximum_updates":3200,"learning_rate":0.0003,"weight_decay":0.0001},
+    {"family":"bilstm","config_id":"bilstm_r1","seed":1103,"rotation":"R2","arm":"RD","radius_cM":0.2,"sweep_stage":"replication_128","maximum_updates":3200,"learning_rate":0.0003,"weight_decay":0.0001},
+    {"family":"bilstm","config_id":"bilstm_r1","seed":1103,"rotation":"R2","arm":"RE","radius_cM":0.2,"sweep_stage":"replication_128","maximum_updates":3200,"learning_rate":0.0003,"weight_decay":0.0001},
+    {"family":"unet_1d","config_id":"unet_r1","seed":1103,"rotation":"R2","arm":"RD","radius_cM":0.2,"sweep_stage":"replication_128","maximum_updates":3200,"learning_rate":0.0003,"weight_decay":0.0001},
+    {"family":"unet_1d","config_id":"unet_r1","seed":1103,"rotation":"R2","arm":"RE","radius_cM":0.2,"sweep_stage":"replication_128","maximum_updates":3200,"learning_rate":0.0003,"weight_decay":0.0001}
+  ]
+}

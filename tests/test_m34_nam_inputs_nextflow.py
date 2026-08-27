@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import shutil
 import subprocess
 import tempfile
@@ -29,7 +30,7 @@ FLARE_IMAGE = (
     "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/"
     "m30-flare-runtime@sha256:86bf36c5d23407ed187d546f2420a0d2c44fbb6eed12ba81ddfc0f75df6b3a84"
 )
-EXPERIMENT_SHA256 = "920d19a7401830ec00ca2364e5175710af5202cc9dd8bf3512a254cbcaa18970"
+EXPERIMENT_SHA256 = "dff5442ff413dd5b2cd901b2407082cf7f0629eb02d927c2942154054993c3ff"
 
 
 class M34NamInputsNextflowTests(unittest.TestCase):
@@ -66,10 +67,10 @@ class M34NamInputsNextflowTests(unittest.TestCase):
         self.assertIn("'FIT', roles.mosaic_fit_donors as String", workflow)
         self.assertIn("'VALID', roles.mosaic_valid_donors as String", workflow)
         self.assertIn("splitCases*.get(0) != ['FIT', 'VALID']", workflow)
-        self.assertIn("seeds.R0_FIT as Integer", workflow)
-        self.assertIn("seeds.R0_VALID as Integer", workflow)
-        self.assertIn("small.fit as Integer", workflow)
-        self.assertIn("small.valid as Integer", workflow)
+        self.assertIn("seeds[rootId + '_FIT'] as Integer", workflow)
+        self.assertIn("seeds[rootId + '_VALID'] as Integer", workflow)
+        self.assertIn("targetSize.fit as Integer", workflow)
+        self.assertIn("targetSize.valid as Integer", workflow)
         self.assertIn("mixtureArgument, generations as Double", workflow)
         self.assertIn("tuple(split, donorRole, mosaicVcf)", workflow)
         self.assertIn("--donor-role ${donorRole}", mosaics)
@@ -126,6 +127,20 @@ class M34NamInputsNextflowTests(unittest.TestCase):
         self.assertIn("m34_nam_pack_baseline", combined)
         self.assertIn("m34_inputs_train_memory = '8 GB'", config)
 
+    def test_root_size_and_replication_plan_are_explicit_and_test_stays_closed(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        config = CONFIG.read_text(encoding="utf-8")
+        self.assertIn("m34_inputs_root = 'R0'", config)
+        self.assertIn("m34_inputs_target_size = 'small'", config)
+        self.assertIn("m34_inputs_task_plan = null", config)
+        self.assertIn("M34_EXPLORATORY_128_REPLICATION_PLAN", workflow)
+        self.assertIn("plan.test_opened != false", workflow)
+        self.assertIn("targetSizeId != 'pilot_128'", workflow)
+        self.assertIn("rootTasks.size() != 4", workflow)
+        self.assertIn("task.maximum_updates == 3200", workflow)
+        self.assertIn("m34TaskToken(task, radiusToken)", workflow)
+        self.assertNotIn("def runResults = new File(", workflow)
+
     def test_exact_contract_hash_and_complete_wiring_are_present(self):
         texts = self.texts()
         workflow, config = texts[WORKFLOW], texts[CONFIG]
@@ -164,8 +179,9 @@ class M34NamInputsNextflowTests(unittest.TestCase):
         self.assertIn("m33_m0_contract.py", workflow)
         self.assertIn("path manifestBuilderPy", manifest_module)
         self.assertIn("python3 ${manifestBuilderPy}", manifest_module)
-        self.assertIn("tuple(family, configId, arm, prediction)", workflow)
-        self.assertIn("trainedPredictions.mix(M34_NAM_PACK_BASELINE.out.prediction)", workflow)
+        self.assertIn("radiusCm, radiusToken, taskToken, taskBase64", workflow)
+        self.assertIn("taskBase64, prediction)", workflow)
+        self.assertIn("trainedPredictions.mix(baselinePredictions)", workflow)
 
     @unittest.skipUnless(shutil.which("nextflow"), "Nextflow is not installed")
     def test_configuration_parses(self):
@@ -206,6 +222,8 @@ class M34NamInputsNextflowTests(unittest.TestCase):
                 "-stub-run", "-ansi-log", "false",
                 "-work-dir", str(work),
                 "--m34_inputs_run_id", "fixture-r0",
+                "--m34_inputs_root", "R0",
+                "--m34_inputs_target_size", "small",
                 "--m34_inputs_results_dir", str(results),
                 "--m34_inputs_phased_vcf", str(panel),
                 "--m34_inputs_split_tsv", str(split),
@@ -285,6 +303,56 @@ class M34NamInputsNextflowTests(unittest.TestCase):
                      if path.is_file()]),
                 3,
             )
+
+    @unittest.skipUnless(shutil.which("nextflow"), "Nextflow is not installed")
+    def test_128_replication_plan_reaches_selected_root_dag(self):
+        with tempfile.TemporaryDirectory(prefix="m34-nam-128-") as raw:
+            root = Path(raw)
+            inputs = root / "inputs"
+            inputs.mkdir()
+            files = {
+                name: inputs / name for name in
+                ("panel.vcf.gz", "split.tsv", "map.txt", "flare.jar")
+            }
+            for path in files.values():
+                path.touch()
+            plan = ROOT / "tests/fixtures/m34_128_replication.plan.json"
+            plan_sha256 = hashlib.sha256(plan.read_bytes()).hexdigest()
+            host_config = root / "host.config"
+            host_config.write_text(
+                f"includeConfig '{CONFIG}'\n"
+                "docker.enabled = false\n",
+                encoding="utf-8",
+            )
+            command = [
+                "nextflow", "-C", str(host_config), "run", str(WORKFLOW),
+                "-stub-run", "-ansi-log", "false", "-work-dir", str(root / "work"),
+                "--m34_inputs_run_id", "fixture-r2-128",
+                "--m34_inputs_results_dir", str(root / "results"),
+                "--m34_inputs_root", "R2",
+                "--m34_inputs_target_size", "pilot_128",
+                "--m34_inputs_fit_people", "96",
+                "--m34_inputs_valid_people", "32",
+                "--m34_inputs_task_plan", str(plan),
+                "--m34_inputs_task_plan_sha256", plan_sha256,
+                "--m34_inputs_phased_vcf", str(files["panel.vcf.gz"]),
+                "--m34_inputs_split_tsv", str(files["split.tsv"]),
+                "--m34_inputs_genetic_map", str(files["map.txt"]),
+                "--m34_inputs_flare_jar", str(files["flare.jar"]),
+                "--m34_inputs_experiment_contract",
+                str(ROOT / "conf/m34_nam_experiment_contract.json"),
+                "--m34_inputs_adaptive_contract",
+                str(ROOT / "conf/m34_adaptive_sweep_contract.json"),
+            ]
+            environment = dict(os.environ)
+            environment["NXF_OFFLINE"] = "true"
+            completed = subprocess.run(
+                command, cwd=root, env=environment, capture_output=True, text=True,
+                check=False, timeout=120,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            metrics = list((root / "results/fixture-r2-128/metrics").rglob("*.json"))
+            self.assertEqual(len(metrics), 5)
 
 
 if __name__ == "__main__":

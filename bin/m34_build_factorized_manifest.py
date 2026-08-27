@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the immutable FIT/VALID factor manifest for the M34 R0 pilot."""
+"""Build an immutable FIT/VALID factor manifest for one M34 mosaic root."""
 
 from __future__ import annotations
 
@@ -17,9 +17,10 @@ import numpy as np
 
 
 ANCESTRIES = ("AFR", "EUR", "NAM")
-SPLIT_CONTRACT = {
-    "FIT": {"donor_role": "SOURCE_VALID", "people": 24, "prefix": "M34_R0_FIT"},
-    "VALID": {"donor_role": "SOURCE_TEST", "people": 8, "prefix": "M34_R0_VALID"},
+ROOT_SEEDS = {
+    "R0": {"FIT": 1439610605, "VALID": 1702577247},
+    "R1": {"FIT": 667875703, "VALID": 513710823},
+    "R2": {"FIT": 348301061, "VALID": 1179260632},
 }
 FACTOR_NAMES = ("selected_variant", "target", "reference", "f0", "marker_cm", "truth")
 SELECTED_MEMBERS = {"locus_id", "chrom", "pos", "ref", "alt", "cM"}
@@ -159,8 +160,25 @@ class SplitAudit:
     source_sha256: Mapping[str, str]
 
 
-def _validate_mosaic(split: str, receipt: Mapping[str, Any]) -> None:
-    expected = SPLIT_CONTRACT[split]
+def _split_contract(root: str, fit_people: int, valid_people: int) -> dict[str, dict[str, Any]]:
+    require(root in ROOT_SEEDS, "M34 manifest root is not declared")
+    require(fit_people > 0 and valid_people > 0, "M34 split sizes must be positive")
+    return {
+        "FIT": {
+            "donor_role": "SOURCE_VALID", "people": fit_people,
+            "prefix": f"M34_{root}_FIT", "seed": ROOT_SEEDS[root]["FIT"],
+        },
+        "VALID": {
+            "donor_role": "SOURCE_TEST", "people": valid_people,
+            "prefix": f"M34_{root}_VALID", "seed": ROOT_SEEDS[root]["VALID"],
+        },
+    }
+
+
+def _validate_mosaic(
+    split: str, receipt: Mapping[str, Any], split_contract: Mapping[str, Mapping[str, Any]],
+) -> None:
+    expected = split_contract[split]
     opposite_role = "SOURCE_TEST" if split == "FIT" else "SOURCE_VALID"
     require(receipt.get("stage") == "M34_NAM_EXPLORATORY_MOSAICS" and
             receipt.get("decision") == "PASS_EXPLORATORY_MOSAICS_WITH_LOCAL_TRUTH",
@@ -176,7 +194,7 @@ def _validate_mosaic(split: str, receipt: Mapping[str, Any]) -> None:
             f"{split} mosaic chromosome differs")
     require(parameters.get("rotation") == 0 and
             parameters.get("target_prefix") == expected["prefix"],
-            f"{split} mosaic root differs from R0")
+            f"{split} mosaic root or donor partition differs")
     require(parameters.get("target_individuals") == expected["people"],
             f"{split} mosaic person count differs")
     require(parameters.get("transition_parameterization") == "pulse_generations" and
@@ -207,14 +225,14 @@ def _validate_mosaic(split: str, receipt: Mapping[str, Any]) -> None:
             f"{split} donor unit audit differs")
     require(receipt.get("counts", {}).get("target_individuals") == expected["people"],
             f"{split} mosaic count audit differs")
-    expected_seed = 1439610605 if split == "FIT" else 1702577247
-    require(parameters.get("seed") == expected_seed,
-            f"{split} mosaic seed differs from R0")
+    require(parameters.get("seed") == expected["seed"],
+            f"{split} mosaic seed differs from the selected root")
 
 
 def _validate_bridge(split: str, mosaic: Mapping[str, Any], bridge: Mapping[str, Any],
-                     files: Mapping[str, Path]) -> None:
-    role = SPLIT_CONTRACT[split]["donor_role"]
+                     files: Mapping[str, Path],
+                     split_contract: Mapping[str, Mapping[str, Any]]) -> None:
+    role = split_contract[split]["donor_role"]
     require(bridge.get("schema_version") == "m34_panel_factors_receipt_v1" and
             bridge.get("stage") == "M34_EXPLORATORY_VCF_TO_FACTORS_BRIDGE" and
             bridge.get("decision") == f"PASS_EXPLORATORY_PANEL_FACTORS_{role}_MOSAICS",
@@ -252,7 +270,7 @@ def _validate_bridge(split: str, mosaic: Mapping[str, Any], bridge: Mapping[str,
     for logical, output_name in expected_names.items():
         _same_descriptor(descriptor(files[logical]), _output_by_name(bridge, output_name),
                          f"{split} bridge {logical}")
-    require(counts.get("target_samples") == SPLIT_CONTRACT[split]["people"],
+    require(counts.get("target_samples") == split_contract[split]["people"],
             f"{split} bridge target count differs")
 
     mosaic_inputs = mosaic.get("inputs", {})
@@ -268,7 +286,8 @@ def _validate_bridge(split: str, mosaic: Mapping[str, Any], bridge: Mapping[str,
 
 
 def _validate_flare(split: str, bridge: Mapping[str, Any], flare: Mapping[str, Any],
-                    marker_count: int) -> None:
+                    marker_count: int,
+                    split_contract: Mapping[str, Mapping[str, Any]]) -> None:
     require(flare.get("schema_version") == "1.0.0" and
             flare.get("stage") == "M34_AFR_EUR_NAM_FLARE" and
             flare.get("status") == "PASS_TRUTH_BLIND_FLARE" and
@@ -289,9 +308,9 @@ def _validate_flare(split: str, bridge: Mapping[str, Any], flare: Mapping[str, A
         "seed": 3401103, "nthreads": 4,
     }
     require(flare.get("parameters") == expected_parameters,
-            f"{split} FLARE parameters differ from the frozen R0 contract")
+            f"{split} FLARE parameters differ from the frozen contract")
     shape = flare.get("shape", {})
-    require(shape.get("target_sample_count") == SPLIT_CONTRACT[split]["people"] and
+    require(shape.get("target_sample_count") == split_contract[split]["people"] and
             shape.get("marker_count") == marker_count,
             f"{split} FLARE dimensions differ")
     observed = flare.get("input_sha256", {})
@@ -307,15 +326,18 @@ def _validate_flare(split: str, bridge: Mapping[str, Any], flare: Mapping[str, A
             f"{split} bridge-to-FLARE genetic map SHA-256 differs")
     ancestry_audit = flare.get("ancestry_vcf_audit")
     require(isinstance(ancestry_audit, dict) and
-            ancestry_audit.get("sample_count") == SPLIT_CONTRACT[split]["people"] and
+            ancestry_audit.get("sample_count") == split_contract[split]["people"] and
             ancestry_audit.get("marker_count") == marker_count and
             isinstance(ancestry_audit.get("sha256"), str) and
             len(ancestry_audit["sha256"]) == 64,
             f"{split} FLARE ancestry output audit differs")
 
 
-def validate_split(split: str, inputs: SplitPaths) -> SplitAudit:
-    expected = SPLIT_CONTRACT[split]
+def validate_split(
+    split: str, inputs: SplitPaths,
+    split_contract: Mapping[str, Mapping[str, Any]],
+) -> SplitAudit:
+    expected = split_contract[split]
     all_paths = {name: getattr(inputs, name) for name in (*FACTOR_NAMES,
                  "mosaic_receipt", "bridge_receipt", "flare_receipt")}
     require(all(path.is_file() and not path.is_symlink() for path in all_paths.values()),
@@ -369,9 +391,9 @@ def validate_split(split: str, inputs: SplitPaths) -> SplitAudit:
     mosaic_receipt = strict_json(inputs.mosaic_receipt)
     bridge_receipt = strict_json(inputs.bridge_receipt)
     flare_receipt = strict_json(inputs.flare_receipt)
-    _validate_mosaic(split, mosaic_receipt)
-    _validate_bridge(split, mosaic_receipt, bridge_receipt, all_paths)
-    _validate_flare(split, bridge_receipt, flare_receipt, markers)
+    _validate_mosaic(split, mosaic_receipt, split_contract)
+    _validate_bridge(split, mosaic_receipt, bridge_receipt, all_paths, split_contract)
+    _validate_flare(split, bridge_receipt, flare_receipt, markers, split_contract)
     source_sha256 = {
         "phased_panel": mosaic_receipt["inputs"]["phased_vcf"]["sha256"],
         "role_split": mosaic_receipt["inputs"]["split_tsv"]["sha256"],
@@ -406,9 +428,15 @@ def validate_split(split: str, inputs: SplitPaths) -> SplitAudit:
     )
 
 
-def build(fit: SplitPaths, valid: SplitPaths,
-          manifest_directory: Path) -> tuple[dict[str, Any], dict[str, Any]]:
-    audits = {"FIT": validate_split("FIT", fit), "VALID": validate_split("VALID", valid)}
+def build(
+    fit: SplitPaths, valid: SplitPaths, manifest_directory: Path,
+    root: str = "R0", fit_people: int = 24, valid_people: int = 8,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    split_contract = _split_contract(root, fit_people, valid_people)
+    audits = {
+        "FIT": validate_split("FIT", fit, split_contract),
+        "VALID": validate_split("VALID", valid, split_contract),
+    }
     require(set(audits["FIT"].sample_keys.tolist()).isdisjoint(
         audits["VALID"].sample_keys.tolist()), "FIT and VALID sample axes overlap")
     require(audits["FIT"].selected_axis_sha256 == audits["VALID"].selected_axis_sha256,
@@ -430,7 +458,7 @@ def build(fit: SplitPaths, valid: SplitPaths,
         "schema_version": "1.0.0",
         "ancestry_names": list(ANCESTRIES),
         "haplotypes": 2,
-        "rotation": "R0",
+        "rotation": root,
         "splits": {
             split: [{name: relative_path(audits[split].paths[name]) for name in FACTOR_NAMES}]
             for split in ("FIT", "VALID")
@@ -439,15 +467,15 @@ def build(fit: SplitPaths, valid: SplitPaths,
     receipt = {
         "schema_version": "1.0.0",
         "stage": "M34_BUILD_FACTORIZED_MANIFEST",
-        "status": "PASS_EXPLORATORY_R0_FACTORIZED_MANIFEST",
+        "status": "PASS_EXPLORATORY_FACTORIZED_MANIFEST",
         "claim_level": "exploratory",
         "chromosome": "22",
-        "root": "R0",
+        "root": root,
         "ancestry_names": list(ANCESTRIES),
         "haplotypes": 2,
         "split_people": {split: audits[split].people for split in ("FIT", "VALID")},
         "split_donor_roles": {
-            split: SPLIT_CONTRACT[split]["donor_role"] for split in ("FIT", "VALID")
+            split: split_contract[split]["donor_role"] for split in ("FIT", "VALID")
         },
         "mosaic_parameters": {
             "admixture_generations": 12,
@@ -510,6 +538,9 @@ def parse_args() -> argparse.Namespace:
                                 dest=f"{split}_{name}", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument("--root", choices=tuple(ROOT_SEEDS), default="R0")
+    parser.add_argument("--fit-people", type=int, default=24)
+    parser.add_argument("--valid-people", type=int, default=8)
     return parser.parse_args()
 
 
@@ -523,6 +554,7 @@ def main() -> None:
     }
     manifest, receipt = build(
         split_paths["FIT"], split_paths["VALID"], args.manifest.parent,
+        args.root, args.fit_people, args.valid_people,
     )
     write_outputs(manifest, receipt, args.manifest, args.receipt)
     print(json.dumps({"status": receipt["status"], "manifest_sha256": receipt["manifest_sha256"]},

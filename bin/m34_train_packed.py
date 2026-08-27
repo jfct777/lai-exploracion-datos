@@ -129,6 +129,14 @@ def load_task(path: Path, contract: Mapping[str, Any]) -> dict[str, Any]:
     return task
 
 
+def training_parameter(
+    contract: Mapping[str, Any], task: Mapping[str, Any], name: str,
+) -> Any:
+    """Return a preregistered stage override or the historical global value."""
+    stage = contract["stages"][task["sweep_stage"]]
+    return stage.get("training_overrides", {}).get(name, contract["training"][name])
+
+
 def model_spec(contract: Mapping[str, Any], task: Mapping[str, Any], channels: int,
                ancestries: int) -> models.ModelSpec:
     config = next(row for row in contract["families"][task["family"]]["configs"]
@@ -443,7 +451,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             update += 1
             lr = schedule(float(task["learning_rate"]), update,
                           int(task["maximum_updates"]),
-                          min(int(contract["training"]["warmup_updates"]),
+                          min(int(training_parameter(
+                              contract, task, "warmup_updates")),
                               int(task["maximum_updates"])))
             for group in optimizer.param_groups:
                 group["lr"] = lr

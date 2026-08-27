@@ -75,6 +75,12 @@
         "valid": 8,
         "purpose": "same-day triage"
       },
+      "pilot_128": {
+        "people": 128,
+        "fit": 96,
+        "valid": 32,
+        "purpose": "exploratory replication of promoted families across mosaic roots"
+      },
       "medium": {
         "people": 256,
         "fit": 192,

@@ -127,6 +127,24 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
         raise ContractError("finalists require exactly three unique seeds")
     if len(set(finalists.get("rotations", []))) != 3:
         raise ContractError("finalists require exactly three unique rotations")
+    replication = stages.get("replication_128", {})
+    if replication != {
+        "maximum_families": 2,
+        "maximum_updates": 3200,
+        "seeds": [1103],
+        "rotations": ["R0", "R1", "R2"],
+        "radius_cM": 0.2,
+        "one_config_per_family": True,
+        "training_overrides": {
+            "warmup_updates": 400,
+            "validation_every_updates": 200,
+        },
+        "purpose": (
+            "preserve the 800-update small-pilot exposure per FIT person at "
+            "96 FIT people"
+        ),
+    }:
+        raise ContractError("128-person replication stage differs")
     budgets = [
         int(triage.get("maximum_updates", 0)),
         int(expansion.get("maximum_updates", 0)),
@@ -273,6 +291,7 @@ def load_metric_pairs(
         sweep_stage = str(record.get("sweep_stage"))
         if sweep_stage not in (
             "triage", "local_expansion", "radius_sensitivity", "finalists",
+            "replication_128",
         ):
             raise ContractError(f"invalid sweep stage in metric record {index}: {sweep_stage}")
         expected_updates = int(contract["stages"][sweep_stage]["maximum_updates"])

@@ -45,6 +45,19 @@
       "seeds": [1103, 2207, 3301],
       "rotations": ["R0", "R1", "R2"],
       "one_config_per_family": true
+    },
+    "replication_128": {
+      "maximum_families": 2,
+      "maximum_updates": 3200,
+      "seeds": [1103],
+      "rotations": ["R0", "R1", "R2"],
+      "radius_cM": 0.2,
+      "one_config_per_family": true,
+      "training_overrides": {
+        "warmup_updates": 400,
+        "validation_every_updates": 200
+      },
+      "purpose": "preserve the 800-update small-pilot exposure per FIT person at 96 FIT people"
     }
   },
   "metrics": {
