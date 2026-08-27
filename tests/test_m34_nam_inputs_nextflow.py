@@ -133,6 +133,7 @@ class M34NamInputsNextflowTests(unittest.TestCase):
         self.assertIn("m34_inputs_root = 'R0'", config)
         self.assertIn("m34_inputs_target_size = 'small'", config)
         self.assertIn("m34_inputs_task_plan = null", config)
+        self.assertIn("runResults.exists() && !workflow.resume", workflow)
         self.assertIn("M34_EXPLORATORY_128_REPLICATION_PLAN", workflow)
         self.assertIn("plan.test_opened != false", workflow)
         self.assertIn("targetSizeId != 'pilot_128'", workflow)

@@ -78,7 +78,7 @@ workflow {
         "${params.m34_inputs_results_dir}/${params.m34_inputs_run_id}",
         checkIfExists: false,
     )
-    if (runResults.exists())
+    if (runResults.exists() && !workflow.resume)
         error 'the run-specific results directory already exists; outputs are append-safe'
 
     def expectedPytorch = 'us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/m33-t0a@sha256:c03864a9ed0c56b00fd1a234daee2d17ddfa57d4c426628bd59cd9daf351ee99'
