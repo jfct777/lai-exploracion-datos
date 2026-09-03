@@ -1,0 +1,59 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M37_TRACE_FINITE_SUCCESSIVE_HALVING",
+  "status": "CONTRACT_ONLY_NO_EXECUTION",
+  "root_identity": "Every score row and receipt carries the explicit mosaic root; a run-specific overlay is authenticated by URI and SHA-256 in every READY manifest.",
+  "arms": ["RE", "RD", "POOLED", "SHAM", "GEOMETRY"],
+  "pairing": "same_root_seed_decoder_initialization_optimizer_batches_marker_shards_and_F0",
+  "positive_controls": {
+    "additive": "held-out people must recover an event-value main effect above the same-capacity zero-event negative",
+    "interaction": "held-out people must recover a nearby-event XOR effect that neither single-event marginal identifies",
+    "negative": "F0, value-disabled, label-permuted, and zero/one/two-event controls must not reproduce the held-out positive gain"
+  },
+  "hmm": {
+    "hazard_per_morgan": [6.0, 8.5, 12.0, 17.0, 24.0],
+    "evidence_lambda": [0.25, 0.5, 1.0, 2.0]
+  },
+  "tcn": {
+    "hidden_dim": [32, 64, 96],
+    "depth": [2, 3, 4],
+    "kernel_size": [3, 5],
+    "dilations": [[1, 2], [1, 2, 4], [1, 2, 4, 8]],
+    "dropout": [0.0, 0.1, 0.2],
+    "learning_rate": [0.0001, 0.0003, 0.001],
+    "seeds": [1103, 2207, 3301]
+  },
+  "rungs": [
+    {"name": "triage", "updates": 200, "roots": ["R0"], "keep_fraction": 0.5},
+    {"name": "expansion", "updates": 800, "roots": ["R0"], "keep_fraction": 0.5},
+    {"name": "replication", "updates": 3200, "roots": ["R0", "R1", "R2"], "keep_fraction": 1.0}
+  ],
+  "training": {
+    "batch_people": 8,
+    "marker_shard": 256,
+    "validation_every": 25,
+    "early_stopping_patience": 4,
+    "gradient_clip_norm": 1.0,
+    "parameter_cap": 200000,
+    "calendar": "marker shards are derived only from TRAIN people and shared byte-for-byte across all five arms",
+    "sample_disjunction": "FIT and VALID sample_key_sha256 sets must have empty intersection"
+  },
+  "promotion": {
+    "estimands": ["RE_minus_F0", "RE_minus_RD", "RE_minus_POOLED", "RE_minus_SHAM", "RE_minus_GEOMETRY"],
+    "aggregation": "median_over_roots_with_2000_deterministic_root_bootstrap_resamples",
+    "parameters": {
+      "boundary_tolerance_cM": 0.2,
+      "minimum_strict_F1_gain": 0.0,
+      "maximum_log_loss_increase": 0.0,
+      "bootstrap_seed": 1103,
+      "bootstrap_draws": 2000,
+      "minimum_replication_roots": 3
+    },
+    "parameter_basis": "strictly positive implements the existing positive-increment gate; zero log-loss increase implements non-worsening; no empirical effect-size threshold is introduced",
+    "requires": ["RE F1 must exceed F0, RD, POOLED, SHAM and GEOMETRY", "RE log-loss must be nonworse than every comparator", "replication: all five 95CI lower bounds positive across at least three roots", "all_controls_complete"],
+    "triage_rule": "R0-only may advance to expansion by paired point-estimate gate; it cannot claim replication or open VALID",
+    "forbid": ["single_root_replication_claim", "posthoc_arm_unpairing", "TEST_opening", "unqualified_FLARE2_claim"]
+  },
+  "metric_collection": "Promotion consumes only the complete metric collection produced from authenticated M37_TRACE_SCORE artifact/receipt pairs; manually supplied metric JSON is forbidden.",
+  "marker_axis": "marker_pos and marker_cM must either be carried together or be bound by the joint upstream M34 F0 receipt; the ordered physical/genetic pairs are then hashed before materialization"
+}

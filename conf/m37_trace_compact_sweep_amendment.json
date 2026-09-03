@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M37_TRACE_COMPACT_SWEEP_AMENDMENT",
+  "status": "PREREGISTERED_NO_EXECUTION",
+  "parent_contract": "conf/m37_trace_sweep_contract.json",
+  "parent_contract_sha256": "50a27f6c597d883b0aeb87671210d7d9478d9ac87821207b58dd30a045e238be",
+  "scope": {
+    "root": "R0",
+    "evaluation_split": "FIT_TUNE",
+    "valid_access": "FORBIDDEN",
+    "interpretation": [
+      "ADVANCE_EXPLORATORY",
+      "STOP_EXPLORATORY"
+    ]
+  },
+  "candidate_count_by_family": {
+    "hmm": 20,
+    "tcn": 3
+  },
+  "hmm": {
+    "design": "complete parent-contract grid because inference is deterministic and inexpensive",
+    "hazard_per_morgan": [6.0, 8.5, 12.0, 17.0, 24.0],
+    "evidence_lambda": [0.25, 0.5, 1.0, 2.0]
+  },
+  "tcn": {
+    "design": "three-point calibrated screen spanning compact, intermediate and wide/deep TCNs; all use the learning rate that passed the same-budget synthetic control",
+    "candidate_ids": ["tcn_anchor_pc", "tcn_mid_local", "tcn_wide_broad"],
+    "evidence_lambda": [0.25, 0.5, 1.0, 2.0],
+    "event_radius_cM": [0.05, 0.1, 0.2, 0.5],
+    "execution": {
+      "updates": 1600,
+      "validation_every": 20,
+      "early_stopping_patience": 30
+    },
+    "seed": 1103,
+    "coverage": {
+      "hidden_dim": [32, 64, 96],
+      "depth": [2, 3, 4],
+      "kernel_size": [3, 5],
+      "dropout": [0.0, 0.1, 0.2],
+      "learning_rate": [0.001],
+      "event_radius_cM": [0.05, 0.2, 0.5],
+      "evidence_lambda": [0.25, 1.0, 2.0]
+    }
+  },
+  "default_replay": {
+    "requirement": "reproduce all five default-arm R0 metrics before any sweep candidate is evaluated",
+    "absolute_tolerance": 1e-6,
+    "relative_tolerance": 1e-6
+  },
+  "persistent_outputs": {
+    "allowed": [
+      "aggregate_and_per_individual_metric_json",
+      "metric_receipt_json",
+      "equivalence_json_and_receipt",
+      "family_audit_json_and_receipt",
+      "paired_collection_json_and_receipt",
+      "triage_decision_json_and_receipt"
+    ],
+    "forbidden": [
+      "prediction_npz",
+      "checkpoint",
+      "VALID_or_TEST_artifact"
+    ]
+  },
+  "triage_gate": {
+    "primary": "RE must have strictly higher boundary F1 at 0.2 cM and non-worse log-loss than F0, RD, POOLED, SHAM and GEOMETRY",
+    "guardrails": [
+      "macro ancestry-dose MAE must be non-worse than every comparator",
+      "NAM ancestry-dose MAE must be non-worse than every comparator",
+      "false transitions per Morgan must be non-worse than every comparator"
+    ],
+    "pareto_only_promotion": "FORBIDDEN"
+  },
+  "positive_control_policy": {
+    "calibration_grid_updates": [200, 400, 800, 1600, 2500],
+    "minimum_passing_budget": 1600,
+    "result": "Additive passed from 200 updates; nearby XOR first passed at 1600 updates in the fixed image.",
+    "failure_rule": "A failed same-budget control means BUDGET_INSUFFICIENT, not absence of biological signal and not scientific closure"
+  }
+}

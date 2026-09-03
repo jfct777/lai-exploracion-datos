@@ -1,0 +1,104 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M37_TRACE_COMPACT_SWEEP_PRE",
+  "status": "PREREGISTERED_FIT_TUNE_ONLY",
+  "contract_binding": {
+    "parent": "conf/m37_trace_sweep_contract.json",
+    "parent_sha256": "50a27f6c597d883b0aeb87671210d7d9478d9ac87821207b58dd30a045e238be",
+    "amendment": "conf/m37_trace_compact_sweep_amendment.json",
+    "amendment_sha256": "b3704ce0c4ba2b93855f65176cb8723f4d6f9b356bce680de826762118ae123c"
+  },
+  "scope": {
+    "root": "R0",
+    "evaluation_split": "FIT_TUNE",
+    "valid_access": "FORBIDDEN"
+  },
+  "arms": ["RE", "RD", "POOLED", "SHAM", "GEOMETRY"],
+  "execution": {
+    "updates": 200,
+    "batch_people": 8,
+    "marker_shard": 256,
+    "validation_every": 25,
+    "early_stopping_patience": 4,
+    "tune_fraction": 0.2,
+    "split_seed": 3401103,
+    "event_radius_cM": 0.2
+  },
+  "families": {
+    "hmm": {
+      "hazard_per_morgan": 12.0,
+      "evidence_scale": 1.0
+    },
+    "tcn": {
+      "evidence_scale": 1.0,
+      "updates": 1600,
+      "validation_every": 20,
+      "early_stopping_patience": 30,
+      "hidden_dim": 32,
+      "depth": 2,
+      "kernel_size": 3,
+      "dropout": 0.0,
+      "dilations": [1, 2],
+      "seed": 1103,
+      "learning_rate": 0.0003
+    }
+  },
+  "equivalence": {
+    "absolute_tolerance": 1e-6,
+    "relative_tolerance": 1e-6,
+    "replay": {
+      "hmm": {
+        "family": "hmm",
+        "canonical_candidate_id": "hmm_r0",
+        "parameters": {}
+      },
+      "tcn": {
+        "family": "tcn",
+        "canonical_candidate_id": "tcn_r0",
+        "parameters": {
+          "updates": 200,
+          "validation_every": 25,
+          "early_stopping_patience": 4
+        }
+      }
+    }
+  },
+  "positive_control_status": {
+    "hmm": {
+      "status": "REQUIRED_RUNTIME_ADDITIVE_DETECTABILITY",
+      "interpretation": "Aligned synthetic evidence must measurably change the HMM posterior; XOR is not applicable to this additive evidence model."
+    },
+    "tcn": {
+      "status_at_1600_updates": "REQUIRED_RUNTIME_SAME_BUDGET_FIXTURE",
+      "anchor_candidate_id": "tcn_anchor_pc",
+      "existing_fixture": "Additive and nearby-XOR positive controls exist at larger budgets in tests/test_m37_positive_controls.py.",
+      "failure_interpretation": "BUDGET_INSUFFICIENT_FOR_INTERACTION; do not infer absence of biological signal."
+    }
+  },
+  "candidates": [
+    {"candidate_id": "hmm_h6_l025", "family": "hmm", "parameters": {"hazard_per_morgan": 6.0, "evidence_scale": 0.25}},
+    {"candidate_id": "hmm_h6_l05", "family": "hmm", "parameters": {"hazard_per_morgan": 6.0, "evidence_scale": 0.5}},
+    {"candidate_id": "hmm_h6_l1", "family": "hmm", "parameters": {"hazard_per_morgan": 6.0, "evidence_scale": 1.0}},
+    {"candidate_id": "hmm_h6_l2", "family": "hmm", "parameters": {"hazard_per_morgan": 6.0, "evidence_scale": 2.0}},
+    {"candidate_id": "hmm_h8p5_l025", "family": "hmm", "parameters": {"hazard_per_morgan": 8.5, "evidence_scale": 0.25}},
+    {"candidate_id": "hmm_h8p5_l05", "family": "hmm", "parameters": {"hazard_per_morgan": 8.5, "evidence_scale": 0.5}},
+    {"candidate_id": "hmm_h8p5_l1", "family": "hmm", "parameters": {"hazard_per_morgan": 8.5, "evidence_scale": 1.0}},
+    {"candidate_id": "hmm_h8p5_l2", "family": "hmm", "parameters": {"hazard_per_morgan": 8.5, "evidence_scale": 2.0}},
+    {"candidate_id": "hmm_h12_l025", "family": "hmm", "parameters": {"hazard_per_morgan": 12.0, "evidence_scale": 0.25}},
+    {"candidate_id": "hmm_h12_l05", "family": "hmm", "parameters": {"hazard_per_morgan": 12.0, "evidence_scale": 0.5}},
+    {"candidate_id": "hmm_h12_l1", "family": "hmm", "parameters": {"hazard_per_morgan": 12.0, "evidence_scale": 1.0}},
+    {"candidate_id": "hmm_h12_l2", "family": "hmm", "parameters": {"hazard_per_morgan": 12.0, "evidence_scale": 2.0}},
+    {"candidate_id": "hmm_h17_l025", "family": "hmm", "parameters": {"hazard_per_morgan": 17.0, "evidence_scale": 0.25}},
+    {"candidate_id": "hmm_h17_l05", "family": "hmm", "parameters": {"hazard_per_morgan": 17.0, "evidence_scale": 0.5}},
+    {"candidate_id": "hmm_h17_l1", "family": "hmm", "parameters": {"hazard_per_morgan": 17.0, "evidence_scale": 1.0}},
+    {"candidate_id": "hmm_h17_l2", "family": "hmm", "parameters": {"hazard_per_morgan": 17.0, "evidence_scale": 2.0}},
+    {"candidate_id": "hmm_h24_l025", "family": "hmm", "parameters": {"hazard_per_morgan": 24.0, "evidence_scale": 0.25}},
+    {"candidate_id": "hmm_h24_l05", "family": "hmm", "parameters": {"hazard_per_morgan": 24.0, "evidence_scale": 0.5}},
+    {"candidate_id": "hmm_h24_l1", "family": "hmm", "parameters": {"hazard_per_morgan": 24.0, "evidence_scale": 1.0}},
+    {"candidate_id": "hmm_h24_l2", "family": "hmm", "parameters": {"hazard_per_morgan": 24.0, "evidence_scale": 2.0}},
+
+    {"candidate_id": "tcn_anchor_pc", "family": "tcn", "parameters": {"evidence_scale": 1.0, "hidden_dim": 32, "depth": 2, "kernel_size": 3, "dropout": 0.0, "dilations": [1, 2], "learning_rate": 0.001, "event_radius_cM": 0.2}},
+    {"candidate_id": "tcn_mid_local", "family": "tcn", "parameters": {"evidence_scale": 0.25, "hidden_dim": 64, "depth": 3, "kernel_size": 5, "dropout": 0.1, "dilations": [1, 2, 4], "learning_rate": 0.001, "event_radius_cM": 0.05}},
+    {"candidate_id": "tcn_wide_broad", "family": "tcn", "parameters": {"evidence_scale": 2.0, "hidden_dim": 96, "depth": 4, "kernel_size": 3, "dropout": 0.2, "dilations": [1, 2, 4, 8], "learning_rate": 0.001, "event_radius_cM": 0.5}}
+  ]
+}
