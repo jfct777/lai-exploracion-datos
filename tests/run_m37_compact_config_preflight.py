@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUN_ID = "m37-r0-compact-sweep-20260903d"
+RUN_ID = "m37-r0-compact-sweep-20260903c"
 WORK_DIR = f"gs://teams-usp/frank/lai-exploracion-datos/work/nextflow/{RUN_ID}"
 RECOMMENDED_CONFIG_ORDER = (
     "m37_trace_compact_sweep.config",

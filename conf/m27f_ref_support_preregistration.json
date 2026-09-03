@@ -1,72 +1,140 @@
 {
-  "stage": "M27F_REF_SUPPORT_AUDIT",
-  "version": 1,
-  "scope": "mechanical_discovery_and_ref_projection_then_ref_only_support_audit",
+  "stage": "M27F_REF_VALID_SUPPORT_AUDIT",
+  "version": 2,
+  "scope": "mechanical_projection_then_ref_selection_and_single_valid_evaluation",
   "upstream_contract": {
-    "m27f_split_manifest_sha256": "fcb372ff03f644db2184dc3c5c97f2d3d123b462774639a8a2e7194012769e37",
-    "m27f_split_private_sha256": "39bc061ba0a2660fed84bade9d658fb28fadc6813af097e89e0ad28949f1ed3f",
-    "m27f_split_public_sha256": "b8fb6e465053cb2b2ff8033e7d62bed1e96095a497f34e60c0692f11cbb6d905",
-    "m27f_split_generator_commit": "ff7b7a219540129f7c430a4070248e87285260d6",
+    "m27f_split_manifest_sha256": "42590949613697f4e1f6f41674bd6156b958da95b5a8777463505e442645fef2",
+    "m27f_split_private_sha256": "7e4abe2aa57c7375023268e56e3c1dbf9c7bbedc31c3acf1e07b4b07dabfdd07",
+    "m27f_split_public_sha256": "e51c435e003683ebb2ae4f8d118604d521c6bb9fbe6c60c2df91ac5ef010c229",
+    "m27f_split_generator_commit": "3b27440feb929e3229932be854a4c116befcb2a1",
     "m27e_manifest_sha256": "3ce179868e358784d16764a6cc1c337c4a16a7946dd767660e609da79451653e",
     "m27e_support_sha256": "ac7f39701963f18698e6ab6944495182ff611f83b1e38c0dcaaddc85249c4ee9",
     "raw_wgs_vcf_sha256": "ecd30e0ea1091aa2e44fae83e78e3e8db2231ae461cb5c0802a87bf3e9a9f5af",
     "phased_panel_vcf_sha256": "71161973b2e233963321feb03db63eff04f14bc5c7a561a2f0dbce623fc05395",
+    "baseline_vcf_sha256": "1b9e7b23a6e046185056271513589d03c24406e5100606d078973a58d36e6afd",
     "expected_panel_samples": 3685,
     "expected_discovery_core_samples": 128,
-    "expected_ref_samples": 435,
-    "expected_ref_samples_by_ancestry": {
-      "African": 173,
-      "European": 246,
-      "Native_American": 16
+    "expected_ref_samples": 753,
+    "expected_valid_samples": 306,
+    "expected_test_samples": 297,
+    "expected_samples_by_ancestry_and_role": {
+      "REF_TRAIN": {
+        "African": 341,
+        "European": 387,
+        "Native_American": 25
+      },
+      "SOURCE_VALID": {
+        "African": 141,
+        "European": 151,
+        "Native_American": 14
+      },
+      "SOURCE_TEST": {
+        "African": 135,
+        "European": 151,
+        "Native_American": 11
+      }
     },
-    "expected_ref_native_american_atomic_units": 2,
+    "expected_ref_native_american_atomic_units": 4,
+    "expected_valid_native_american_atomic_units": 2,
+    "expected_test_native_american_atomic_units": 2,
     "expected_panel_variant_records": 43026,
     "expected_direct_phase_bridge_sites": 954,
-    "expected_direct_bridge_key_orientation_sha256": "243a2b0d4adb381d63bfebe65c73bea22be6945d61aa41bdf5b926ae4b4af1be"
+    "expected_direct_bridge_key_orientation_sha256": "243a2b0d4adb381d63bfebe65c73bea22be6945d61aa41bdf5b926ae4b4af1be",
+    "expected_direct_sites_in_frozen_baseline": 507,
+    "expected_direct_sites_outside_frozen_baseline": 447
   },
   "projection_contract": {
     "tool": "bcftools",
     "version": "1.16",
     "container": "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/dnabr-qc@sha256:3baca87521291075c1ea5c7b17a3706a5030adda65174313fbc203c1a1324b35",
     "output_format": "BCF",
-    "sample_selection": "positive allow-list only",
+    "sample_selection": "positive_allowlist_only",
     "update_info_ac_an": false,
+    "remove_all_source_info_fields": true,
     "variant_filters": [],
     "genotype_filters": [],
     "preserve_variant_keys_and_order": true,
-    "publish_discovery_projection": false,
-    "publish_ref_projection_privately": true,
-    "suppress_tool_timestamp_header": true
+    "suppress_tool_timestamp_header": true,
+    "source_test_projection_created": false,
+    "scientific_statistics_in_projection": false,
+    "publish_projected_bcf": false
   },
   "support_contract": {
+    "rare_definition": "minor allele with MAC>=2 and MAF<0.01 in NatWGS-128 DISCOVERY_CORE",
     "rare_orientation": "frozen minor allele from NatWGS-128",
     "heterozygous_carrier_requires_phase": true,
     "homozygous_carrier_phase_required": false,
     "unit_of_replication": "canonical_population_plus_primary_IBD_atomic_unit",
-    "ref_native_american_pass_rule": "at least one of the 954 frozen sites has a usable carrier in both of the two Native-American REF atomic units",
-    "reorient_in_ref": false,
-    "select_using_validation": false
+    "primary_ref_min_atomic_units": 2,
+    "available_ref_native_american_atomic_units": 4,
+    "required_valid_atomic_units": 2,
+    "available_valid_native_american_atomic_units": 2,
+    "reorient_in_ref_or_valid": false,
+    "select_using_validation": false,
+    "use_m27e_full_panel_support_for_selection": false,
+    "validation_analytical_openings": 1,
+    "validation_opening_receipt_required": true,
+    "validation_claim_key": "m27fb_chr22_source_valid_once",
+    "validation_claim_uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/claims/m27fb_chr22_source_valid_once.json",
+    "validation_opening_enforcement": "persistent fixed-key GCS claim created with ifGenerationMatch=0 plus a local O_CREAT|O_EXCL mirror; only the same run id and identical authenticated hashes may resume",
+    "source_test_opened": false
   },
-  "operational_controls": {
-    "deterministic_private_tables": "plain UTF-8 TSV with LF line endings and no embedded timestamp",
-    "freeze_ref_eligible_catalog": "write the exact R5-passing subset and record both its file SHA-256 and key-plus-orientation SHA-256 before VALID is opened"
+  "diagnostics": {
+    "ref_support_thresholds": [1, 2, 3, 4],
+    "decision_threshold": 2,
+    "thresholds_1_3_4_are_descriptive_only": true,
+    "baseline_membership_is_diagnostic_and_frozen": true,
+    "spatial_span_bp": [500000, 1000000, 5000000],
+    "spatial_diagnostics_change_decision": false,
+    "report_frozen_allele_frequency_by_role_and_ancestry": true,
+    "missing_genotypes_are_not_reference_homozygotes": true
+  },
+  "estimands": {
+    "A_transferability": "number of sites selected in >=2/4 REF NAM units and observed in 2/2 VALID NAM units",
+    "B_additional_exact_variant_keys": "number of A keys CHROM:POS:REF:ALT absent from the frozen baseline; this does not by itself establish a new locus",
+    "biological_replication": "atomic units, not individuals, sites, haplotypes or allele copies"
   },
   "gates": {
-    "R0": "All split, M27E and VCF hashes and counts match the frozen upstream contract.",
-    "R1": "DISCOVERY_CORE and REF positive allow-lists are exact, unique and disjoint from every other role.",
-    "R2": "The REF BCF header is exactly the 435 REF samples; no DISCOVERY, SOURCE_VALID or SOURCE_TEST sample is emitted.",
-    "R3": "Source, discovery projection and REF projection contain the same 43,026 variant keys in the same order; no variant or genotype filter is applied.",
-    "R4": "The discovery-only projection reproduces exactly 954 frozen sites and their key-plus-orientation SHA-256.",
-    "R5": "At least one frozen site has phased or homozygous usable minor-allele support in both Native-American REF atomic units."
+    "P0": "All split and phased-panel hashes match the 50/25/25 canonical run generated by 3b27440.",
+    "P1": "DISCOVERY_CORE, REF, VALID and TEST role lists are exact, unique and mutually disjoint.",
+    "P2": "Projected BCF headers equal their positive allowlists and contain zero SOURCE_TEST samples.",
+    "P3": "Source and all projections retain the same 43026 variant keys in the same order without genotype or variant filters.",
+    "R0": "M27E, raw WGS and baseline hashes match.",
+    "R1": "DISCOVERY uses exactly NatWGS-128 and reproduces the frozen rare definition.",
+    "R2": "The 954 key-plus-orientation digest is reproduced.",
+    "R3": "The 507/447 exact-key baseline margin is reproduced.",
+    "R4": "REF membership, ancestry counts and four NAM units match the frozen split.",
+    "R5": "At least one site has observed usable support in >=2/4 REF NAM units; otherwise report inconclusive if units with missing genotypes could reach two.",
+    "R6": "Diagnostic B branch: report whether any R5 site is outside the frozen baseline and whether missing genotypes could change that margin; R6 does not block evaluation of A in VALID.",
+    "V0": "The REF support table and primary catalog authenticate by hash and a persistent atomic opening claim is verified before VALID is analyzed.",
+    "V1": "VALID contains exactly 306 samples, including 14 NAM in two units, and no TEST sample.",
+    "V2": "All 954 frozen keys are present in VALID without reorientation.",
+    "V3": "Callability is reported by unit; missing never counts as absence.",
+    "V4": "At least one REF-selected site is observed in both VALID NAM units.",
+    "V5": "At least one V4 site is outside the frozen baseline."
   },
   "allowed_decisions": [
     "STOP_PROVENANCE",
     "STOP_ALLOWLIST",
     "STOP_OUTPUT_MEMBERSHIP",
+    "STOP_TEST_LEAKAGE",
     "STOP_VARIANT_PROJECTION",
     "STOP_TARGET_REPRODUCTION",
-    "STOP_REF_NO_SUPPORT",
-    "GO_VALID_FEASIBILITY_ONLY"
+    "STOP_BASELINE_REPRODUCTION",
+    "STOP_CATALOG_FREEZE",
+    "INCONCLUSIVE_REF_CALLABILITY",
+    "STOP_REF_NO_TRANSFERABLE_SUPPORT",
+    "STOP_VALID_NO_TRANSFERABLE_SUPPORT",
+    "INCONCLUSIVE_VALID_CALLABILITY",
+    "INCONCLUSIVE_ADDITIONAL_VARIANT_KEY_CALLABILITY",
+    "STOP_NO_ADDITIONAL_VARIANT_KEY_SUPPORT",
+    "GO_VALID_SUPPORT_AUDIT",
+    "GO_SUPPORT_CANDIDATES_ONLY"
   ],
-  "next_gate": "If REF passes, freeze the eligible site catalog and criteria by hash before opening SOURCE_VALID once. SOURCE_TEST remains sealed."
+  "stop_rule": {
+    "technical": "Stop on any hash mismatch, SOURCE_TEST sample, use of the 21 quarantined samples in DISCOVERY, target reproduction failure or catalog change after REF.",
+    "A": "If zero REF-selected sites appear in both VALID units, close transferability for this panel and chr22, unless missingness within an atomic unit makes the result inconclusive.",
+    "B": "If A is positive but zero exact variant keys outside the frozen baseline pass, close only the additional-key claim; representation or reweighting would require a new design.",
+    "go": "A positive B authorizes only support candidates and a later power-design decision, not LAI, simulation, training or TEST."
+  }
 }

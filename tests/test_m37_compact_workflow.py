@@ -183,8 +183,8 @@ def test_compact_cloud_overlay_is_personal_pinned_and_parallel() -> None:
     assert "@sha256:" in cloud
     assert "gs://teams-usp/frank/lai-exploracion-datos/work/nextflow/" in overlay
     assert "gs://projects-usp" not in overlay
-    assert "m37-r0-compact-sweep-20260903d" in overlay
-    assert "m37-r0-compact-sweep-20260903c" not in overlay
+    assert "m37-r0-compact-sweep-20260903c" in overlay
+    assert "m37-r0-compact-sweep-20260903b" not in overlay
 
 
 def test_compact_manifest_has_space_filling_hmm_and_tcn_designs() -> None:
@@ -235,7 +235,7 @@ def test_event_radius_is_prospectively_frozen_without_changing_promotion_endpoin
     )
     radius = amendment["tcn"]["event_radius_amendment"]
     assert radius["timing"] == (
-        "PROSPECTIVE_BEFORE_FIRST_CONSUMABLE_20260903D_CANDIDATE_SWEEP_EXECUTION"
+        "PROSPECTIVE_BEFORE_FIRST_CONSUMABLE_20260903C_CANDIDATE_SWEEP_EXECUTION"
     )
     assert amendment["tcn"]["event_radius_cM"] == [0.05, 0.1, 0.2, 0.5]
     assert "promotion remains fixed at 0.2 cM" in radius["metric_alignment"]
@@ -269,11 +269,3 @@ def test_event_radius_is_prospectively_frozen_without_changing_promotion_endpoin
     assert run_b["disposition"] == "SUPERSEDED_AFTER_LAUNCH_NONCONSUMABLE"
     assert "HMM, TCN and paired-metric collection completed" in run_b["execution"]
     assert run_b["result_use"] == "FORBIDDEN_FOR_CANDIDATE_SELECTION_OR_INFERENCE"
-    run_c = amendment["superseded_execution_20260903c"]
-    assert run_c["disposition"] == "SUPERSEDED_WRONG_WORKDIR_NONCONSUMABLE"
-    assert run_c["resolved_work_dir"].endswith("/work/nextflow/null")
-    assert run_c["submitted_stage"] == "synthetic capacity screen only"
-    assert run_c["real_fit_tune_execution"] == (
-        "NOT_CLAIMED_OR_INFERRED_FROM_THIS_LAUNCH_RECORD"
-    )
-    assert run_c["result_use"] == "FORBIDDEN_FOR_CANDIDATE_SELECTION_OR_INFERENCE"

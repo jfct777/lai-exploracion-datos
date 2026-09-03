@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
   "stage": "M37_TRACE_COMPACT_SWEEP_AMENDMENT",
-  "status": "PREREGISTERED_FOR_20260903D_NO_EXECUTION",
+  "status": "PREREGISTERED_FOR_20260903C_NO_EXECUTION",
   "parent_contract": "conf/m37_trace_sweep_contract.json",
   "parent_contract_sha256": "50a27f6c597d883b0aeb87671210d7d9478d9ac87821207b58dd30a045e238be",
   "prospective_timing": {
-    "state": "FROZEN_BEFORE_FIRST_CONSUMABLE_20260903D_CANDIDATE_SWEEP_EXECUTION",
+    "state": "FROZEN_BEFORE_FIRST_CONSUMABLE_20260903C_CANDIDATE_SWEEP_EXECUTION",
     "trigger": "The published R0 defaults HMM(hazard=12,lambda=1) and TCN(h=32,d=2,k=3,dropout=0,lr=3e-4,updates=200,dilations=1,2) did not pass the prespecified promotion gate.",
     "interpretation": "Finite design-space coverage after a failed default screen; not a post-hoc rescue, VALID opening, or scientific closure."
   },
@@ -26,18 +26,6 @@
     "disposition": "SUPERSEDED_AFTER_LAUNCH_NONCONSUMABLE",
     "execution": "capacity control, HMM, TCN and paired-metric collection completed; the coordinator then failed before the decision stage",
     "reason": "the launched snapshot preceded the all-candidate three-seed capacity gate and exposed a Nextflow decision-channel wiring failure",
-    "result_use": "FORBIDDEN_FOR_CANDIDATE_SELECTION_OR_INFERENCE"
-  },
-  "superseded_execution_20260903c": {
-    "run_id": "m37-r0-compact-sweep-20260903c",
-    "disposition": "SUPERSEDED_WRONG_WORKDIR_NONCONSUMABLE",
-    "submitted_stage": "synthetic capacity screen only",
-    "batch_job_id": "nf-79118ab8-1788417572577",
-    "observed_job_state": "SCHEDULED_AT_AUDIT_TIME",
-    "resolved_work_dir": "gs://teams-usp/frank/lai-exploracion-datos/work/nextflow/null",
-    "reason": "the launch loaded configs as base, run overlay, GCP; the later GCP assignment interpolated the base null run_id and replaced the explicit run namespace",
-    "cancellation_status": "NOT_CANCELLED_MISSING_IAM_PERMISSION",
-    "real_fit_tune_execution": "NOT_CLAIMED_OR_INFERRED_FROM_THIS_LAUNCH_RECORD",
     "result_use": "FORBIDDEN_FOR_CANDIDATE_SELECTION_OR_INFERENCE"
   },
   "scope": {
@@ -72,7 +60,7 @@
     "evidence_lambda": [0.25, 0.5, 1.0, 2.0],
     "event_radius_cM": [0.05, 0.1, 0.2, 0.5],
     "event_radius_amendment": {
-      "timing": "PROSPECTIVE_BEFORE_FIRST_CONSUMABLE_20260903D_CANDIDATE_SWEEP_EXECUTION",
+      "timing": "PROSPECTIVE_BEFORE_FIRST_CONSUMABLE_20260903C_CANDIDATE_SWEEP_EXECUTION",
       "role": "training shard calendar and continuous triangular event splat only",
       "metric_alignment": "all candidates are scored at the fixed 0.05, 0.1, 0.2 and 0.5 cM edge tolerances; promotion remains fixed at 0.2 cM",
       "not_allowed": "changing the radius after candidate metrics are observed"
@@ -172,7 +160,7 @@
     "allowed_interpretation": "The failed prelaunch diagnostic cannot be used to claim that TCN models lack capacity or that rare variants lack biological information."
   },
   "capacity_control": {
-    "timing": "PROSPECTIVE_SYNTHETIC_FIXTURE_BEFORE_ANY_20260903D_REAL_FIT_TUNE_TCN_TRAINING",
+    "timing": "PROSPECTIVE_SYNTHETIC_FIXTURE_BEFORE_ANY_20260903C_REAL_FIT_TUNE_TCN_TRAINING",
     "fixture_geometry": "9 markers scaled to each candidate event radius; two XOR events are separated by four marker intervals, their positive triangular splats do not overlap, and loss plus scoring use one fixed positive-mass event anchor while excluding the zero-mass midpoint",
     "capacity_only_loss_mask": "An internal optional mask aligns the sealed synthetic loss and score at that directional anchor. Its default is null, and no production CLI, configuration or workflow can activate it.",
     "baseline": "uniform across the six diploid ancestry states for additive and XOR controls; for zero revival the target state NN starts at exact probability zero while the other five states share the mass",

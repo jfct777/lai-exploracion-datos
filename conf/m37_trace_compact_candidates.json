@@ -3,14 +3,14 @@
   "stage": "M37_TRACE_COMPACT_SWEEP_PRE",
   "status": "PREREGISTERED_FIT_TUNE_ONLY",
   "freeze": {
-    "state": "NEWLY_FROZEN_BEFORE_CONSUMABLE_20260903D_CANDIDATE_EXECUTION",
+    "state": "NEWLY_FROZEN_BEFORE_CONSUMABLE_20260903C_CANDIDATE_EXECUTION",
     "reason": "finite R0 follow-up after the published defaults failed promotion; TCN uses the prospectively corrected raw-F0 residual and the repaired candidate-specific capacity gate frozen before real FIT/TUNE access"
   },
   "contract_binding": {
     "parent": "conf/m37_trace_sweep_contract.json",
     "parent_sha256": "50a27f6c597d883b0aeb87671210d7d9478d9ac87821207b58dd30a045e238be",
     "amendment": "conf/m37_trace_compact_sweep_amendment.json",
-    "amendment_sha256": "7ca5d140b560e11829c66fe70fdbcb61a2e4c5057737bbf20a5d50b389841722"
+    "amendment_sha256": "70dc59d626ee3d64620959e7a8559172c0a73a75b836da6abaac5ace5afd151f"
   },
   "scope": {
     "root": "R0",
