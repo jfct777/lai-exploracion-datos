@@ -1,0 +1,3 @@
+sample_i	sample_j	target_chrom	target_source	target
+S1	S2	chr21	common_wgs_ibd	1
+S3	S4	chr21	chromopainter_common	0.7

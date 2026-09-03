@@ -1,0 +1,33 @@
+{
+  "stage": "M36_CORA_MATERIALIZE",
+  "receipt_status": {
+    "MATERIALIZED_PASS": "hash-bound artifacts may feed M36 train in the same Nextflow run",
+    "PUBLISHED_PASS": "post-publication binding adds immutable object generations without altering artifact hashes"
+  },
+  "feature_schema": "m36_factorized_sparse_v1",
+  "external_target_schema": "m36_external_common_pairs_log1p_v3_pair_total",
+  "required_locus_columns": ["event_id", "chrom", "position", "ref", "alt", "minor_allele", "minor_is_alt", "mac", "an_called", "callability", "mutation_context", "mutation_context_available", "cm", "common_copying_context", "common_copying_context_available"],
+  "required_carrier_columns": ["sample_id", "event_id", "minor_dosage"],
+  "required_missing_columns": ["sample_id", "event_id"],
+  "required_target_columns": ["sample_i", "sample_j", "target_chrom", "target_source", "target_stratum", "target_cm", "target_positive", "target"],
+  "receipt_required_fields": {
+    "stage": "M36_CORA_MATERIALIZE",
+    "status": "PASS",
+    "synthetic": false,
+    "input_descriptors": {
+      "events": ["uri", "generation", "sha256"],
+      "covariates": ["uri", "generation", "sha256"],
+      "components": ["uri", "generation", "sha256"],
+      "targets": ["uri", "generation", "sha256"]
+    }
+  },
+  "representation_contract": {
+    "zero_evaluable": "implicit for sample/event pairs absent from carrier_rows and missing_rows",
+    "missing": "sparse missing_rows or equivalent authenticated bit-packed mask",
+    "geometry_control": "global locus axis is identical by construction and is never expanded sample-by-locus",
+    "minor_orientation": "carrier minor_dosage is oriented to the per-locus minor allele rederived from called diploid VCF genotypes",
+    "callability_and_map": "callability is derived from called GT denominator; cM is interpolated from the required genetic map",
+    "optional_context": "mutation/copying contexts may be unavailable only with explicit availability masks; values are never invented"
+  },
+  "requirements": ["loci are one row per event; carrier and missing tables are sparse", "FIT/SCORE identity must be separately authenticated", "target chromosome must not equal feature chromosome", "source is Nunes asIBD (Refined-IBD) stratified by Gnomix and is exploratory predictive target only, never orthogonal truth", "target is log1p(sum_cM) with deterministic stratified zero negatives", "receipt must bind immutable published input descriptors"]
+}

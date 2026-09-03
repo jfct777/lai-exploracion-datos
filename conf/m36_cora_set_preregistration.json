@@ -1,0 +1,11 @@
+{
+  "stage": "M36_CORA_SET_EXPLORATORY",
+  "execution_scope": "synthetic_smoke_or_explicit_real_external_target_training; no_LAI_or_biological_superiority_claim",
+  "event_classes": ["AC2_HET", "AC2_HOMALT", "MAC3_10"],
+  "target_sources": ["common_wgs_ibd", "chromopainter_common", "asibd_refined_ibd_gnomix_stratified_exploratory"],
+  "m14_as_truth": false,
+  "cross_chromosome_required": true,
+  "controls": ["rare_burden", "rare_callability", "cohort", "Q_AFR", "Q_EUR", "Q_NAM", "Q_EAS"],
+  "fold_rule": "individuals are assigned by whole PC-Relate component; cross-fold pairs are excluded",
+  "asibd_scope": "Nunes asIBD (Refined-IBD) stratified by Gnomix is an exploratory predictive common-IBD target, not orthogonal truth and not evidence of superiority"
+}

@@ -1,0 +1,5 @@
+sample_id	cohort	asibd_id	rare_callability	Q_AFR	Q_EUR	Q_NAM	Q_EAS
+S1	C	C_S1	0.99	0.3	0.4	0.3	0
+S2	C	C_S2	0.99	0.3	0.4	0.3	0
+S3	C	C_S3	0.99	0.3	0.4	0.3	0
+S4	C	C_S4	0.99	0.3	0.4	0.3	0

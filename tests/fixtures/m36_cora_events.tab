@@ -1,0 +1,7 @@
+sample_id	event_id	chrom	position	mac	genotype	callability	mutation_context	cm	common_copying_context
+S1	evt_ac2_het	chr22	100	2	1	0.99	CpG	0.01	0.2
+S2	evt_ac2_het	chr22	100	2	1	0.99	CpG	0.01	0.2
+S3	evt_ac2_homalt	chr22	200	2	2	0.98	NonCpG	0.02	0.4
+S1	evt_mac4	chr22	300	4	1	0.97	NonCpG	0.03	0.1
+S3	evt_mac4	chr22	300	4	1	0.97	NonCpG	0.03	0.1
+S4	evt_mac4	chr22	300	4	2	0.97	NonCpG	0.03	0.1

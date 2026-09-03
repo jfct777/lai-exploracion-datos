@@ -1,0 +1,48 @@
+{
+  "stage": "M36B_CORA_SET_EXPLORATORY",
+  "scientific_question": "Do chr22 minor-allele event sets predict cross-chromosome common-IBD pair totals beyond burden, callability, cohort and global ancestry?",
+  "claim_scope": "exploratory recent-genealogy and population-structure signal; not LAI accuracy, causal evidence or independent biological validation",
+  "feature_chromosome": "chr22",
+  "target": "log1p cross-chromosome common-IBD pair total",
+  "scientific_direction": "chr22 rare-event features predict common-IBD totals from autosomes chr1-chr21; this triage is one-directional",
+  "fold_rule": "whole PC-Relate components; FIT and outer validation individuals are disjoint; cross-fold pairs are not scored",
+  "architecture_selection": "successive halving in inner component-disjoint folds nested separately inside each outer FIT partition",
+  "controls": {
+    "baseline_only": "rare burden, rare callability, cohort and Q_AFR/Q_EUR/Q_NAM/Q_EAS only",
+    "carrier_permuted": "equal-dosage bipartite double-edge swaps performed separately in FIT and outer validation and within fixed cohort/dominant-Q/purity-quartile strata",
+    "carrier_permuted_exact_invariants": [
+      "per-locus minor-allele count, carrier count and dosage multiset",
+      "per-person event count, minor-dosage burden and dosage multiset",
+      "missing-call mask",
+      "cohort and fixed global-ancestry stratum"
+    ],
+    "carrier_permutation_mixing_gate": {
+      "minimum_moved_carrier_fraction_per_outer_partition": 0.5,
+      "partitions": ["FIT", "VALIDATION"],
+      "interpretation": "technical null-validity guard requiring a majority of carrier edges to change; not a biological cutoff and not proof of uniform Markov-chain mixing",
+      "failure_action": "abort before accepting any result for that run"
+    },
+    "geometry_only": "one shared event-axis set encoded once, L2-normalized and detached, retaining locus positions, callability and common-copying context while erasing person identity, dosage, MAC, mutation identity and rare-event class"
+  },
+  "point_estimate": "paired control-minus-rare-enabled MSE within fold and target stratum; equal-weight macro average across outer folds",
+  "uncertainty": "paired PC-Relate component-node Bayesian bootstrap with exponential node weights; an exploratory network-bootstrap approximation",
+  "promotion": {
+    "minimum_relative_mse_reduction": 0.10,
+    "minimum_positive_outer_folds": 2,
+    "component_node_ci95_lower_above_zero": true,
+    "required_comparators": ["baseline_only", "carrier_permuted", "geometry_only"],
+    "required_seed_replication": "all three fixed seeds 1701, 2701 and 3701; a one-seed run is triage only",
+    "threshold_provenance": "retained from the existing M36 implementation as an explicit exploratory decision threshold; it is not a literature-derived biological cutoff"
+  },
+  "pre_real_positive_controls": {
+    "controls": ["additive", "interaction"],
+    "known_signal": "locus-identity-weighted carrier signal with identical rare burden per person",
+    "budgets": [16, 64],
+    "seed": 1701,
+    "execution_order": "complete the same nested-CV, cached-encoding, partitioned-permutation and matched-control path before reading real materialized tables",
+    "pass_rule": "both controls must pass all three comparator gates, the component-node interval and effect-sign consistency in at least two of three outer folds",
+    "failure_action": "abort before real-data input is read"
+  },
+  "stop_rule": "do not promote if any comparator, effect-sign consistency across outer folds, component-node interval or configured-seed requirement fails",
+  "efficiency": "encode each unique person once per optimisation step and reuse embeddings in bounded pair-head batches"
+}
