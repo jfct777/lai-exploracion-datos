@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "M38B_S660_INCREMENTAL_LAI_CHR22_R0_FIT",
+  "amendment_id": "M38B_AMENDMENT_2_TCN_OFF_AND_PURE_POSITIVE_CONTROL",
+  "supersedes_amendment": "M38B_AMENDMENT_1_MATCHED_TCN_RD",
+  "superseded_statement_only": "tcn_RD is a fitted matched-capacity TCN",
+  "date": "2026-09-03",
+  "timing": "BEFORE_MODEL_TRAINING_AND_BEFORE_MODEL_OUTCOME_ACCESS",
+  "reason": "The TRACE TCN multiplies its residual gate by spatial event support. With no events, the residual is exactly zero and no TCN capacity can be trained. The comparison and diagnostic control must reflect the implemented estimator.",
+  "delta": {
+    "tcn_OFF": "exact F_minus_S660 FLARE probabilities; no TCN fit",
+    "tcn_estimand": "TCN_RE minus OFF measures the total effect of opening the rare-event residual route, including its learned transformation; it is not a generic architecture-capacity contrast",
+    "positive_delta_zero": "same event positions, geometric support, callability masks and fold as positive delta; every biological channel and the synthetic truth-aligned evidence are zero",
+    "positive_delta_nonzero": "same event positions, geometric support, callability masks and fold as delta zero; every biological channel is zero and only synthetic truth-aligned evidence is nonzero",
+    "positive_identity": "fold and delta must propagate from materialization through partition, training, OOF collection and diagnostic scoring",
+    "positive_gate": "TCN only: at least one of four nonzero deltas versus POS0 must improve cM-weighted log-loss in 3/3 folds with a one-sided 98.75% upper bound below zero; TRACE analytic needs no learned-capacity gate because lambda zero is explicit in its fixed grid",
+    "strict_sham": "one preregistered realization with seed 3401103; each locus uses one of the two AFR/EUR/NAM derangements, neither leaves a label fixed; assignments are approximately balanced and preserve the exact per-locus count multiset",
+    "locus_scope": "full-minus estimates the effect of all S660 loci; TRACE and TCN estimate only the LOO-stable primary subset S-star with 123 loci",
+    "secondary_gates": "deploy improvement requires 3/3 favorable folds and the one-sided 97.5% upper bound below zero; uniform log-loss must be nonpositive globally and in 3/3 folds for RE-OFF and RE-SHAM, and also RE-full for a deploy claim; every no-clear-harm metric must be evaluable, otherwise STOP",
+    "no_clear_harm_language": "NO_STATISTICALLY_CLEAR_HARM is a descriptive veto, not a non-inferiority claim; matched-boundary error is excluded",
+    "tcn_checkpoint_metric": "TRAIN and SELECT use per-person cM-Voronoi-weighted negative log-likelihood, matching the primary reporting metric; the historical trainer remains uniform by default for old callers",
+    "tcn_sparse_event_scheduler": "Every update is centered on one TRAIN event row and includes that event's TRAIN carrier in the batch; all TRAIN event rows are visited before repetition, with zero-support updates forbidden; the schedule is identical across RE, SHAM and every positive delta because their event identity is receipt-bound",
+    "family_feature_scope": "TRACE analytic uses the dense smoothed evidence field, including evaluated non-carriers; TCN uses the carrier/missing event stream, so the two families are separate prespecified estimators rather than an architecture-only comparison"
+  },
+  "unchanged": [
+    "R0 chromosome 22 FIT-only scope",
+    "96 people in three 32-person OOF SCORE folds",
+    "F_full=42986, S660=660 and F_minus_S660=42326",
+    "LOO-stable primary-locus rule",
+    "TRACE lambda grid",
+    "fixed TCN architecture and three seeds",
+    "metrics, bootstrap, multiplicity and real-candidate promotion gates",
+    "VALID and TEST remain closed"
+  ]
+}

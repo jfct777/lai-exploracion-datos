@@ -1,0 +1,190 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "M38B_S660_INCREMENTAL_LAI_CHR22_R0_FIT",
+  "status": "PREREGISTERED_AMENDED_BEFORE_OUTCOME_ACCESS",
+  "claim_scope": {
+    "analysis_level": "EXPLORATORY",
+    "chromosome": "22",
+    "mosaic_root": "R0",
+    "target_partition": "FIT_ONLY",
+    "target_people": 96,
+    "target_donor_library": "M34_SOURCE_VALID_FIXED",
+    "nam_donor_units": 2,
+    "generalizes_to_new_nam_units": false,
+    "valid_opened": false,
+    "test_opened": false
+  },
+  "question": "Do the exact S660 loci, excluded from FLARE and reintroduced as REF_TRAIN-only ancestry evidence, add out-of-fold information on the fixed M34 R0 FIT mosaics?",
+  "locus_universes": {
+    "f_full_count": 42986,
+    "s660_count": 660,
+    "f_minus_s660_count": 42326,
+    "identity": "F_full = F_minus_S660 disjoint_union S660",
+    "f_minus_is_common_only": false,
+    "variant_key": [
+      "CHROM",
+      "POS",
+      "REF",
+      "ALT"
+    ]
+  },
+  "primary_subset": {
+    "selection_population": "REF_TRAIN_ONLY",
+    "selection_time": "BEFORE_TARGET_TRUTH_OR_PREDICTIONS",
+    "label": "POOLED_RARE_NAM_ENRICHED_LOO_STABLE",
+    "nam_units_omitted_one_at_a_time": 4,
+    "beta_priors": [
+      0.5,
+      1.0
+    ],
+    "minimum_q_top_nam_under_every_omission_and_prior": 0.8,
+    "minimum_remaining_nam_carrier_units_under_every_omission": 2,
+    "zero_loci_policy": "REPORT_ZERO_AND_DO_NOT_RELAX"
+  },
+  "baselines": {
+    "f_full": "FLARE_0.6_WITH_ALL_42986_LOCI",
+    "f_minus_s660": "FLARE_0.6_WITH_EXACT_S660_REMOVED",
+    "common_score_grid": "EXACT_F_MINUS_S660_AXIS"
+  },
+  "flare_parameters": {
+    "array": false,
+    "probs": true,
+    "em": true,
+    "min_mac": 1,
+    "min_maf": 0.0,
+    "generations": 12.0,
+    "update_p": false,
+    "panel_probs": false,
+    "seed": 3401103,
+    "nthreads": 4
+  },
+  "outer_rotation": {
+    "unit": "PERSON",
+    "folds": 3,
+    "score_people_per_fold": 32,
+    "train_people_per_fold": 48,
+    "select_people_per_fold": 16,
+    "assignment": "DETERMINISTIC_SHA256",
+    "homologues_share_role": true,
+    "score_truth_selects_nothing": true,
+    "interpretation": "OOF_ALGORITHMIC_CONDITIONAL_ON_FIXED_DONOR_LIBRARY"
+  },
+  "candidate_families": {
+    "trace_analytic": {
+      "tau": 1.0,
+      "radius_cM": 0.2,
+      "lambda_grid": [
+        0.0,
+        0.25,
+        0.5,
+        1.0,
+        2.0
+      ],
+      "selection": "MINIMUM_SELECT_LOG_LOSS_TIE_TO_SMALLER_LAMBDA"
+    },
+    "tcn": {
+      "architecture_source": "M37_CAPACITY_PASS",
+      "hidden_channels": 96,
+      "depth": 3,
+      "kernel_size": 5,
+      "dilations": [
+        1,
+        2,
+        4
+      ],
+      "dropout": 0.0,
+      "learning_rate": 0.0001,
+      "radius_cM": 0.2,
+      "evidence_scale": 2.0,
+      "maximum_updates": 800,
+      "batch_people": 8,
+      "marker_shard": 256,
+      "validation_every_updates": 25,
+      "early_stopping_patience_checks": 4,
+      "seeds": [
+        1103,
+        2207,
+        3301
+      ],
+      "seed_policy": "AVERAGE_PROBABILITIES_NEVER_SELECT_BEST_SEED"
+    }
+  },
+  "arms": {
+    "RD": "F_MINUS_S660_WITH_RARE_CHANNEL_DISABLED_EXACTLY",
+    "RE": "F_MINUS_S660_PLUS_REAL_REF_TRAIN_ANCESTRY_EVIDENCE",
+    "SHAM": "SAME_LOCI_DOSAGE_MISSINGNESS_MAGNITUDE_AND_POSITION_WITH_PER_LOCUS_BIJECTIVE_ANCESTRY_PERMUTATION",
+    "POSITIVE": "PRODUCTION_MATCHED_TRUTH_ALIGNED_INJECTION_ON_EXISTING_EVENT_POSITIONS"
+  },
+  "positive_control": {
+    "delta_grid": [
+      0.0,
+      0.25,
+      0.5,
+      1.0,
+      2.0
+    ],
+    "scale_source": "TRAIN_ONLY_ROBUST_MAGNITUDE",
+    "same_axes_masks_events_folds_model_loss_optimizer_selection": true,
+    "failure_policy": "REAL_NEGATIVE_RESULT_IS_CAPACITY_INCONCLUSIVE"
+  },
+  "metrics": {
+    "primary": "PER_PERSON_CM_VORONOI_WEIGHTED_DIPLOID_LOG_LOSS",
+    "probability_floor": 1e-12,
+    "boundary_tolerance_cM": 0.2,
+    "sensitivities": [
+      "UNIFORM_MARKER_LOG_LOSS",
+      "BRIER",
+      "GLOBAL_ANCESTRY_DOSAGE_MAE",
+      "NAM_DOSAGE_MAE",
+      "NAM_TRUE_REGION_MAE",
+      "BOUNDARY_F1_0P2_CM",
+      "MATCHED_BOUNDARY_ERROR_0P2_CM",
+      "FALSE_TRANSITIONS_PER_MORGAN_0P2_CM"
+    ]
+  },
+  "per_person_contrasts": {
+    "delta_flare": "loss(F_full_projected)-loss(F_minus_S660)",
+    "delta_specific": "loss(RE)-loss(RD)",
+    "delta_sham": "loss(RE)-loss(SHAM)",
+    "delta_deploy": "loss(RE)-loss(F_full_projected)",
+    "favorable_direction": "NEGATIVE"
+  },
+  "uncertainty": {
+    "bootstrap_draws": 10000,
+    "bootstrap_unit": "WHOLE_PERSON",
+    "stratify_by_outer_fold": true,
+    "paired_indices_across_arms_and_metrics": true,
+    "candidate_familywise_alpha": 0.05,
+    "simultaneous_upper_confidence_percent_per_candidate": 97.5,
+    "fold_rule": "FAVORABLE_POINT_ESTIMATE_IN_3_OF_3",
+    "joint_rule": "SIMULTANEOUS_UPPER_LIMIT_BELOW_ZERO",
+    "within_fold_confidence_interval_required": false
+  },
+  "promotion_gate": [
+    "POSITIVE_CONTROL_PASSES",
+    "DELTA_SPECIFIC_FAVORABLE_IN_3_OF_3_FOLDS_AND_JOINT_LIMIT",
+    "DELTA_SHAM_FAVORABLE_IN_3_OF_3_FOLDS_AND_JOINT_LIMIT",
+    "NO_CLEAR_HARM_IN_BRIER_MAE_NAM_OR_FALSE_TRANSITIONS",
+    "DELTA_DEPLOY_FAVORABLE_TO_CLAIM_IMPROVEMENT_OVER_CURRENT_FLARE",
+    "CM_WEIGHTED_AND_UNIFORM_SENSITIVITY_DO_NOT_REVERSE_CONCLUSION"
+  ],
+  "source_artifacts": {
+    "f_full_npz_sha256": "78263df0fb674b72d53f4ddb6544ad4a2efd204fcd2ec739da29c55a0a9dc1f6",
+    "f_full_marker_cm_sha256": "df07aedf4565832ea0230dab6667c3c7a4e165ded942be76c78e81b2ff6eb4a5",
+    "fit_truth_sha256": "acfe6c19b87a32fb8d98616b00fe5a3ccbfa93af5e69a2f2e161d796edea7ad1",
+    "s660_selected_sha256": "0bdf50d6812abf3d74975774f1a7257b52c3c263822e8aeaa59cd673c5c31fd0",
+    "s660_target_sha256": "2b635db033571740799288bb234dad5a1b20d4c847ec624ed488bc56881ecae5",
+    "s660_reference_sha256": "47502fa4697d2d1f88ea526bcaf1dd7fe49e6aa13b404c85d6d1d741a6af2fc9",
+    "f_minus_reference_vcf_sha256": "ec7869ebf400f6ba920a710f01c986b1cfaecc6709e812a70b2af197e67cf356",
+    "f_minus_target_vcf_sha256": "bee39c39b61f5be47eedf2770ab03367070b57c6a9ea0abb5880fd2efb5dafed"
+  },
+  "forbidden": [
+    "KING",
+    "VALID_OR_TEST_ACCESS",
+    "LOCUS_LEVEL_PSEUDOREPLICATION",
+    "HAPLOTYPE_PHASE_INVENTION",
+    "POST_OUTCOME_THRESHOLD_RELAXATION",
+    "COMMON_ONLY_LABEL_FOR_F_MINUS_S660",
+    "GENERALIZATION_CLAIM_TO_NEW_NAM_UNITS_OR_DNABR"
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "M38B_S660_INCREMENTAL_LAI_CHR22_R0_FIT",
+  "amendment_id": "M38B_AMENDMENT_1_MATCHED_TCN_RD",
+  "base_contract_sha256": "b8673af7c76b5844c340e6c21286abc8a26be37195e11e304da621534b964c00",
+  "date": "2026-09-03",
+  "timing": "BEFORE_MODEL_TRAINING_AND_BEFORE_MODEL_OUTCOME_ACCESS",
+  "reason": "The rare-disabled comparator for a learned TCN must use the same fitted architecture so that RE minus RD isolates rare-event information rather than generic model capacity.",
+  "delta": {
+    "trace_analytic_RD": "lambda=0; exactly the F_minus_S660 FLARE probabilities; no fitting",
+    "tcn_RD": "same folds, TRAIN/SELECT roles, seeds, architecture, loss, optimizer, update budget and checkpoint rule as TCN_RE; rare event rows and evidence are empty",
+    "arm_binding": "each materialized artifact must carry a receipt-bound arm through partition, training, OOF collection and scoring",
+    "positive_control": "TRACE is compared with analytic RD; TCN is compared with the matched fitted TCN_RD"
+  },
+  "unchanged": [
+    "R0 chromosome 22 FIT-only scope",
+    "96 people in three 32-person OOF SCORE folds",
+    "F_full=42986, S660=660 and F_minus_S660=42326",
+    "LOO-stable primary-locus rule",
+    "TRACE lambda grid",
+    "fixed TCN architecture and three seeds",
+    "metrics, bootstrap, multiplicity and promotion gates",
+    "VALID and TEST remain closed"
+  ]
+}

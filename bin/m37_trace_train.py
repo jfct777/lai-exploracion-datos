@@ -14,7 +14,7 @@ from m37_trace_core import (PROBABILITY_FLOOR, TraceSpec, build_tcn,
                             hmm_posterior, m34_labels_to_states, require)
 
 
-def probability_nll(prediction, labels):
+def probability_nll(prediction, labels, marker_weights=None):
     """Mean NLL with the same additive floor used by TRACE scoring.
 
     Adding the floor inside the logarithm, instead of clamping the probability
@@ -24,7 +24,14 @@ def probability_nll(prediction, labels):
     selected = prediction.reshape(-1, prediction.shape[-1]).gather(
         1, labels.reshape(-1, 1),
     ).squeeze(1)
-    return -(selected + PROBABILITY_FLOOR).log().mean()
+    losses = -(selected + PROBABILITY_FLOOR).log().reshape(labels.shape)
+    if marker_weights is None:
+        return losses.mean()
+    weights = marker_weights.reshape(-1)
+    require(len(weights) == labels.shape[1] and bool((weights >= 0).all())
+            and float(weights.sum()) > 0, "TRACE loss marker weights differ")
+    weights = weights / weights.sum()
+    return (losses * weights.reshape(1, -1)).sum(dim=1).mean()
 
 
 def load_features(path: Path) -> dict[str, np.ndarray]:
@@ -161,6 +168,37 @@ def event_centered_schedule(features: dict[str, np.ndarray], updates: int, seed:
             for index in range(updates)]
 
 
+def event_centered_schedule_with_carrier(
+    features: dict[str, np.ndarray], updates: int, seed: int, radius_cm: float,
+    train_people: np.ndarray,
+) -> list[tuple[int, int, int, int]]:
+    """M38 schedule covering TRAIN event rows before deterministic repetition."""
+    sample = np.asarray(features["schedule_sample"], dtype=np.int64)
+    marker = np.asarray(features["schedule_marker"], dtype=np.int64)
+    event_sample = np.asarray(features["event_sample"], dtype=np.int64)
+    event_cm = np.asarray(features["event_cM"], dtype=float)
+    require(sample.shape == marker.shape == event_sample.shape == event_cm.shape
+            and np.array_equal(sample, event_sample),
+            "carrier-anchored schedule/event identity differs")
+    eligible = np.isin(sample, np.asarray(train_people, dtype=np.int64))
+    sample, marker = sample[eligible], marker[eligible]
+    require(len(marker) > 0, "carrier-anchored schedule has no TRAIN events")
+    event_rows = np.flatnonzero(eligible)
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(event_rows)
+    marker_cm = np.asarray(features["marker_cM"], dtype=float)
+    result = []
+    for index in range(updates):
+        event_row = int(order[index % len(order)])
+        centre = float(event_cm[event_row])
+        result.append((
+            int(np.searchsorted(marker_cm, centre - radius_cm, side="left")),
+            int(np.searchsorted(marker_cm, centre + radius_cm, side="right")),
+            int(features["schedule_sample"][event_row]), event_row,
+        ))
+    return result
+
+
 def _predict_batched(model, features: dict[str, np.ndarray], batch_people: int, marker_shard: int,
                      evidence_scale: float, event_radius_cm: float, people_indices: np.ndarray | None = None,
                      halo: int = 0) -> np.ndarray:
@@ -191,6 +229,8 @@ def train(features: dict[str, np.ndarray], predict_features: dict[str, np.ndarra
           early_stopping: bool = True,
           restore_best: bool = True,
           _capacity_loss_marker_mask: np.ndarray | None = None,
+          loss_marker_weights: np.ndarray | None = None,
+          anchor_event_carrier: bool = False,
           ) -> tuple[np.ndarray, np.ndarray]:
     baseline, evidence, marker = features["baseline_states"], features["evidence_field"], features["marker_cM"]
     if family == "hmm":
@@ -199,6 +239,13 @@ def train(features: dict[str, np.ndarray], predict_features: dict[str, np.ndarra
                               predict_features["marker_cM"], hazard, evidence_scale), tune_people)
     require(family == "tcn", "TRACE family differs")
     require(truth is not None and truth.shape == baseline.shape[:2], "TCN needs phase-free FIT truth")
+    if loss_marker_weights is not None:
+        loss_marker_weights = np.asarray(loss_marker_weights, dtype=np.float64)
+        require(loss_marker_weights.shape == (baseline.shape[1],)
+                and np.isfinite(loss_marker_weights).all()
+                and np.all(loss_marker_weights >= 0)
+                and float(loss_marker_weights.sum()) > 0,
+                "TRACE loss marker weights differ")
     capacity_loss_marker_mask: np.ndarray | None = None
     if _capacity_loss_marker_mask is not None:
         capacity_loss_marker_mask = np.asarray(_capacity_loss_marker_mask)
@@ -218,30 +265,58 @@ def train(features: dict[str, np.ndarray], predict_features: dict[str, np.ndarra
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-3)
     best_loss, best_state, stale = float("inf"), None, 0
     completed_updates = 0
+    zero_support_updates = 0
     best_checkpoint_update: int | None = None
-    calendar = event_centered_schedule(features, updates, split_seed, event_radius_cm, train_people)
+    train_event_count = int(np.count_nonzero(np.isin(
+        np.asarray(features["schedule_sample"]), train_people,
+    ))) if anchor_event_carrier else 0
+    if anchor_event_carrier:
+        require(updates >= train_event_count > 0,
+                "M38 must schedule every TRAIN event before checkpoint eligibility")
+    calendar = (event_centered_schedule_with_carrier(
+        features, updates, split_seed, event_radius_cm, train_people,
+    ) if anchor_event_carrier else event_centered_schedule(
+        features, updates, split_seed, event_radius_cm, train_people,
+    ))
     for update in range(updates):
         people = train_people[np.arange(update * batch_people, update * batch_people + batch_people) % len(train_people)]
-        left, right = calendar[update]
+        if anchor_event_carrier:
+            left, right, anchor, _event_row = calendar[update]
+            people = people.copy()
+            if anchor not in people:
+                people[0] = anchor
+            require(anchor in people, "carrier-anchored batch lost its TRAIN carrier")
+        else:
+            left, right = calendar[update]
         require(right > left, "event-centred cM calendar emitted empty shard")
         halo = receptive_halo(spec)
         expanded_left, expanded_right = max(0, left - halo), min(baseline.shape[1], right + halo)
         event = _event_batch(features, people, expanded_left, expanded_right, evidence_scale, event_radius_cm)
+        if anchor_event_carrier:
+            if int(event[5].numel()) == 0:
+                zero_support_updates += 1
+            require(int(event[5].numel()) > 0,
+                    "carrier-anchored batch emitted no event support")
         optimizer.zero_grad()
         expanded = model(*event, torch.from_numpy(baseline[people, expanded_left:expanded_right]))
         prediction = expanded[:, left - expanded_left:right - expanded_left]
         labels = torch.from_numpy(truth[people, left:right].astype(np.int64, copy=False))
+        local_loss_weights = (None if loss_marker_weights is None else
+                              torch.from_numpy(loss_marker_weights[left:right].astype(np.float32)))
         if capacity_loss_marker_mask is not None:
             local_mask = capacity_loss_marker_mask[left:right]
             require(bool(local_mask.any()), "capacity-only loss shard lacks supported markers")
             prediction = prediction[:, local_mask]
             labels = labels[:, local_mask]
-        loss = probability_nll(prediction, labels)
+            if local_loss_weights is not None:
+                local_loss_weights = local_loss_weights[local_mask]
+        loss = probability_nll(prediction, labels, local_loss_weights)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         completed_updates = update + 1
-        if early_stopping and (update + 1) % validation_every == 0:
+        if (early_stopping and (update + 1) % validation_every == 0
+                and (not anchor_event_carrier or update + 1 >= train_event_count)):
             validation = _predict_batched(model, features, batch_people, marker_shard, evidence_scale,
                                           event_radius_cm, tune_people,
                                           receptive_halo(spec))
@@ -250,10 +325,14 @@ def train(features: dict[str, np.ndarray], predict_features: dict[str, np.ndarra
             # Mirror the differentiable training convention exactly.  The
             # reporting scorer keeps its historical clipping convention so
             # canonical F0/HMM metrics remain comparable.
-            observed = -np.log(
+            validation_loss = -np.log(
                 validation.reshape(-1, 6)[index, tune_truth.reshape(-1)] +
                 PROBABILITY_FLOOR
-            ).mean()
+            ).reshape(tune_truth.shape)
+            observed = (float(validation_loss.mean()) if loss_marker_weights is None else
+                        float((validation_loss *
+                               (loss_marker_weights / loss_marker_weights.sum())[None, :])
+                              .sum(axis=1).mean()))
             if observed < best_loss:
                 best_loss, best_state, stale = observed, {key: value.detach().clone() for key, value in model.state_dict().items()}, 0
                 best_checkpoint_update = update + 1
@@ -264,6 +343,13 @@ def train(features: dict[str, np.ndarray], predict_features: dict[str, np.ndarra
             model.train()
     if restore_best and best_state is not None:
         model.load_state_dict(best_state)
+    if anchor_event_carrier:
+        require(completed_updates >= train_event_count and zero_support_updates == 0,
+                "M38 carrier-anchored event cycle was incomplete")
+        if early_stopping:
+            require(best_checkpoint_update is not None
+                    and best_checkpoint_update >= train_event_count,
+                    "M38 checkpoint was selected before full TRAIN-event coverage")
     if training_diagnostics is not None:
         training_diagnostics.clear()
         training_diagnostics.update({
@@ -274,6 +360,16 @@ def train(features: dict[str, np.ndarray], predict_features: dict[str, np.ndarra
             "early_stopping_patience": int(patience),
             "early_stopping_enabled": bool(early_stopping),
             "restore_best_checkpoint": bool(restore_best),
+            "loss_weighting": ("CM_VORONOI_NORMALISED_PER_PERSON"
+                               if loss_marker_weights is not None else "UNIFORM_MARKER"),
+            "carrier_anchored_updates": int(completed_updates if anchor_event_carrier else 0),
+            "train_events": train_event_count,
+            "unique_events_scheduled": int(min(
+                completed_updates,
+                train_event_count,
+            )) if anchor_event_carrier else 0,
+            "updates_with_event": int(completed_updates - zero_support_updates),
+            "zero_support_updates": int(zero_support_updates),
         })
         if capacity_loss_marker_mask is not None:
             training_diagnostics["capacity_loss_marker_count"] = int(
