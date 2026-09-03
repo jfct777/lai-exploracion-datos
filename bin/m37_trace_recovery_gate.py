@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Authenticate orphaned M37 family bundles before downstream-only recovery."""
+"""Authenticate orphaned M37 bundles as non-consumable recovery evidence."""
 from __future__ import annotations
 
 import argparse
@@ -14,6 +14,8 @@ from typing import Any, Iterable
 
 ARMS = ("RE", "RD", "POOLED", "SHAM", "GEOMETRY")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
+AUDIT_BASENAME = "m37.recovered.nonconsumable.audit.json"
+SUMMARY_BASENAME = "m37.recovered.nonconsumable.summary.json"
 
 
 def require(condition: bool, message: str) -> None:
@@ -276,9 +278,10 @@ def validate_family_bundle(
 
 
 def validate_contract(contract: dict[str, Any]) -> None:
-    require(contract.get("schema_version") == "1.0.0" and
+    require(contract.get("schema_version") == "1.1.0" and
             contract.get("stage") == "M37_TRACE_ORPHAN_RECOVERY_CONTRACT" and
-            contract.get("status") == "FROZEN" and contract.get("root") == "R0" and
+            contract.get("status") == "FROZEN" and contract.get("recovery_id") and
+            contract.get("root") == "R0" and
             contract.get("evaluation_split") == "FIT_TUNE",
             "M37 recovery contract identity differs")
     policy = contract.get("recovery_policy", {})
@@ -288,6 +291,8 @@ def validate_contract(contract: dict[str, Any]) -> None:
         "publish_predictions_or_checkpoints": False,
         "open_valid_or_test": False,
         "consumable_for_candidate_selection_or_inference": False,
+        "run_standard_decision_or_promotion": False,
+        "publish_only_recovered_nonconsumable_audit_and_summary": True,
         "disposition": "RECOVER_DOWNSTREAM_AUDIT_ONLY_AFTER_SIGHUP",
     }, "M37 recovery policy differs")
     require(set(contract.get("jobs", {})) == {"hmm", "tcn"},
@@ -296,6 +301,112 @@ def validate_contract(contract: dict[str, Any]) -> None:
         require(job.get("work_dir", "").startswith(
                     "gs://teams-usp/frank/lai-exploracion-datos/work/nextflow/"),
                 f"{family} recovery work directory is outside the personal bucket")
+
+
+def write_nonconsumable_outputs(
+    output_dir: Path,
+    contract_path: Path,
+    source_archive: Path,
+    source_evidence: dict[str, str],
+    positive_evidence: dict[str, str],
+    job_evidence: dict[str, dict[str, Any]],
+    family_evidence: dict[str, dict[str, Any]],
+    contract: dict[str, Any],
+) -> tuple[Path, Path, Path, Path]:
+    """Write an audit plus inventory summary that cannot act as a promotion input."""
+    require(output_dir.is_dir(), "M37 recovery output directory does not exist")
+    audit_path = output_dir / AUDIT_BASENAME
+    summary_path = output_dir / SUMMARY_BASENAME
+    audit_receipt_path = audit_path.with_suffix(".receipt.json")
+    summary_receipt_path = summary_path.with_suffix(".receipt.json")
+    outputs = (audit_path, audit_receipt_path, summary_path, summary_receipt_path)
+    require(not any(path.exists() for path in outputs),
+            "refusing to overwrite M37 non-consumable recovery evidence")
+
+    common = {
+        "recovery_id": contract["recovery_id"],
+        "origin_run_id": contract["origin_run_id"],
+        "root": contract["root"],
+        "evaluation_split": contract["evaluation_split"],
+        "consumable": False,
+        "result_use": "DESCRIPTIVE_RECOVERY_AUDIT_ONLY",
+        "candidate_selection": "FORBIDDEN",
+        "model_promotion": "FORBIDDEN",
+        "scientific_inference": "FORBIDDEN",
+    }
+    audit = {
+        "schema_version": "1.1.0",
+        "stage": "M37_TRACE_ORPHAN_RECOVERY_AUDIT",
+        "status": "RECOVERED_NONCONSUMABLE",
+        **common,
+        "contract_sha256": sha256(contract_path),
+        "source_commit": contract["source_commit"],
+        "source_archive_sha256": sha256(source_archive),
+        "downstream_source_sha256": source_evidence,
+        "positive_control_sha256": positive_evidence,
+        "jobs": job_evidence,
+        "family_bundles": family_evidence,
+        "recovery_policy": contract["recovery_policy"],
+        "authenticated_source_sha256": {
+            Path(__file__).name: sha256(Path(__file__)),
+        },
+    }
+    audit_path.write_text(
+        json.dumps(audit, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    audit_receipt = {
+        "schema_version": "1.1.0",
+        "stage": "M37_TRACE_ORPHAN_RECOVERY_AUDIT",
+        "status": audit["status"],
+        **common,
+        "contract_sha256": sha256(contract_path),
+        "output_sha256": sha256(audit_path),
+    }
+    audit_receipt_path.write_text(
+        json.dumps(audit_receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    summary = {
+        "schema_version": "1.1.0",
+        "stage": "M37_TRACE_ORPHAN_RECOVERY_SUMMARY",
+        "status": "RECOVERED_NONCONSUMABLE",
+        **common,
+        "standard_decision_executed": False,
+        "published_payload": "AUTHENTICATED_INVENTORY_WITHOUT_MODEL_METRICS",
+        "audit_sha256": sha256(audit_path),
+        "audit_receipt_sha256": sha256(audit_receipt_path),
+        "families": {
+            family: {
+                "job_state": job_evidence[family]["state"],
+                "candidate_count": evidence["candidate_count"],
+                "metric_count": evidence["metric_count"],
+                "candidate_ids": evidence["candidate_ids"],
+            }
+            for family, evidence in sorted(family_evidence.items())
+        },
+        "total_candidate_count": sum(
+            evidence["candidate_count"] for evidence in family_evidence.values()
+        ),
+        "total_metric_count": sum(
+            evidence["metric_count"] for evidence in family_evidence.values()
+        ),
+    }
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    summary_receipt = {
+        "schema_version": "1.1.0",
+        "stage": "M37_TRACE_ORPHAN_RECOVERY_SUMMARY",
+        "status": summary["status"],
+        **common,
+        "audit_sha256": sha256(audit_path),
+        "audit_receipt_sha256": sha256(audit_receipt_path),
+        "output_sha256": sha256(summary_path),
+    }
+    summary_receipt_path.write_text(
+        json.dumps(summary_receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return audit_path, audit_receipt_path, summary_path, summary_receipt_path
 
 
 def main() -> None:
@@ -314,9 +425,8 @@ def main() -> None:
         "--job-snapshot", action="append", type=Path,
         help="Offline test input; exactly two descriptors in hmm,tcn order.",
     )
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
-    require(not args.output.exists(), "refusing to overwrite M37 recovery audit")
     contract = load_json(args.contract)
     validate_contract(contract)
     source_evidence = validate_source_archive(
@@ -356,41 +466,18 @@ def main() -> None:
     require(not (set(family_evidence["hmm"]["candidate_ids"]) &
                  set(family_evidence["tcn"]["candidate_ids"])),
             "M37 recovery candidate identifiers overlap between families")
-    payload = {
-        "schema_version": "1.0.0",
-        "stage": "M37_TRACE_ORPHAN_RECOVERY_GATE",
-        "status": "PASS_DOWNSTREAM_RECOVERY_ONLY",
-        "origin_run_id": contract["origin_run_id"],
-        "root": contract["root"],
-        "evaluation_split": contract["evaluation_split"],
-        "consumable": False,
-        "result_use": "FORBIDDEN_FOR_CANDIDATE_SELECTION_OR_INFERENCE",
-        "contract_sha256": sha256(args.contract),
-        "source_commit": contract["source_commit"],
-        "source_archive_sha256": sha256(args.source_archive),
-        "downstream_source_sha256": source_evidence,
-        "positive_control_sha256": positive_evidence,
-        "jobs": job_evidence,
-        "family_bundles": family_evidence,
-        "recovery_policy": contract["recovery_policy"],
-        "authenticated_source_sha256": {
-            Path(__file__).name: sha256(Path(__file__)),
-        },
-    }
-    args.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    receipt_path = args.output.with_suffix(".receipt.json")
-    receipt_path.write_text(json.dumps({
-        "schema_version": "1.0.0",
-        "stage": "M37_TRACE_ORPHAN_RECOVERY_GATE",
-        "status": payload["status"],
-        "origin_run_id": contract["origin_run_id"],
-        "root": contract["root"],
-        "consumable": False,
-        "contract_sha256": sha256(args.contract),
-        "output_sha256": sha256(args.output),
-    }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_nonconsumable_outputs(
+        args.output_dir,
+        args.contract,
+        args.source_archive,
+        source_evidence,
+        positive_evidence,
+        job_evidence,
+        family_evidence,
+        contract,
+    )
     print(json.dumps({
-        "status": payload["status"],
+        "status": "RECOVERED_NONCONSUMABLE",
         "metrics": sum(row["metric_count"] for row in family_evidence.values()),
     }, sort_keys=True))
 

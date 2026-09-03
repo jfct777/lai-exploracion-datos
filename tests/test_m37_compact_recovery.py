@@ -14,6 +14,8 @@ sys.path.insert(0, str(ROOT / "bin"))
 
 from m37_trace_recovery_gate import (
     ARMS,
+    AUDIT_BASENAME,
+    SUMMARY_BASENAME,
     canonical_sha256,
     sha256,
     validate_contract,
@@ -21,6 +23,7 @@ from m37_trace_recovery_gate import (
     validate_job,
     validate_positive_control,
     validate_source_archive,
+    write_nonconsumable_outputs,
 )
 
 
@@ -33,9 +36,10 @@ def _write_json(path: Path, value: dict) -> None:
 
 def _base_contract() -> dict:
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "stage": "M37_TRACE_ORPHAN_RECOVERY_CONTRACT",
         "status": "FROZEN",
+        "recovery_id": "fixture-recovery",
         "origin_run_id": "fixture-run",
         "root": "R0",
         "evaluation_split": "FIT_TUNE",
@@ -80,6 +84,8 @@ def _base_contract() -> dict:
             "publish_predictions_or_checkpoints": False,
             "open_valid_or_test": False,
             "consumable_for_candidate_selection_or_inference": False,
+            "run_standard_decision_or_promotion": False,
+            "publish_only_recovered_nonconsumable_audit_and_summary": True,
             "disposition": "RECOVER_DOWNSTREAM_AUDIT_ONLY_AFTER_SIGHUP",
         },
     }
@@ -251,17 +257,26 @@ def test_metric_gate_fails_closed_on_byte_drift() -> None:
             raise AssertionError("family gate accepted a changed metric")
 
 
-def test_recovery_workflow_never_invokes_family_sweep_or_publishes_raw_outputs() -> None:
+def test_recovery_workflow_publishes_only_nonconsumable_evidence() -> None:
     workflow = (ROOT / "workflows/m37_trace_compact_recovery.nf").read_text(encoding="utf-8")
     module = (ROOT / "modules/37_TRACE_COMPACT_RECOVERY.nf").read_text(encoding="utf-8")
     config = (ROOT / "conf/m37_r0_compact_recovery.config").read_text(encoding="utf-8")
     assert "M37_TRACE_RECOVERY_GATE" in workflow
-    assert "M37_TRACE_RECOVERY_COLLECT_METRICS" in workflow
-    assert "M37_TRACE_RECOVERY_COMPACT_DECISION" in workflow
+    assert "M37_TRACE_RECOVERY_COLLECT_METRICS" not in workflow
+    assert "M37_TRACE_RECOVERY_COMPACT_DECISION" not in workflow
     assert "M37_TRACE_COMPACT_SWEEP(" not in workflow
     assert "m37_trace_compact_sweep.py" not in module
     assert "m37_trace_train.py" not in module
+    assert "m37_trace_collect_metrics.py" not in module
+    assert "m37_trace_compact_decision.py" not in module
+    assert "/promotion" not in module
     assert "overwrite: false" in module
+    assert "audit/recovery" in module
+    assert "m37.recovered.nonconsumable.audit.json" in module
+    assert "m37.recovered.nonconsumable.audit.receipt.json" in module
+    assert "m37.recovered.nonconsumable.summary.json" in module
+    assert "m37.recovered.nonconsumable.summary.receipt.json" in module
+    assert "ADVANCE" not in workflow + module + config
     assert "publish_raw_family_outputs\": false" in (
         ROOT / "conf/m37_trace_compact_recovery_contract.json"
     ).read_text(encoding="utf-8")
@@ -269,11 +284,83 @@ def test_recovery_workflow_never_invokes_family_sweep_or_publishes_raw_outputs()
     assert "team: 'frank'" in config and "lane: 'm37-recovery'" in config
 
 
+def test_recovery_outputs_are_intrinsically_nonconsumable_and_exactly_named() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        contract = _base_contract()
+        source = b"frozen recovery evidence\n"
+        contract["downstream_source_sha256"] = {
+            "bin/frozen.py": hashlib.sha256(source).hexdigest()
+        }
+        archive = root / "source.tar"
+        with tarfile.open(archive, "w") as handle:
+            info = tarfile.TarInfo("bin/frozen.py")
+            info.size = len(source)
+            handle.addfile(info, io.BytesIO(source))
+        positive, positive_receipt = _positive_control(root, contract)
+        contract_path = root / "contract.json"
+        _write_json(contract_path, contract)
+
+        family_evidence = {}
+        job_evidence = {}
+        for family in ("hmm", "tcn"):
+            metrics, receipts, audits, audit_receipts, equivalences, equivalence_receipts = (
+                _family_bundle(root, family, contract)
+            )
+            family_evidence[family] = validate_family_bundle(
+                family, metrics, receipts, audits[0], audit_receipts[0],
+                equivalences[0], equivalence_receipts[0], contract,
+            )
+            job_evidence[family] = validate_job(
+                _job(contract, family), contract["jobs"][family], contract["cloud"]
+            )
+
+        output_dir = root / "outputs"
+        output_dir.mkdir()
+        outputs = write_nonconsumable_outputs(
+            output_dir,
+            contract_path,
+            archive,
+            validate_source_archive(archive, contract["downstream_source_sha256"]),
+            validate_positive_control(positive, positive_receipt, contract),
+            job_evidence,
+            family_evidence,
+            contract,
+        )
+        assert {path.name for path in outputs} == {
+            AUDIT_BASENAME,
+            AUDIT_BASENAME.removesuffix(".json") + ".receipt.json",
+            SUMMARY_BASENAME,
+            SUMMARY_BASENAME.removesuffix(".json") + ".receipt.json",
+        }
+        assert {path.name for path in output_dir.iterdir()} == {path.name for path in outputs}
+        for path in outputs:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            encoded = json.dumps(payload, sort_keys=True)
+            assert payload["status"] == "RECOVERED_NONCONSUMABLE"
+            assert payload["consumable"] is False
+            assert payload["candidate_selection"] == "FORBIDDEN"
+            assert payload["model_promotion"] == "FORBIDDEN"
+            assert payload["scientific_inference"] == "FORBIDDEN"
+            assert "ADVANCE" not in encoded
+            assert "decisions" not in payload
+        summary = json.loads((output_dir / SUMMARY_BASENAME).read_text(encoding="utf-8"))
+        assert summary["standard_decision_executed"] is False
+        assert summary["recovery_id"] == "fixture-recovery"
+        assert summary["audit_receipt_sha256"] == sha256(
+            output_dir / (AUDIT_BASENAME.removesuffix(".json") + ".receipt.json")
+        )
+        assert summary["total_candidate_count"] == 2
+        assert summary["total_metric_count"] == 10
+
+
 def test_production_recovery_contract_is_sealed_to_exact_orphan_jobs() -> None:
     contract = json.loads((
         ROOT / "conf/m37_trace_compact_recovery_contract.json"
     ).read_text(encoding="utf-8"))
     validate_contract(contract)
+    assert contract["schema_version"] == "1.1.0"
+    assert contract["recovery_id"] == "m37-r0-compact-recovery-20260903a"
     assert contract["source_commit"] == "e22e1edd412820ff251834d7fe416130b41468ac"
     assert contract["jobs"]["hmm"]["job_id"] == "nf-047b6663-1788396822904"
     assert contract["jobs"]["tcn"]["job_id"] == "nf-9405b1ec-1788396822936"

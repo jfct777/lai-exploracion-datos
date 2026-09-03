@@ -1,7 +1,8 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "stage": "M37_TRACE_ORPHAN_RECOVERY_CONTRACT",
   "status": "FROZEN",
+  "recovery_id": "m37-r0-compact-recovery-20260903a",
   "origin_run_id": "m37-r0-compact-sweep-20260903a",
   "root": "R0",
   "evaluation_split": "FIT_TUNE",
@@ -77,6 +78,8 @@
     "publish_predictions_or_checkpoints": false,
     "open_valid_or_test": false,
     "consumable_for_candidate_selection_or_inference": false,
+    "run_standard_decision_or_promotion": false,
+    "publish_only_recovered_nonconsumable_audit_and_summary": true,
     "disposition": "RECOVER_DOWNSTREAM_AUDIT_ONLY_AFTER_SIGHUP"
   }
 }
