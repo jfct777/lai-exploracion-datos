@@ -1,0 +1,82 @@
+{
+  "schema_version": "1.0.0",
+  "stage": "M37_TRACE_ORPHAN_RECOVERY_CONTRACT",
+  "status": "FROZEN",
+  "origin_run_id": "m37-r0-compact-sweep-20260903a",
+  "root": "R0",
+  "evaluation_split": "FIT_TUNE",
+  "source_commit": "e22e1edd412820ff251834d7fe416130b41468ac",
+  "coordinator_termination": {
+    "signal": "SIGHUP",
+    "observed_at_utc": "2026-09-03T01:16:42.662Z",
+    "jobs_cancelled": false
+  },
+  "cloud": {
+    "project": "uspbr-242713",
+    "location": "us-central1",
+    "required_labels": {
+      "lane": "m37-trace",
+      "team": "frank"
+    },
+    "container_digest": "us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/m33-t0a@sha256:c03864a9ed0c56b00fd1a234daee2d17ddfa57d4c426628bd59cd9daf351ee99"
+  },
+  "positive_control": {
+    "work_dir": "gs://teams-usp/frank/lai-exploracion-datos/work/nextflow/m37-r0-compact-sweep-20260903a/f7/4d530957c37cc1eea08edbf8186d33",
+    "payload_sha256": "afd1e6095f552cf9ebe213d5d4b7c0a768a241bdd9acb028be78d1ba85fddd61",
+    "receipt_sha256": "8144e0031cc20f659c05f2447fa967f33c2a81b8ecfd142c2ea628915e90a723"
+  },
+  "jobs": {
+    "hmm": {
+      "job_id": "nf-047b6663-1788396822904",
+      "work_dir": "gs://teams-usp/frank/lai-exploracion-datos/work/nextflow/m37-r0-compact-sweep-20260903a/04/7b6663bf9c6f05d8bebc372df99732",
+      "candidate_count": 20,
+      "metric_count": 100
+    },
+    "tcn": {
+      "job_id": "nf-9405b1ec-1788396822936",
+      "work_dir": "gs://teams-usp/frank/lai-exploracion-datos/work/nextflow/m37-r0-compact-sweep-20260903a/94/05b1ec5fe43a7f266b2bf317b5f4ae",
+      "candidate_count": 3,
+      "metric_count": 15
+    }
+  },
+  "frozen_input_sha256": {
+    "candidate_manifest": "9112c81d810ffe9c2d771cd24ff69e63cac039f3bfc6281f3846d371fc2ea6ce",
+    "parent_contract": "50a27f6c597d883b0aeb87671210d7d9478d9ac87821207b58dd30a045e238be",
+    "contract_amendment": "b3704ce0c4ba2b93855f65176cb8723f4d6f9b356bce680de826762118ae123c",
+    "canonical_metrics": "f4425fffdf1a0d49f4f434e2a8e3cead6faf2169a186f9ca96fe05a227578c8a",
+    "canonical_metrics_receipt": "d3823b6c65182d1b47347aacde3f9c2e539afa84c55bc261b0e115978e4f81a2",
+    "truth": "acfe6c19b87a32fb8d98616b00fe5a3ccbfa93af5e69a2f2e161d796edea7ad1",
+    "run_overlay": "addbcc169af53d17bd5d25c432f4f48d88578e08f2d54496132d54b6cf2a8db7"
+  },
+  "executed_source_sha256": {
+    "37_TRACE_COMPACT_SWEEP.nf": "c41d5c54efdc4a1626c1fc025c6ed90fc1b377e6133b9edfe3f60a5eb1980142",
+    "m33_safe_bridge_core.py": "10e2d5c4092abc7a5bb87377352cad7444a69ee9593c1361acdf916b92f8d52e",
+    "m37_trace_collect_metrics.py": "dac0fec1827c7ce9d81e53abfac4c8cbf0845891f2cfbf61969aefe3b3169597",
+    "m37_trace_compact_sweep.config": "69fb81d8551e02f386bb6ca8d02ee77c798fc7b3b2c5f156a72a2196b2015d21",
+    "m37_trace_compact_sweep.nf": "28f94af2dfe54d7267305a5ca7049be476446c2db0c74ba2c02ef8d97b443991",
+    "m37_trace_compact_sweep.py": "7f4aea5128797a7e86afffc1bcae320baa68c6a5b724c7e28526d516a85e4f8a",
+    "m37_trace_core.py": "068aa2b22c37b90d677fb92bcd0ae67540c2001994e0587a0a3114ea103f01c7",
+    "m37_trace_gcp.config": "89cf42f31240b6798fe7e6efcb58763ab6041f1ca621b3d3b18f9bea04177748",
+    "m37_trace_score.py": "ca3a79d219bc5cf7087ac274651e6d9e4403248583c234a8e942b0e81e5b39f3",
+    "m37_trace_successive_halving.py": "0ae00c092dd8b080019b8f9fab3ffcf9ffa3c48a654b123d99d2f0b012dd0372",
+    "m37_trace_train.py": "43272ad62026c5f7c5c9dd8cdac6d4b17dbb0f115608f010747c473c85525570"
+  },
+  "downstream_source_sha256": {
+    "bin/m37_trace_collect_metrics.py": "dac0fec1827c7ce9d81e53abfac4c8cbf0845891f2cfbf61969aefe3b3169597",
+    "bin/m37_trace_compact_decision.py": "aaf74385aa11e1afb7ac92489f6b554f8a20d3c6c37a8cac74378cd217650f4e",
+    "bin/m37_trace_core.py": "068aa2b22c37b90d677fb92bcd0ae67540c2001994e0587a0a3114ea103f01c7",
+    "bin/m37_trace_successive_halving.py": "0ae00c092dd8b080019b8f9fab3ffcf9ffa3c48a654b123d99d2f0b012dd0372",
+    "conf/m37_trace_compact_sweep.config": "69fb81d8551e02f386bb6ca8d02ee77c798fc7b3b2c5f156a72a2196b2015d21",
+    "conf/m37_trace_gcp.config": "89cf42f31240b6798fe7e6efcb58763ab6041f1ca621b3d3b18f9bea04177748",
+    "modules/37_TRACE_COMPACT_SWEEP.nf": "c41d5c54efdc4a1626c1fc025c6ed90fc1b377e6133b9edfe3f60a5eb1980142",
+    "workflows/m37_trace_compact_sweep.nf": "28f94af2dfe54d7267305a5ca7049be476446c2db0c74ba2c02ef8d97b443991"
+  },
+  "recovery_policy": {
+    "rerun_family_jobs": false,
+    "publish_raw_family_outputs": false,
+    "publish_predictions_or_checkpoints": false,
+    "open_valid_or_test": false,
+    "consumable_for_candidate_selection_or_inference": false,
+    "disposition": "RECOVER_DOWNSTREAM_AUDIT_ONLY_AFTER_SIGHUP"
+  }
+}
