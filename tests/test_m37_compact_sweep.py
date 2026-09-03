@@ -4,6 +4,7 @@ import hashlib
 import json
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -13,8 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bin"))
 
 from m37_trace_collect_metrics import ARMS, collect_metrics
-from m37_trace_compact_decision import decide
-from m37_trace_compact_sweep import (_candidate_metric, _effective_parameters,
+from m37_trace_compact_decision import apply_positive_control_gate, decide
+from m37_trace_compact_sweep import (_bind_features, _candidate_metric, _effective_parameters,
                                      _load_manifest, compare_metrics, load_features,
                                      load_truth, run_family)
 from m37_trace_core import TraceSpec
@@ -23,6 +24,7 @@ from m37_trace_train import train
 
 CONTAINER = ("us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/m33-t0a@"
              "sha256:c03864a9ed0c56b00fd1a234daee2d17ddfa57d4c426628bd59cd9daf351ee99")
+F0_SHA = "a" * 64
 
 
 def _sha(path: Path) -> str:
@@ -74,11 +76,11 @@ def _feature_payload(arm: str) -> dict[str, np.ndarray]:
         "schedule_sample": np.arange(people, dtype=np.uint32),
         "schedule_marker": np.full(people, 4, dtype=np.uint32),
         "baseline_method": np.asarray(["fixture-F0"]),
-        "baseline_source_sha256": np.asarray(["fixture-source"]),
+        "baseline_source_sha256": np.asarray([F0_SHA]),
     }
 
 
-def _write_inputs(root: Path) -> tuple[list[Path], list[Path], Path]:
+def _write_inputs(root: Path) -> tuple[list[Path], list[Path], Path, Path]:
     features, receipts = [], []
     for arm in ARMS:
         feature = root / f"FIT.{arm}.trace.npz"
@@ -89,6 +91,7 @@ def _write_inputs(root: Path) -> tuple[list[Path], list[Path], Path]:
             "arm": arm, "target_ref_disjoint": True,
             "target_fold_assignment": "forbidden",
             "physical_genetic_axis_sha256": "fixture-axis",
+            "inputs": {"F0_sha256": F0_SHA},
             "output_sha256": _sha(feature),
         })
         features.append(feature)
@@ -99,7 +102,15 @@ def _write_inputs(root: Path) -> tuple[list[Path], list[Path], Path]:
     truth_path = root / "truth.npz"
     np.savez(truth_path, state_labels=truth,
              sample_key_sha256=first["sample_key_sha256"], marker_pos=first["marker_pos"])
-    return features, receipts, truth_path
+    f0_receipt = root / "m34_f0.receipt.json"
+    _write_json(f0_receipt, {
+        "schema_version": "1.0.0", "stage": "M34_PARSE_FLARE_F0",
+        "decision": "PASS_F0_TRUTH_BLIND", "truth_opened": False,
+        "contains_truth": False, "ancestry_order": ["AFR", "EUR", "NAM"],
+        "sample_count": 10, "marker_count": 9,
+        "outputs": {"fixture_f0.npz": {"sha256": F0_SHA}},
+    })
+    return features, receipts, truth_path, f0_receipt
 
 
 def _write_contracts(root: Path) -> tuple[Path, Path, Path]:
@@ -145,6 +156,10 @@ def _write_contracts(root: Path) -> tuple[Path, Path, Path]:
                     "seed": 1103, "learning_rate": .0003},
         },
         "equivalence": {"absolute_tolerance": 1e-6, "relative_tolerance": 1e-6,
+                        "policy_by_family": {
+                            "hmm": "REQUIRE_CANONICAL_METRIC_REPLAY",
+                            "tcn": "REQUIRE_CANONICAL_METRIC_REPLAY",
+                        },
                         "replay": {
                             "hmm": {"family": "hmm", "canonical_candidate_id": "hmm_r0",
                                     "parameters": {}},
@@ -254,15 +269,35 @@ def test_production_candidate_manifest_is_bound_and_balanced() -> None:
     manifest = ROOT / "conf/m37_trace_compact_candidates.json"
     parent = ROOT / "conf/m37_trace_sweep_contract.json"
     amendment = ROOT / "conf/m37_trace_compact_sweep_amendment.json"
-    _, _, hmm = _load_manifest(manifest, "hmm", "R0", parent, amendment)
+    manifest_payload, _, hmm = _load_manifest(manifest, "hmm", "R0", parent, amendment)
     _, _, tcn = _load_manifest(manifest, "tcn", "R0", parent, amendment)
-    assert len(hmm) == 20 and len(tcn) == 3
+    assert len(hmm) == 12 and len(tcn) == 6
+    hmm_effective = [_effective_parameters(manifest_payload, "hmm", row) for row in hmm]
+    tcn_effective = [_effective_parameters(manifest_payload, "tcn", row) for row in tcn]
+    assert {(row["hazard_per_morgan"], row["evidence_scale"])
+            for row in hmm_effective} == {
+                (hazard, scale) for hazard in (6.0, 12.0, 24.0)
+                for scale in (0.25, 0.5, 1.0, 2.0)
+            }
+    assert Counter(row["hidden_dim"] for row in tcn_effective) == {32: 2, 64: 2, 96: 2}
+    assert Counter(row["depth"] for row in tcn_effective) == {2: 2, 3: 2, 4: 2}
+    assert Counter(row["kernel_size"] for row in tcn_effective) == {3: 3, 5: 3}
+    assert Counter(row["dropout"] for row in tcn_effective) == {0.0: 2, 0.1: 2, 0.2: 2}
+    assert Counter(row["learning_rate"] for row in tcn_effective) == {
+        0.0001: 2, 0.0003: 2, 0.001: 2,
+    }
+    assert Counter(row["event_radius_cM"] for row in tcn_effective) == {
+        0.05: 1, 0.1: 1, 0.2: 2, 0.5: 2,
+    }
+    assert all(row["updates"] == 200 and row["seed"] == 1103 and
+               row["dilations"] == [1, 2, 4, 8][:row["depth"]]
+               for row in tcn_effective)
 
 
 def test_compact_runner_replays_defaults_and_emits_only_metric_evidence() -> None:
     with tempfile.TemporaryDirectory() as raw:
         root = Path(raw)
-        features, receipts, truth = _write_inputs(root)
+        features, receipts, truth, f0_receipt = _write_inputs(root)
         parent, amendment, manifest = _write_contracts(root)
         positive, positive_receipt = _write_positive_control(
             root, "fixture-run", manifest, parent, amendment,
@@ -278,7 +313,7 @@ def test_compact_runner_replays_defaults_and_emits_only_metric_evidence() -> Non
             result = run_family(
                 "fixture-run", family, "R0", manifest, parent, amendment,
                 positive, positive_receipt, canonical, canonical_receipt, truth,
-                features, receipts, output, overlay,
+                f0_receipt, features, receipts, output, overlay,
                 "repo://fixture/overlay.config", CONTAINER, auth,
             )
             assert result["status"] == "PASS_FIT_TUNE_ONLY"
@@ -289,19 +324,65 @@ def test_compact_runner_replays_defaults_and_emits_only_metric_evidence() -> Non
             assert len(observed_metrics) == len(observed_receipts) == 5
             first = json.loads(observed_metrics[0].read_text(encoding="utf-8"))
             assert first["run_id"] == "fixture-run" and first["per_individual"]
+            assert first["baseline_metadata"]["method"] == "FLARE"
+            assert first["baseline_metadata"]["source_sha256"] == F0_SHA
+            assert first["baseline_metadata"]["upstream_stage"] == "M34_PARSE_FLARE_F0"
             assert set(first["per_individual"][0]["boundary_counts"]) == {
                 "0.05", "0.1", "0.2", "0.5"
             }
             metric_paths.extend(observed_metrics)
             metric_receipts.extend(observed_receipts)
+            first_receipt = json.loads(observed_receipts[0].read_text(encoding="utf-8"))
+            assert first_receipt["output_sha256"] == _sha(observed_metrics[0])
+            assert first_receipt["manifest_sha256"] == _sha(manifest)
+            assert first_receipt["contract_amendment_sha256"] == _sha(amendment)
+            assert first_receipt["baseline_provenance"]["upstream_receipt_sha256"] == _sha(f0_receipt)
             audits.append(json.loads((output / f"{family}.compact_sweep.audit.json").read_text()))
         rows, _ = collect_metrics(metric_paths, metric_receipts, "R0", "FIT_TUNE")
         decisions, criteria = decide(rows, "R0")
+        decisions, criteria = apply_positive_control_gate(
+            decisions, criteria,
+            {row["family"]: row["positive_control_status"] for row in audits},
+        )
         assert len(decisions) == 2
         assert {row["status"] for row in decisions} <= {"ADVANCE_EXPLORATORY", "STOP_EXPLORATORY"}
         assert all(not row["scientific_closure"] for row in decisions)
         assert criteria["pareto_only_promotion"] == "FORBIDDEN"
         assert {row["family"] for row in audits} == {"hmm", "tcn"}
+        tcn_decision = next(row for row in decisions if row["family"] == "tcn")
+        assert tcn_decision["status"] == "STOP_EXPLORATORY"
+        assert not tcn_decision["same_budget_control_pass"]
+
+
+def test_compact_manifest_rejects_any_valid_scope() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        parent, amendment, manifest = _write_contracts(root)
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        payload["scope"]["evaluation_split"] = "VALID"
+        payload["scope"]["valid_access"] = "ALLOWED"
+        _write_json(manifest, payload)
+        try:
+            _load_manifest(manifest, "tcn", "R0", parent, amendment)
+        except ValueError as error:
+            assert "only R0 FIT/TUNE" in str(error)
+        else:
+            raise AssertionError("a VALID-scoped compact manifest must be rejected")
+
+
+def test_compact_features_require_the_exact_truth_blind_flare_receipt() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        features, receipts, truth, f0_receipt = _write_inputs(root)
+        payload = json.loads(f0_receipt.read_text(encoding="utf-8"))
+        payload["outputs"]["fixture_f0.npz"]["sha256"] = "b" * 64
+        _write_json(f0_receipt, payload)
+        try:
+            _bind_features(features, receipts, truth, f0_receipt)
+        except ValueError as error:
+            assert "truth-blind FLARE receipt" in str(error)
+        else:
+            raise AssertionError("an unbound F0 receipt must be rejected")
 
 
 def test_equivalence_detects_numeric_drift_beyond_tolerance() -> None:

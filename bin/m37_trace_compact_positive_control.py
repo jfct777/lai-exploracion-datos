@@ -18,10 +18,10 @@ from m37_trace_train import authenticate_feature_pair, train
 MARKER_CM = np.arange(17, dtype=np.float64) / 10.0
 RADIUS_CM = 0.2
 SUPPORT = np.abs(MARKER_CM - 0.8) < RADIUS_CM
-CALIBRATION_BUDGETS = (200, 400, 800, 1600, 2500)
+CALIBRATION_BUDGETS = (200,)
 CONTROL_LEARNING_RATE = 1e-3
-CONTROL_VALIDATION_EVERY = 20
-CONTROL_PATIENCE = 30
+CONTROL_VALIDATION_EVERY = 25
+CONTROL_PATIENCE = 4
 
 
 def sha256(path: Path) -> str:
@@ -112,7 +112,7 @@ def _fit_score(fit: dict[str, np.ndarray], valid: dict[str, np.ndarray],
 
 def run_controls(updates: int = 200) -> dict[str, object]:
     require(updates in CALIBRATION_BUDGETS,
-            "M37 compact positive-control budget is not in the prespecified calibration grid")
+            "M37 compact positive-control budget is not the prespecified triage budget")
     import torch
     torch.set_num_threads(1)
     fit_add = np.tile(np.asarray([0, 1], dtype=np.int64), 32)
@@ -179,7 +179,7 @@ def run_controls(updates: int = 200) -> dict[str, object]:
             "interaction_control": "NOT_APPLICABLE_NONLEARNED_ADDITIVE_EVIDENCE_MODEL",
         },
         "tcn": {
-            "anchor_candidate_id": "tcn_anchor_pc",
+            "anchor_candidate_id": "tcn_h32_d2_k3_do0_lr1e3_r02_l1",
             "updates": updates,
             "architecture": {"hidden_dim": 32, "depth": 2, "kernel_size": 3,
                              "dropout": 0.0, "dilations": [1, 2],

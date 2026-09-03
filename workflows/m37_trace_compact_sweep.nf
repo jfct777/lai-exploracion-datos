@@ -7,7 +7,8 @@ workflow {
     ['m37_run_id', 'm37_root', 'm37_results_dir', 'm37_run_overlay_config',
      'm37_run_overlay_uri', 'm37_fit_truth', 'm37_compact_candidate_manifest',
      'm37_compact_parent_contract', 'm37_compact_contract_amendment',
-     'm37_compact_canonical_metrics', 'm37_compact_canonical_metrics_receipt'].each { key ->
+     'm37_compact_canonical_metrics', 'm37_compact_canonical_metrics_receipt',
+     'm37_fit_f0_receipt'].each { key ->
         if (!params[key]) error "--${key} is required"
     }
     if (!(params.m37_run_id ==~ /[A-Za-z0-9][A-Za-z0-9._-]*/)) {
@@ -54,7 +55,7 @@ workflow {
     ]
 
     M37_TRACE_COMPACT_POSITIVE_CONTROL(
-        Channel.of(tuple(candidateManifest, parentContract, contractAmendment)),
+        channel.of(tuple(candidateManifest, parentContract, contractAmendment)),
         ['m33_safe_bridge_core.py', 'm37_trace_core.py', 'm37_trace_train.py',
          'm37_trace_compact_positive_control.py']
             .collect { name -> file("${repoDir}/bin/${name}", checkIfExists: true) },
@@ -65,13 +66,14 @@ workflow {
                   file(params.m37_compact_canonical_metrics, checkIfExists: true),
                   file(params.m37_compact_canonical_metrics_receipt, checkIfExists: true),
                   file(params.m37_fit_truth, checkIfExists: true),
+                  file(params.m37_fit_f0_receipt, checkIfExists: true),
                   featureFiles, featureReceipts, runOverlay, positive, positiveReceipt)
         }
     }
     M37_TRACE_COMPACT_SWEEP(familyInput, sourceFiles)
 
     def collectionInput = M37_TRACE_COMPACT_SWEEP.out.bundle
-        .map { family, metrics, receipts, equivalence, equivalenceReceipt, audit, auditReceipt ->
+        .map { _family, metrics, receipts, _equivalence, _equivalenceReceipt, _audit, _auditReceipt ->
             tuple(metrics, receipts)
         }
         .collect(flat: false)
@@ -87,7 +89,7 @@ workflow {
     M37_TRACE_COLLECT_METRICS(collectionInput, collectionSources)
 
     def familyAudits = M37_TRACE_COMPACT_SWEEP.out.bundle
-        .map { family, metrics, receipts, equivalence, equivalenceReceipt, audit, auditReceipt ->
+        .map { _family, _metrics, _receipts, _equivalence, _equivalenceReceipt, audit, auditReceipt ->
             tuple(audit, auditReceipt)
         }
         .collect(flat: false)

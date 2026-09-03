@@ -104,6 +104,18 @@ def compare_metrics(observed: dict[str, Any], expected: dict[str, Any],
     return comparisons
 
 
+def _require_tcn_rd_raw_f0_identity(metric: dict[str, Any]) -> None:
+    """Reject any RD score change caused by the residual probability operator."""
+    baseline = metric.get("baseline")
+    require(isinstance(baseline, dict), "M37 TCN RD metric lacks raw F0")
+    for path in METRIC_PATHS:
+        if path[0] == "baseline":
+            continue
+        observed, expected = _nested(metric, path), _nested(baseline, path)
+        require(observed == expected,
+                f"M37 TCN RD differs from raw F0 at {'.'.join(path)}")
+
+
 def _load_contracts(parent_path: Path, amendment_path: Path,
                     manifest: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     parent, amendment = _json(parent_path), _json(amendment_path)
@@ -147,9 +159,16 @@ def _load_manifest(path: Path, family: str, root: str,
     require(family in ("hmm", "tcn") and isinstance(families.get(family), dict),
             "M37 compact family differs")
     replay = equivalence.get("replay", {}).get(family)
-    require(isinstance(replay, dict) and replay.get("family") == family and
+    equivalence_policy = equivalence.get("policy_by_family", {}).get(family)
+    require(equivalence_policy in {
+                "REQUIRE_CANONICAL_METRIC_REPLAY",
+                "NEWLY_FROZEN_RESIDUAL_OPERATOR_REFERENCE_ONLY",
+            } and
+            isinstance(replay, dict) and replay.get("family") == family and
             SAFE_ID.fullmatch(str(replay.get("canonical_candidate_id", ""))),
             "M37 compact default replay differs")
+    require(family != "hmm" or equivalence_policy == "REQUIRE_CANONICAL_METRIC_REPLAY",
+            "M37 compact HMM must retain its canonical equivalence gate")
     family_candidates = [row for row in candidates if row.get("family") == family]
     require(family_candidates, f"M37 compact manifest has no {family} candidates")
     identifiers = [str(row.get("candidate_id", "")) for row in family_candidates]
@@ -184,15 +203,32 @@ def _load_manifest(path: Path, family: str, root: str,
         declared_ids = amendment["tcn"].get("candidate_ids")
         require(isinstance(declared_ids, list) and set(identifiers) == set(declared_ids),
                 "M37 compact TCN candidate IDs differ from the amendment")
-        if expected_count == 9:
-            require(Counter(int(row["hidden_dim"]) for row in effective_rows) == Counter({32: 3, 64: 3, 96: 3}) and
-                Counter(int(row["depth"]) for row in effective_rows) == Counter({2: 3, 3: 3, 4: 3}) and
-                Counter(float(row["dropout"]) for row in effective_rows) == Counter({0.0: 3, 0.1: 3, 0.2: 3}) and
-                Counter(float(row["learning_rate"]) for row in effective_rows) == Counter({0.0001: 3, 0.0003: 3, 0.001: 3}) and
-                Counter(int(row["kernel_size"]) for row in effective_rows) == Counter({3: 5, 5: 4}) and
-                Counter(float(row["event_radius_cM"]) for row in effective_rows) == Counter({0.05: 2, 0.1: 2, 0.2: 3, 0.5: 2}) and
-                Counter(float(row["evidence_scale"]) for row in effective_rows) == Counter({0.25: 2, 0.5: 2, 1.0: 3, 2.0: 2}),
-                "M37 compact TCN balanced space-filling design differs from amendment")
+        declared_balance = amendment["tcn"].get("space_filling_balance")
+        if declared_balance is not None:
+            require(expected_count == 6 and declared_balance == {
+                        "hidden_dim": {"32": 2, "64": 2, "96": 2},
+                        "depth": {"2": 2, "3": 2, "4": 2},
+                        "kernel_size": {"3": 3, "5": 3},
+                        "dropout": {"0.0": 2, "0.1": 2, "0.2": 2},
+                        "learning_rate": {"0.0001": 2, "0.0003": 2, "0.001": 2},
+                        "event_radius_cM": {"0.05": 1, "0.1": 1, "0.2": 2, "0.5": 2},
+                        "evidence_lambda": {"0.25": 1, "0.5": 2, "1.0": 1, "2.0": 2},
+                    } and
+                    Counter(int(row["hidden_dim"]) for row in effective_rows) ==
+                    Counter({32: 2, 64: 2, 96: 2}) and
+                    Counter(int(row["depth"]) for row in effective_rows) ==
+                    Counter({2: 2, 3: 2, 4: 2}) and
+                    Counter(int(row["kernel_size"]) for row in effective_rows) ==
+                    Counter({3: 3, 5: 3}) and
+                    Counter(float(row["dropout"]) for row in effective_rows) ==
+                    Counter({0.0: 2, 0.1: 2, 0.2: 2}) and
+                    Counter(float(row["learning_rate"]) for row in effective_rows) ==
+                    Counter({0.0001: 2, 0.0003: 2, 0.001: 2}) and
+                    Counter(float(row["event_radius_cM"]) for row in effective_rows) ==
+                    Counter({0.05: 1, 0.1: 1, 0.2: 2, 0.5: 2}) and
+                    Counter(float(row["evidence_scale"]) for row in effective_rows) ==
+                    Counter({0.25: 1, 0.5: 2, 1.0: 1, 2.0: 2}),
+                    "M37 compact TCN balanced six-row space-filling design differs")
     return manifest, replay, family_candidates
 
 
@@ -301,9 +337,10 @@ def _load_canonical_collection(metrics_path: Path, receipt_path: Path, root: str
 
 
 def _bind_features(feature_paths: Iterable[Path], receipt_paths: Iterable[Path],
-                   truth_path: Path) -> tuple[dict[str, dict[str, np.ndarray]],
-                                               dict[str, dict[str, Any]],
-                                               dict[str, dict[str, str]]]:
+                   truth_path: Path, f0_receipt_path: Path
+                   ) -> tuple[dict[str, dict[str, np.ndarray]],
+                              dict[str, dict[str, Any]],
+                              dict[str, dict[str, str]], dict[str, Any]]:
     paths, receipts = list(feature_paths), list(receipt_paths)
     require(len(paths) == len(receipts) == len(ARMS),
             "M37 compact sweep needs five feature artifacts and five receipts")
@@ -325,8 +362,12 @@ def _bind_features(feature_paths: Iterable[Path], receipt_paths: Iterable[Path],
     receipt_payloads: dict[str, dict[str, Any]] = {}
     evidence: dict[str, dict[str, str]] = {}
     anchor: dict[str, np.ndarray] | None = None
+    baseline_sources: set[str] = set()
     for arm in ARMS:
         artifact, receipt_path, receipt = bound[arm]
+        require(artifact.name == f"FIT.{arm}.trace.npz" and
+                receipt_path.name == f"FIT.{arm}.trace.receipt.json",
+                "M37 compact input names are not sealed FIT artifacts")
         loaded = load_features(artifact)
         verify_stage_receipt(artifact, receipt_path, "M37_TRACE_MATERIALIZE", arm)
         require(authenticate_feature_pair(loaded, loaded) == "FIT_TUNE",
@@ -335,6 +376,14 @@ def _bind_features(feature_paths: Iterable[Path], receipt_paths: Iterable[Path],
         require(receipt.get("physical_genetic_axis_sha256") ==
                 str(loaded["marker_axis_sha256"].reshape(-1)[0]),
                 "M37 compact receipt/marker axis differs")
+        baseline_source = str(loaded.get("baseline_source_sha256", np.asarray([""]))
+                              .reshape(-1)[0])
+        receipt_inputs = receipt.get("inputs")
+        require(re.fullmatch(r"[0-9a-f]{64}", baseline_source) is not None and
+                isinstance(receipt_inputs, dict) and
+                receipt_inputs.get("F0_sha256") == baseline_source,
+                "M37 compact feature does not bind its F0 source")
+        baseline_sources.add(baseline_source)
         if anchor is None:
             anchor = loaded
         else:
@@ -349,7 +398,43 @@ def _bind_features(feature_paths: Iterable[Path], receipt_paths: Iterable[Path],
             "features_sha256": sha256(artifact),
             "features_receipt_sha256": sha256(receipt_path),
         }
-    return features, receipt_payloads, evidence
+    require(len(baseline_sources) == 1,
+            "M37 compact paired arms do not share one F0 source")
+    baseline_source = next(iter(baseline_sources))
+    f0_receipt = _json(f0_receipt_path)
+    outputs = f0_receipt.get("outputs")
+    matching_outputs = ([name for name, item in outputs.items()
+                         if isinstance(item, dict) and item.get("sha256") == baseline_source]
+                        if isinstance(outputs, dict) else [])
+    require(f0_receipt.get("stage") == "M34_PARSE_FLARE_F0" and
+            f0_receipt.get("decision") == "PASS_F0_TRUTH_BLIND" and
+            f0_receipt.get("truth_opened") is False and
+            f0_receipt.get("contains_truth") is False and
+            f0_receipt.get("ancestry_order") == ["AFR", "EUR", "NAM"] and
+            anchor is not None and
+            int(f0_receipt.get("sample_count", -1)) == len(anchor["sample_key_sha256"]) and
+            int(f0_receipt.get("marker_count", -1)) == len(anchor["marker_pos"]) and
+            len(matching_outputs) == 1,
+            "M37 compact F0 source is not bound to a truth-blind FLARE receipt")
+    baseline_provenance = {
+        "method": "FLARE",
+        "upstream_stage": "M34_PARSE_FLARE_F0",
+        "source_artifact": matching_outputs[0],
+        "source_sha256": baseline_source,
+        "upstream_receipt_sha256": sha256(f0_receipt_path),
+        "truth_blind": True,
+        "sample_count": int(f0_receipt["sample_count"]),
+        "marker_count": int(f0_receipt["marker_count"]),
+    }
+    for loaded in features.values():
+        loaded["baseline_method"] = np.asarray([baseline_provenance["method"]])
+        loaded["baseline_upstream_stage"] = np.asarray(
+            [baseline_provenance["upstream_stage"]],
+        )
+        loaded["baseline_receipt_sha256"] = np.asarray(
+            [baseline_provenance["upstream_receipt_sha256"]],
+        )
+    return features, receipt_payloads, evidence, baseline_provenance
 
 
 def _candidate_metric(probabilities: np.ndarray, tune_people: np.ndarray,
@@ -363,6 +448,8 @@ def _candidate_metric(probabilities: np.ndarray, tune_people: np.ndarray,
     result["baseline_metadata"] = {
         "method": str(features.get("baseline_method", np.asarray(["upstream_baseline_unspecified"]))[0]),
         "source_sha256": str(features.get("baseline_source_sha256", np.asarray(["unavailable"]))[0]),
+        "upstream_stage": str(features.get("baseline_upstream_stage", np.asarray(["unavailable"]))[0]),
+        "upstream_receipt_sha256": str(features.get("baseline_receipt_sha256", np.asarray(["unavailable"]))[0]),
     }
     result.update({
         "evaluation_split": "FIT_TUNE",
@@ -506,7 +593,8 @@ def run_family(run_id: str, family: str, root: str, manifest_path: Path,
                parent_contract_path: Path, amendment_path: Path,
                positive_control_path: Path, positive_control_receipt_path: Path,
                canonical_metrics_path: Path, canonical_receipt_path: Path,
-               truth_path: Path, feature_paths: list[Path], receipt_paths: list[Path],
+               truth_path: Path, f0_receipt_path: Path,
+               feature_paths: list[Path], receipt_paths: list[Path],
                output_dir: Path, run_overlay: Path, run_overlay_uri: str,
                container_digest: str, auth_files: list[Path]) -> dict[str, Any]:
     require(SAFE_ID.fullmatch(run_id) and family in ("hmm", "tcn") and
@@ -573,8 +661,8 @@ def run_family(run_id: str, family: str, root: str, manifest_path: Path,
         canonical_metrics_path, canonical_receipt_path, root,
     )
     truth = load_truth(truth_path)
-    features, feature_receipts, feature_evidence = _bind_features(
-        feature_paths, receipt_paths, truth_path,
+    features, feature_receipts, feature_evidence, baseline_provenance = _bind_features(
+        feature_paths, receipt_paths, truth_path, f0_receipt_path,
     )
     require(truth.shape == features[ARMS[0]]["baseline_states"].shape[:2],
             "M37 compact FIT truth/features axes differ")
@@ -597,11 +685,16 @@ def run_family(run_id: str, family: str, root: str, manifest_path: Path,
         comparisons[arm] = compare_metrics(replay_metrics[arm], canonical[(canonical_id, arm)],
                                            absolute_tolerance, relative_tolerance)
     equivalence_pass = all(row["pass"] for arm in comparisons.values() for row in arm.values())
+    equivalence_policy = str(manifest["equivalence"]["policy_by_family"][family])
+    equivalence_required = equivalence_policy == "REQUIRE_CANONICAL_METRIC_REPLAY"
     equivalence_path = output_dir / f"{family}.equivalence.json"
     equivalence_payload = {
         "schema_version": "1.0.0",
         "stage": "M37_TRACE_COMPACT_EQUIVALENCE",
-        "status": "PASS" if equivalence_pass else "FAIL",
+        "status": (("PASS" if equivalence_pass else "FAIL") if equivalence_required else
+                   "NEWLY_FROZEN_REFERENCE_ONLY"),
+        "policy": equivalence_policy,
+        "canonical_metric_match": equivalence_pass,
         "root": root,
         "run_id": run_id,
         "family": family,
@@ -620,6 +713,7 @@ def run_family(run_id: str, family: str, root: str, manifest_path: Path,
         "canonical_metrics_sha256": sha256(canonical_metrics_path),
         "canonical_metrics_receipt_sha256": sha256(canonical_receipt_path),
         "truth_sha256": sha256(truth_path),
+        "baseline_provenance": baseline_provenance,
         "feature_evidence": feature_evidence,
         "train_sample_axis_sha256": hashlib.sha256(
             features[ARMS[0]]["sample_key_sha256"][replay_train].tobytes()).hexdigest(),
@@ -640,7 +734,7 @@ def run_family(run_id: str, family: str, root: str, manifest_path: Path,
         "canonical_collection_stage": canonical_collection_receipt["stage"],
         "output_sha256": sha256(equivalence_path),
     })
-    require(equivalence_pass,
+    require(not equivalence_required or equivalence_pass,
             f"M37 {family} compact replay differs from canonical R0; sweep remains closed")
 
     metric_hashes: dict[str, str] = {}
@@ -657,6 +751,8 @@ def run_family(run_id: str, family: str, root: str, manifest_path: Path,
             candidate_metrics, train_people, tune_people = _execute_candidate(
                 candidate_id, family, effective, features, truth, root,
             )
+        if family == "tcn":
+            _require_tcn_rd_raw_f0_identity(candidate_metrics["RD"])
         train_axis_sha = hashlib.sha256(
             features[ARMS[0]]["sample_key_sha256"][train_people].tobytes()).hexdigest()
         tune_axis_sha = hashlib.sha256(
@@ -690,6 +786,7 @@ def run_family(run_id: str, family: str, root: str, manifest_path: Path,
                 "features_receipt_sha256": feature_evidence[arm]["features_receipt_sha256"],
                 "features_receipt_output_sha256": feature_receipts[arm]["output_sha256"],
                 "truth_sha256": sha256(truth_path),
+                "baseline_provenance": baseline_provenance,
                 "train_sample_axis_sha256": train_axis_sha,
                 "tune_sample_axis_sha256": tune_axis_sha,
                 "marker_axis_sha256": str(features[arm]["marker_axis_sha256"].reshape(-1)[0]),
@@ -726,6 +823,7 @@ def run_family(run_id: str, family: str, root: str, manifest_path: Path,
         "positive_control_sha256": sha256(positive_control_path),
         "positive_control_receipt_sha256": sha256(positive_control_receipt_path),
         "truth_sha256": sha256(truth_path),
+        "baseline_provenance": baseline_provenance,
         "feature_evidence": feature_evidence,
         "canonical_metrics_sha256": sha256(canonical_metrics_path),
         "canonical_metrics_receipt_sha256": sha256(canonical_receipt_path),
@@ -740,6 +838,8 @@ def run_family(run_id: str, family: str, root: str, manifest_path: Path,
             "valid_access": "FORBIDDEN",
         },
         "positive_control_status": family_control,
+        "tcn_rd_raw_f0_identity": (True if family == "tcn" else
+                                    "NOT_APPLICABLE_HMM_SMOOTHING_MODEL"),
         "positive_control_precondition": manifest["positive_control_status"].get(family),
         "decision_scope": "R0 TUNE can only support ADVANCE_EXPLORATORY or STOP_EXPLORATORY",
     }
@@ -768,6 +868,7 @@ def main() -> None:
     parser.add_argument("--canonical-metrics", type=Path, required=True)
     parser.add_argument("--canonical-metrics-receipt", type=Path, required=True)
     parser.add_argument("--truth", type=Path, required=True)
+    parser.add_argument("--f0-receipt", type=Path, required=True)
     parser.add_argument("--feature", action="append", type=Path, required=True)
     parser.add_argument("--feature-receipt", action="append", type=Path, required=True)
     parser.add_argument("--run-overlay", type=Path, required=True)
@@ -780,7 +881,8 @@ def main() -> None:
         args.run_id, args.family, args.root, args.candidate_manifest,
         args.parent_contract, args.contract_amendment,
         args.positive_control, args.positive_control_receipt, args.canonical_metrics,
-        args.canonical_metrics_receipt, args.truth, args.feature, args.feature_receipt,
+        args.canonical_metrics_receipt, args.truth, args.f0_receipt,
+        args.feature, args.feature_receipt,
         args.output_dir, args.run_overlay, args.run_overlay_uri,
         args.container_digest, args.auth_file,
     )

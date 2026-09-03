@@ -1,9 +1,26 @@
 {
   "schema_version": "1.0.0",
   "stage": "M37_TRACE_COMPACT_SWEEP_AMENDMENT",
-  "status": "PREREGISTERED_NO_EXECUTION",
+  "status": "PREREGISTERED_FOR_20260903B_NO_EXECUTION",
   "parent_contract": "conf/m37_trace_sweep_contract.json",
   "parent_contract_sha256": "50a27f6c597d883b0aeb87671210d7d9478d9ac87821207b58dd30a045e238be",
+  "prospective_timing": {
+    "state": "FROZEN_BEFORE_FIRST_CONSUMABLE_20260903B_CANDIDATE_SWEEP_EXECUTION",
+    "trigger": "The published R0 defaults HMM(hazard=12,lambda=1) and TCN(h=32,d=2,k=3,dropout=0,lr=3e-4,updates=200,dilations=1,2) did not pass the prespecified promotion gate.",
+    "interpretation": "Finite design-space coverage after a failed default screen; not a post-hoc rescue, VALID opening, or scientific closure."
+  },
+  "superseded_execution": {
+    "run_id": "m37-r0-compact-sweep-20260903a",
+    "disposition": "SUPERSEDED_NO_CONSUMABLE_RESULTS",
+    "timing": "launched before the residual-floor correction and before this 20260903b freeze",
+    "result_use": "FORBIDDEN_FOR_CANDIDATE_SELECTION_OR_INFERENCE",
+    "staged_sha256": {
+      "m37_trace_core.py": "068aa2b22c37b90d677fb92bcd0ae67540c2001994e0587a0a3114ea103f01c7",
+      "m37_trace_compact_sweep.py": "7f4aea5128797a7e86afffc1bcae320baa68c6a5b724c7e28526d516a85e4f8a",
+      "m37_trace_compact_candidates.json": "9112c81d810ffe9c2d771cd24ff69e63cac039f3bfc6281f3846d371fc2ea6ce",
+      "m37_trace_compact_sweep_amendment.json": "b3704ce0c4ba2b93855f65176cb8723f4d6f9b356bce680de826762118ae123c"
+    }
+  },
   "scope": {
     "root": "R0",
     "evaluation_split": "FIT_TUNE",
@@ -14,23 +31,37 @@
     ]
   },
   "candidate_count_by_family": {
-    "hmm": 20,
-    "tcn": 3
+    "hmm": 12,
+    "tcn": 6
   },
   "hmm": {
-    "design": "complete parent-contract grid because inference is deterministic and inexpensive",
-    "hazard_per_morgan": [6.0, 8.5, 12.0, 17.0, 24.0],
-    "evidence_lambda": [0.25, 0.5, 1.0, 2.0]
+    "design": "three log-spaced parent hazards crossed with all four evidence scales; deterministic HMM evaluation is vectorized over the five paired arms",
+    "hazard_per_morgan": [6.0, 12.0, 24.0],
+    "evidence_lambda": [0.25, 0.5, 1.0, 2.0],
+    "event_deposition": "unchanged nearest-locus/anchor evidence field; event_radius_cM is not an HMM factor"
   },
   "tcn": {
-    "design": "three-point calibrated screen spanning compact, intermediate and wide/deep TCNs; all use the learning rate that passed the same-budget synthetic control",
-    "candidate_ids": ["tcn_anchor_pc", "tcn_mid_local", "tcn_wide_broad"],
+    "design": "six-row balanced space-filling screen; no Cartesian expansion",
+    "candidate_ids": [
+      "tcn_h32_d2_k3_do0_lr1e3_r02_l1",
+      "tcn_h32_d4_k5_do02_lr1e4_r005_l2",
+      "tcn_h64_d2_k5_do01_lr3e4_r01_l025",
+      "tcn_h64_d3_k3_do02_lr1e3_r05_l05",
+      "tcn_h96_d3_k5_do0_lr1e4_r02_l2",
+      "tcn_h96_d4_k3_do01_lr3e4_r05_l05"
+    ],
     "evidence_lambda": [0.25, 0.5, 1.0, 2.0],
     "event_radius_cM": [0.05, 0.1, 0.2, 0.5],
+    "event_radius_amendment": {
+      "timing": "PROSPECTIVE_BEFORE_FIRST_CONSUMABLE_20260903B_CANDIDATE_SWEEP_EXECUTION",
+      "role": "training shard calendar and continuous triangular event splat only",
+      "metric_alignment": "all candidates are scored at the fixed 0.05, 0.1, 0.2 and 0.5 cM edge tolerances; promotion remains fixed at 0.2 cM",
+      "not_allowed": "changing the radius after candidate metrics are observed"
+    },
     "execution": {
-      "updates": 1600,
-      "validation_every": 20,
-      "early_stopping_patience": 30
+      "updates": 200,
+      "validation_every": 25,
+      "early_stopping_patience": 4
     },
     "seed": 1103,
     "coverage": {
@@ -38,13 +69,39 @@
       "depth": [2, 3, 4],
       "kernel_size": [3, 5],
       "dropout": [0.0, 0.1, 0.2],
-      "learning_rate": [0.001],
-      "event_radius_cM": [0.05, 0.2, 0.5],
-      "evidence_lambda": [0.25, 1.0, 2.0]
+      "learning_rate": [0.0001, 0.0003, 0.001],
+      "dilations_by_depth": {
+        "2": [1, 2],
+        "3": [1, 2, 4],
+        "4": [1, 2, 4, 8]
+      },
+      "event_radius_cM": [0.05, 0.1, 0.2, 0.5],
+      "evidence_lambda": [0.25, 0.5, 1.0, 2.0]
+    },
+    "space_filling_balance": {
+      "hidden_dim": {"32": 2, "64": 2, "96": 2},
+      "depth": {"2": 2, "3": 2, "4": 2},
+      "kernel_size": {"3": 3, "5": 3},
+      "dropout": {"0.0": 2, "0.1": 2, "0.2": 2},
+      "learning_rate": {"0.0001": 2, "0.0003": 2, "0.001": 2},
+      "event_radius_cM": {"0.05": 1, "0.1": 1, "0.2": 2, "0.5": 2},
+      "evidence_lambda": {"0.25": 1, "0.5": 2, "1.0": 1, "2.0": 2}
+    },
+    "residual_operator": {
+      "version": "RAW_F0_GATED_MIXTURE_V2",
+      "epsilon": 1e-12,
+      "formula": "q=softmax(log(clamp(F0,epsilon))+delta); p=(1-gate)*F0+gate*q; gate=sigmoid(confidence)*spatial_support",
+      "properties": [
+        "RD with no splats is exactly raw F0",
+        "supported arms can revive a state assigned zero probability by FLARE",
+        "the output remains on the probability simplex"
+      ],
+      "reason": "remove the prior clamp-and-renormalize RD-vs-F0 artifact before any consumable 20260903b candidate sweep execution"
     }
   },
   "default_replay": {
-    "requirement": "reproduce all five default-arm R0 metrics before any sweep candidate is evaluated",
+    "hmm": "reproduce all five published default-arm R0 metrics before evaluating HMM sweep candidates",
+    "tcn": "reference-only rerun under RAW_F0_GATED_MIXTURE_V2; old TCN metrics are not an equivalence gate because the residual operator changed prospectively",
     "absolute_tolerance": 1e-6,
     "relative_tolerance": 1e-6
   },
@@ -52,7 +109,7 @@
     "allowed": [
       "aggregate_and_per_individual_metric_json",
       "metric_receipt_json",
-      "equivalence_json_and_receipt",
+      "equivalence_or_newly_frozen_reference_json_and_receipt",
       "family_audit_json_and_receipt",
       "paired_collection_json_and_receipt",
       "triage_decision_json_and_receipt"
@@ -66,16 +123,18 @@
   "triage_gate": {
     "primary": "RE must have strictly higher boundary F1 at 0.2 cM and non-worse log-loss than F0, RD, POOLED, SHAM and GEOMETRY",
     "guardrails": [
+      "Brier score must be non-worse than every comparator",
       "macro ancestry-dose MAE must be non-worse than every comparator",
       "NAM ancestry-dose MAE must be non-worse than every comparator",
       "false transitions per Morgan must be non-worse than every comparator"
     ],
+    "positive_controls_complete": "required to ADVANCE_EXPLORATORY",
     "pareto_only_promotion": "FORBIDDEN"
   },
   "positive_control_policy": {
-    "calibration_grid_updates": [200, 400, 800, 1600, 2500],
-    "minimum_passing_budget": 1600,
-    "result": "Additive passed from 200 updates; nearby XOR first passed at 1600 updates in the fixed image.",
+    "same_budget_updates": 200,
+    "anchor_candidate_id": "tcn_h32_d2_k3_do0_lr1e3_r02_l1",
+    "promotion_precondition": "HMM additive PASS; TCN additive PASS and nearby-XOR PASS. Candidates may be scored when a TCN control is budget-insufficient, but no TCN candidate may advance.",
     "failure_rule": "A failed same-budget control means BUDGET_INSUFFICIENT, not absence of biological signal and not scientific closure"
   }
 }

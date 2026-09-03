@@ -330,5 +330,13 @@ def build_tcn(spec: TraceSpec, event_channels: int):
             # RD has no splats and therefore reproduces F0 exactly.
             spatial_support = mass.reshape(batch, markers, 1).clamp(0.0, 1.0)
             gate = torch.sigmoid(self.confidence(hidden).transpose(1, 2)) * spatial_support
-            return torch.softmax(torch.log(baseline.clamp_min(1e-7)) + gate * delta, dim=-1)
+            # Keep the unmodified FLARE posterior as the literal zero-support
+            # path.  The earlier softmax(log(clamp(F0, 1e-7))) path silently
+            # renormalized RD and could manufacture an apparent RD-vs-F0 gain.
+            # A supported residual instead proposes q on the same 1e-12 floor
+            # used by the scorer, then mixes q with raw F0.  Consequently RD is
+            # exact F0, while RE/POOLED/SHAM/GEOMETRY can still revive a state
+            # to which FLARE assigned probability zero.
+            proposal = torch.softmax(torch.log(baseline.clamp_min(1e-12)) + delta, dim=-1)
+            return (1.0 - gate) * baseline + gate * proposal
     return TraceTCN()

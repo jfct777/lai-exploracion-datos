@@ -56,11 +56,16 @@ def test_event_tcn_splats_by_cm_and_preserves_f0_without_events() -> None:
     from m37_trace_core import TraceSpec, build_tcn
     model = build_tcn(TraceSpec(hidden_dim=32, depth=2, kernel_size=3, dropout=0.0, dilations=(1, 2)), 20).eval()
     baseline = torch.softmax(torch.randn(2, 5, 6), dim=-1)
+    # Include a structural zero: RD must not gain merely because the model
+    # internally floors and renormalizes the FLARE posterior.
+    baseline[0, 0, 5] = 0.0
+    baseline[0, 0] /= baseline[0, 0].sum()
     empty = (torch.zeros((0, 20)), torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long),
              torch.zeros(0, dtype=torch.long), torch.zeros(0, dtype=torch.long), torch.zeros(0))
     with torch.inference_mode():
         output = model(*empty, baseline)
-    assert torch.allclose(output, baseline)
+    assert torch.equal(output, baseline)
+    assert torch.equal(output.sum(dim=-1), baseline.sum(dim=-1))
 
 
 def test_tcn_shards_match_full_sequence_with_receptive_halo() -> None:
@@ -122,6 +127,35 @@ def test_positive_event_gate_can_change_f0() -> None:
         output = model(*one_event, baseline)
     assert not torch.allclose(output[:, :3], baseline[:, :3])
     assert torch.allclose(output[:, 3], baseline[:, 3])
+
+
+def test_supported_tcn_residual_is_simplex_and_can_revive_flare_zero() -> None:
+    import torch
+    from m37_trace_core import TraceSpec, build_tcn
+    model = build_tcn(
+        TraceSpec(hidden_dim=32, depth=2, kernel_size=3, dropout=0.0,
+                  dilations=(1, 2)),
+        20,
+    ).eval()
+    baseline = torch.full((1, 3, 6), 0.2)
+    baseline[:, :, 5] = 0.0
+    with torch.no_grad():
+        model.head.weight.zero_()
+        model.head.bias.zero_()
+        model.head.bias[5] = 40.0
+        model.confidence.weight.zero_()
+        model.confidence.bias.fill_(20.0)
+    one_event = (
+        torch.ones((1, 20)), torch.ones(1, dtype=torch.long),
+        torch.zeros(1, dtype=torch.long), torch.zeros(1, dtype=torch.long),
+        torch.tensor([1]), torch.ones(1),
+    )
+    with torch.inference_mode():
+        output = model(*one_event, baseline)
+    assert torch.allclose(output.sum(dim=-1), torch.ones((1, 3)), atol=1e-6, rtol=0)
+    assert output[0, 1, 5] > 0.5
+    assert torch.equal(output[:, 0], baseline[:, 0])
+    assert torch.equal(output[:, 2], baseline[:, 2])
 
 
 def test_rd_removes_every_ragged_event_channel_while_geometry_keeps_only_locations() -> None:

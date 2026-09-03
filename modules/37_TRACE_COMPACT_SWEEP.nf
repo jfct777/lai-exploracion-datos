@@ -44,7 +44,7 @@ process M37_TRACE_COMPACT_SWEEP {
     input:
     tuple val(family), path(candidate_manifest), path(parent_contract), path(contract_amendment),
           path(canonical_metrics), path(canonical_metrics_receipt), path(fit_truth),
-          path(feature_files), path(feature_receipts), path(run_overlay),
+          path(fit_f0_receipt), path(feature_files), path(feature_receipts), path(run_overlay),
           path(positive_control), path(positive_control_receipt)
     path source_files
 
@@ -73,7 +73,7 @@ process M37_TRACE_COMPACT_SWEEP {
       --positive-control-receipt ${positive_control_receipt} \
       --canonical-metrics ${canonical_metrics} \
       --canonical-metrics-receipt ${canonical_metrics_receipt} \
-      --truth ${fit_truth} --run-overlay ${run_overlay} \
+      --truth ${fit_truth} --f0-receipt ${fit_f0_receipt} --run-overlay ${run_overlay} \
       --run-overlay-uri '${params.m37_run_overlay_uri}' \
       --container-digest '${params.m37_container_digest}' \
       ${featureFlags} ${featureReceiptFlags} ${authFlags} --output-dir .

@@ -2,11 +2,15 @@
   "schema_version": "1.0.0",
   "stage": "M37_TRACE_COMPACT_SWEEP_PRE",
   "status": "PREREGISTERED_FIT_TUNE_ONLY",
+  "freeze": {
+    "state": "NEWLY_FROZEN_BEFORE_CONSUMABLE_20260903B_CANDIDATE_EXECUTION",
+    "reason": "finite R0 follow-up after the published defaults failed promotion; TCN uses the prospectively corrected raw-F0 gated residual operator"
+  },
   "contract_binding": {
     "parent": "conf/m37_trace_sweep_contract.json",
     "parent_sha256": "50a27f6c597d883b0aeb87671210d7d9478d9ac87821207b58dd30a045e238be",
     "amendment": "conf/m37_trace_compact_sweep_amendment.json",
-    "amendment_sha256": "b3704ce0c4ba2b93855f65176cb8723f4d6f9b356bce680de826762118ae123c"
+    "amendment_sha256": "7bab8f64a41f8a63f44b12d41c9f5a1934aea9fc1767acefdfdd025dc6940bc6"
   },
   "scope": {
     "root": "R0",
@@ -31,9 +35,6 @@
     },
     "tcn": {
       "evidence_scale": 1.0,
-      "updates": 1600,
-      "validation_every": 20,
-      "early_stopping_patience": 30,
       "hidden_dim": 32,
       "depth": 2,
       "kernel_size": 3,
@@ -46,6 +47,10 @@
   "equivalence": {
     "absolute_tolerance": 1e-6,
     "relative_tolerance": 1e-6,
+    "policy_by_family": {
+      "hmm": "REQUIRE_CANONICAL_METRIC_REPLAY",
+      "tcn": "NEWLY_FROZEN_RESIDUAL_OPERATOR_REFERENCE_ONLY"
+    },
     "replay": {
       "hmm": {
         "family": "hmm",
@@ -55,11 +60,7 @@
       "tcn": {
         "family": "tcn",
         "canonical_candidate_id": "tcn_r0",
-        "parameters": {
-          "updates": 200,
-          "validation_every": 25,
-          "early_stopping_patience": 4
-        }
+        "parameters": {}
       }
     }
   },
@@ -69,10 +70,9 @@
       "interpretation": "Aligned synthetic evidence must measurably change the HMM posterior; XOR is not applicable to this additive evidence model."
     },
     "tcn": {
-      "status_at_1600_updates": "REQUIRED_RUNTIME_SAME_BUDGET_FIXTURE",
-      "anchor_candidate_id": "tcn_anchor_pc",
-      "existing_fixture": "Additive and nearby-XOR positive controls exist at larger budgets in tests/test_m37_positive_controls.py.",
-      "failure_interpretation": "BUDGET_INSUFFICIENT_FOR_INTERACTION; do not infer absence of biological signal."
+      "status_at_200_updates": "REQUIRED_RUNTIME_SAME_BUDGET_FIXTURE",
+      "anchor_candidate_id": "tcn_h32_d2_k3_do0_lr1e3_r02_l1",
+      "failure_interpretation": "BUDGET_INSUFFICIENT_FOR_INTERACTION; score-only exploration may finish, but no TCN candidate may advance."
     }
   },
   "candidates": [
@@ -80,25 +80,20 @@
     {"candidate_id": "hmm_h6_l05", "family": "hmm", "parameters": {"hazard_per_morgan": 6.0, "evidence_scale": 0.5}},
     {"candidate_id": "hmm_h6_l1", "family": "hmm", "parameters": {"hazard_per_morgan": 6.0, "evidence_scale": 1.0}},
     {"candidate_id": "hmm_h6_l2", "family": "hmm", "parameters": {"hazard_per_morgan": 6.0, "evidence_scale": 2.0}},
-    {"candidate_id": "hmm_h8p5_l025", "family": "hmm", "parameters": {"hazard_per_morgan": 8.5, "evidence_scale": 0.25}},
-    {"candidate_id": "hmm_h8p5_l05", "family": "hmm", "parameters": {"hazard_per_morgan": 8.5, "evidence_scale": 0.5}},
-    {"candidate_id": "hmm_h8p5_l1", "family": "hmm", "parameters": {"hazard_per_morgan": 8.5, "evidence_scale": 1.0}},
-    {"candidate_id": "hmm_h8p5_l2", "family": "hmm", "parameters": {"hazard_per_morgan": 8.5, "evidence_scale": 2.0}},
     {"candidate_id": "hmm_h12_l025", "family": "hmm", "parameters": {"hazard_per_morgan": 12.0, "evidence_scale": 0.25}},
     {"candidate_id": "hmm_h12_l05", "family": "hmm", "parameters": {"hazard_per_morgan": 12.0, "evidence_scale": 0.5}},
     {"candidate_id": "hmm_h12_l1", "family": "hmm", "parameters": {"hazard_per_morgan": 12.0, "evidence_scale": 1.0}},
     {"candidate_id": "hmm_h12_l2", "family": "hmm", "parameters": {"hazard_per_morgan": 12.0, "evidence_scale": 2.0}},
-    {"candidate_id": "hmm_h17_l025", "family": "hmm", "parameters": {"hazard_per_morgan": 17.0, "evidence_scale": 0.25}},
-    {"candidate_id": "hmm_h17_l05", "family": "hmm", "parameters": {"hazard_per_morgan": 17.0, "evidence_scale": 0.5}},
-    {"candidate_id": "hmm_h17_l1", "family": "hmm", "parameters": {"hazard_per_morgan": 17.0, "evidence_scale": 1.0}},
-    {"candidate_id": "hmm_h17_l2", "family": "hmm", "parameters": {"hazard_per_morgan": 17.0, "evidence_scale": 2.0}},
     {"candidate_id": "hmm_h24_l025", "family": "hmm", "parameters": {"hazard_per_morgan": 24.0, "evidence_scale": 0.25}},
     {"candidate_id": "hmm_h24_l05", "family": "hmm", "parameters": {"hazard_per_morgan": 24.0, "evidence_scale": 0.5}},
     {"candidate_id": "hmm_h24_l1", "family": "hmm", "parameters": {"hazard_per_morgan": 24.0, "evidence_scale": 1.0}},
     {"candidate_id": "hmm_h24_l2", "family": "hmm", "parameters": {"hazard_per_morgan": 24.0, "evidence_scale": 2.0}},
 
-    {"candidate_id": "tcn_anchor_pc", "family": "tcn", "parameters": {"evidence_scale": 1.0, "hidden_dim": 32, "depth": 2, "kernel_size": 3, "dropout": 0.0, "dilations": [1, 2], "learning_rate": 0.001, "event_radius_cM": 0.2}},
-    {"candidate_id": "tcn_mid_local", "family": "tcn", "parameters": {"evidence_scale": 0.25, "hidden_dim": 64, "depth": 3, "kernel_size": 5, "dropout": 0.1, "dilations": [1, 2, 4], "learning_rate": 0.001, "event_radius_cM": 0.05}},
-    {"candidate_id": "tcn_wide_broad", "family": "tcn", "parameters": {"evidence_scale": 2.0, "hidden_dim": 96, "depth": 4, "kernel_size": 3, "dropout": 0.2, "dilations": [1, 2, 4, 8], "learning_rate": 0.001, "event_radius_cM": 0.5}}
+    {"candidate_id": "tcn_h32_d2_k3_do0_lr1e3_r02_l1", "family": "tcn", "parameters": {"evidence_scale": 1.0, "hidden_dim": 32, "depth": 2, "kernel_size": 3, "dropout": 0.0, "dilations": [1, 2], "learning_rate": 0.001, "event_radius_cM": 0.2}},
+    {"candidate_id": "tcn_h32_d4_k5_do02_lr1e4_r005_l2", "family": "tcn", "parameters": {"evidence_scale": 2.0, "hidden_dim": 32, "depth": 4, "kernel_size": 5, "dropout": 0.2, "dilations": [1, 2, 4, 8], "learning_rate": 0.0001, "event_radius_cM": 0.05}},
+    {"candidate_id": "tcn_h64_d2_k5_do01_lr3e4_r01_l025", "family": "tcn", "parameters": {"evidence_scale": 0.25, "hidden_dim": 64, "depth": 2, "kernel_size": 5, "dropout": 0.1, "dilations": [1, 2], "learning_rate": 0.0003, "event_radius_cM": 0.1}},
+    {"candidate_id": "tcn_h64_d3_k3_do02_lr1e3_r05_l05", "family": "tcn", "parameters": {"evidence_scale": 0.5, "hidden_dim": 64, "depth": 3, "kernel_size": 3, "dropout": 0.2, "dilations": [1, 2, 4], "learning_rate": 0.001, "event_radius_cM": 0.5}},
+    {"candidate_id": "tcn_h96_d3_k5_do0_lr1e4_r02_l2", "family": "tcn", "parameters": {"evidence_scale": 2.0, "hidden_dim": 96, "depth": 3, "kernel_size": 5, "dropout": 0.0, "dilations": [1, 2, 4], "learning_rate": 0.0001, "event_radius_cM": 0.2}},
+    {"candidate_id": "tcn_h96_d4_k3_do01_lr3e4_r05_l05", "family": "tcn", "parameters": {"evidence_scale": 0.5, "hidden_dim": 96, "depth": 4, "kernel_size": 3, "dropout": 0.1, "dilations": [1, 2, 4, 8], "learning_rate": 0.0003, "event_radius_cM": 0.5}}
   ]
 }

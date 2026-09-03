@@ -28,7 +28,7 @@ def main() -> None:
         "process.executor = 'google-batch'",
         "process.resourceLabels.team = 'frank'",
         "params.m37_results_dir = 'gs://teams-usp/frank/lai-exploracion-datos/runs'",
-        "workDir = 'gs://teams-usp/frank/lai-exploracion-datos/work/nextflow/m37-r0-compact-sweep-20260903a'",
+        "workDir = 'gs://teams-usp/frank/lai-exploracion-datos/work/nextflow/m37-r0-compact-sweep-20260903b'",
         "@sha256:c03864a9ed0c56b00fd1a234daee2d17ddfa57d4c426628bd59cd9daf351ee99",
     )
     missing = [value for value in required if value not in observed]

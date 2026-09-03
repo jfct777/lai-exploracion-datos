@@ -25,7 +25,7 @@ def _json(path: Path) -> dict[str, Any]:
 
 
 def _metric(metric: dict[str, Any], name: str) -> float:
-    if name == "macro_ancestry_dose_mae":
+    if name in {"brier", "macro_ancestry_dose_mae"}:
         return float(metric[name])
     if name == "NAM_ancestry_dose_mae":
         return float(metric["ancestry_dose_mae"]["NAM"])
@@ -91,7 +91,7 @@ def decide(rows: list[dict[str, Any]], root: str) -> tuple[list[dict[str, Any]],
 
     decisions: list[dict[str, Any]] = []
     guardrail_names = (
-        "macro_ancestry_dose_mae", "NAM_ancestry_dose_mae",
+        "brier", "macro_ancestry_dose_mae", "NAM_ancestry_dose_mae",
         "false_transitions_per_morgan",
     )
     for candidate in sorted(grouped):
@@ -142,6 +142,40 @@ def decide(rows: list[dict[str, Any]], root: str) -> tuple[list[dict[str, Any]],
     return decisions, criteria
 
 
+def apply_positive_control_gate(
+    decisions: list[dict[str, Any]], criteria: dict[str, Any],
+    control_by_family: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Allow scoring with an underpowered control, but never advancement."""
+    require(control_by_family.get("hmm", {}).get("status") ==
+            "PASS_ADDITIVE_DETECTABILITY",
+            "M37 compact HMM detectability control did not pass")
+    tcn_control = control_by_family.get("tcn", {})
+    tcn_additive = tcn_control.get("additive", {}).get("status")
+    tcn_xor = tcn_control.get("xor_interaction", {}).get("status")
+    criteria["positive_control_precondition"] = {
+        "hmm": "PASS_ADDITIVE_DETECTABILITY",
+        "tcn": "additive PASS and nearby-XOR PASS",
+        "incomplete_action": "STOP_EXPLORATORY",
+    }
+    for row in decisions:
+        row["same_budget_control"] = control_by_family[row["family"]]
+        row["same_budget_control_pass"] = (
+            row["family"] == "hmm" or (tcn_additive == "PASS" and tcn_xor == "PASS")
+        )
+        if row["family"] == "tcn" and (tcn_additive != "PASS" or tcn_xor != "PASS"):
+            row["status"] = "STOP_EXPLORATORY"
+            row["budget_assessment"] = "BUDGET_INSUFFICIENT_FOR_REQUIRED_CONTROLS"
+            row["interpretation"] = (
+                "At least one 200-update held-out control did not pass; this candidate "
+                "cannot advance or support a biological absence claim."
+            )
+        if row["family"] == "tcn" and tcn_xor != "PASS":
+            row["interaction_assessment"] = "BUDGET_INSUFFICIENT_FOR_INTERACTION"
+            row["interaction_absence_claim"] = "FORBIDDEN"
+    return decisions, criteria
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--metrics-json", type=Path, required=True)
@@ -180,7 +214,8 @@ def main() -> None:
         "manifest_sha256", "parent_contract_sha256", "contract_amendment_sha256",
         "positive_control_sha256", "positive_control_receipt_sha256",
         "canonical_metrics_sha256", "canonical_metrics_receipt_sha256",
-        "truth_sha256", "run_overlay", "feature_evidence", "container_digest",
+        "truth_sha256", "baseline_provenance", "run_overlay", "feature_evidence",
+        "container_digest",
     )
     for field in shared_evidence_fields:
         encoded = {
@@ -189,6 +224,21 @@ def main() -> None:
         }
         require(len(encoded) == 1 and next(iter(encoded)) not in ("null", '""'),
                 f"M37 compact family {field} differs")
+    baseline_provenance = family_audits[0]["baseline_provenance"]
+    require(isinstance(baseline_provenance, dict) and
+            baseline_provenance.get("method") == "FLARE" and
+            baseline_provenance.get("upstream_stage") == "M34_PARSE_FLARE_F0" and
+            baseline_provenance.get("truth_blind") is True,
+            "M37 compact baseline provenance is not truth-blind FLARE")
+    for row in rows:
+        metadata = row.get("metrics", {}).get("baseline_metadata")
+        require(isinstance(metadata, dict) and
+                metadata.get("method") == baseline_provenance.get("method") and
+                metadata.get("source_sha256") == baseline_provenance.get("source_sha256") and
+                metadata.get("upstream_stage") == baseline_provenance.get("upstream_stage") and
+                metadata.get("upstream_receipt_sha256") ==
+                baseline_provenance.get("upstream_receipt_sha256"),
+                "M37 compact metric/F0 provenance binding differs")
     receipt_by_family = {str(row.get("family", "")): row for row in family_audit_receipts}
     require(set(receipt_by_family) == {"hmm", "tcn"},
             "M37 compact family audit receipt identities differ")
@@ -221,24 +271,9 @@ def main() -> None:
     control_by_family = {
         str(row["family"]): row.get("positive_control_status") for row in family_audits
     }
-    require(control_by_family.get("hmm", {}).get("status") ==
-            "PASS_ADDITIVE_DETECTABILITY",
-            "M37 compact HMM detectability control did not pass")
-    tcn_control = control_by_family.get("tcn", {})
-    tcn_additive = tcn_control.get("additive", {}).get("status")
-    tcn_xor = tcn_control.get("xor_interaction", {}).get("status")
-    for row in decisions:
-        row["same_budget_control"] = control_by_family[row["family"]]
-        if row["family"] == "tcn" and tcn_additive != "PASS":
-            row["status"] = "STOP_EXPLORATORY"
-            row["budget_assessment"] = "BUDGET_INSUFFICIENT"
-            row["interpretation"] = (
-                "The 200-update control did not learn an additive held-out rule; "
-                "this candidate cannot support a biological absence claim."
-            )
-        if row["family"] == "tcn" and tcn_xor != "PASS":
-            row["interaction_assessment"] = "BUDGET_INSUFFICIENT_FOR_INTERACTION"
-            row["interaction_absence_claim"] = "FORBIDDEN"
+    decisions, criteria = apply_positive_control_gate(
+        decisions, criteria, control_by_family,
+    )
     authenticated_sources = {path.name: sha256(path) for path in args.auth_file}
     require(len(authenticated_sources) == len(args.auth_file) and
             {"m37_trace_compact_decision.py", "m37_trace_collect_metrics.py",
