@@ -22,6 +22,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from _experiment_invariants import validate_exact_locus_partition
 from m33_safe_bridge_core import write_deterministic_npz, write_exclusive_json
 
 
@@ -83,29 +84,6 @@ def parse_expected_an(value: str) -> dict[str, int]:
     require(tuple(result) == ANCESTRIES and all(count > 0 for count in result.values()),
             "expected AN must contain positive AFR, EUR and NAM values in that order")
     return result
-
-
-def validate_exact_locus_partition(
-    full_loci: np.ndarray, common_loci: np.ndarray, selected_rare_loci: np.ndarray,
-) -> dict[str, int]:
-    """Require F_full = F_common disjoint-union selected_rare using real axes.
-
-    M38A has no common-only baseline input and therefore does not call this
-    function.  M38B must call it on its authenticated locus axes before any
-    model is allowed to run.
-    """
-    full = np.asarray(full_loci).reshape(-1)
-    common = np.asarray(common_loci).reshape(-1)
-    rare = np.asarray(selected_rare_loci).reshape(-1)
-    require(np.unique(full).size == full.size and np.unique(common).size == common.size and
-            np.unique(rare).size == rare.size, "locus partitions contain duplicate identifiers")
-    full_set, common_set, rare_set = set(full.tolist()), set(common.tolist()), set(rare.tolist())
-    require(not (common_set & rare_set),
-            "selected_rare intersects F_common; incremental comparison is contaminated")
-    require(common_set | rare_set == full_set,
-            "F_full is not the exact union of F_common and selected_rare")
-    return {"full_loci": len(full_set), "common_loci": len(common_set),
-            "selected_rare_loci": len(rare_set), "overlap_loci": 0}
 
 
 def load_npz(path: Path, expected_members: set[str]) -> dict[str, np.ndarray]:

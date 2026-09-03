@@ -186,12 +186,22 @@ class M38StratificationTest(unittest.TestCase):
         self.assertNotIn("truth", workflow.lower())
 
     def test_m38b_exact_partition_rejects_rare_common_overlap(self) -> None:
+        full = [
+            ("chr22", 1, "A", "G"), ("22", 2, "C", "T"),
+            ("22", 3, "G", "A"), ("22", 4, "T", "C"),
+        ]
         result = validate_exact_locus_partition(
-            np.asarray([1, 2, 3, 4]), np.asarray([1, 2]), np.asarray([3, 4]))
-        self.assertEqual(result["overlap_loci"], 0)
-        with self.assertRaisesRegex(ValueError, "intersects F_common"):
-            validate_exact_locus_partition(
-                np.asarray([1, 2, 3, 4]), np.asarray([1, 2, 3]), np.asarray([3, 4]))
+            full, full[:2], full[2:])
+        self.assertEqual(result["counts"]["overlap"], 0)
+        with self.assertRaisesRegex(ValueError, "intersects selected"):
+            validate_exact_locus_partition(full, full[:3], full[2:])
+
+    def test_m38b_partition_uses_full_variant_identity(self) -> None:
+        full = [("22", 10, "A", "G"), ("22", 10, "A", "T")]
+        result = validate_exact_locus_partition(full, [full[0]], [full[1]])
+        self.assertEqual(result["counts"]["F_full"], 2)
+        with self.assertRaisesRegex(ValueError, "not CHROM/POS/REF/ALT"):
+            validate_exact_locus_partition([1, 2], [1], [2])
 
 
 if __name__ == "__main__":
