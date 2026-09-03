@@ -37,6 +37,29 @@ NULL_REQUIRED_FIELDS = (
     "locus_axis", "positions", "masks", "dosage", "burden",
     "unit_ids", "ancestry_mapping",
 )
+ALLELE_SEMANTIC_FIELDS = (
+    "mode", "effect_alleles", "frequency_estimation_roles",
+    "frequency_source_sha256", "pooled_alt_frequencies",
+    "within_ancestry_alt_frequencies", "rare_threshold",
+    "ancestral_alleles", "ancestral_source_sha256", "novelty_catalogs",
+    "tie_policy",
+)
+NOVELTY_CATALOG_FIELDS = (
+    "catalog_id", "sha256", "effect_allele_states",
+)
+ALLELE_SEMANTIC_MODES = (
+    "ALT", "MINOR", "WITHIN_ANCESTRY_RARE", "DERIVED", "NOVEL",
+)
+PHASE_CONTRACT_FIELDS = (
+    "state", "ploidy", "encoding", "phase_method",
+    "phase_artifact_sha256", "haplotype_axis_sha256", "phase_qc_sha256",
+    "heterozygote_policy", "haplotype_specific_claims",
+)
+PHASE_STATES = ("GENOTYPE", "PHASED", "AMBIGUOUS")
+PARAMETER_ACTIVITY_TRIAL_FIELDS = (
+    "parameter", "parameters", "output", "output_replay",
+)
+PARAMETER_ACTIVITY_OUTPUT_FIELDS = ("axis_sha256", "values")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DNA_ALLELE_RE = re.compile(r"^[ACGT]+$")
 
@@ -48,6 +71,8 @@ STANDARD_CLAIM_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "inputs_authenticated",
             "schemas_valid",
             "locus_partition_valid",
+            "allele_semantics_valid",
+            "phase_contract_valid",
         ),
     ),
     (
@@ -56,10 +81,13 @@ STANDARD_CLAIM_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "inputs_authenticated",
             "schemas_valid",
             "locus_partition_valid",
+            "allele_semantics_valid",
+            "phase_contract_valid",
             "roles_separated",
             "selection_isolated",
             "fixture_matches_production",
             "null_invariants_valid",
+            "parameter_activity_valid",
         ),
     ),
     (
@@ -68,10 +96,13 @@ STANDARD_CLAIM_REQUIREMENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "inputs_authenticated",
             "schemas_valid",
             "locus_partition_valid",
+            "allele_semantics_valid",
+            "phase_contract_valid",
             "roles_separated",
             "selection_isolated",
             "fixture_matches_production",
             "null_invariants_valid",
+            "parameter_activity_valid",
             "analysis_preregistered",
             "score_independent",
             "power_adequate",
@@ -383,6 +414,529 @@ def _require_sha256(value: Any, *, label: str) -> str:
     require(isinstance(value, str) and SHA256_RE.fullmatch(value) is not None,
             f"{label} is not a lowercase SHA-256")
     return value
+
+
+def _optional_sha256(value: Any, *, label: str) -> str | None:
+    if value is None:
+        return None
+    return _require_sha256(value, label=label)
+
+
+def _frequency_vector(
+    values: Any, *, expected_length: int, label: str,
+) -> tuple[float, ...]:
+    require(isinstance(values, Sequence) and
+            not isinstance(values, (str, bytes, bytearray)),
+            f"{label} must be a sequence")
+    require(len(values) == expected_length,
+            f"{label} length differs from the locus axis")
+    return tuple(
+        _unit_interval(value, label=f"{label}[{index}]")
+        for index, value in enumerate(values)
+    )
+
+
+def validate_allele_semantics(
+    locus_axis: Sequence[Any],
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate which biological allele every encoded value represents.
+
+    The five supported modes are deliberately distinct.  ``ALT`` is a VCF
+    encoding choice; ``MINOR`` and ``WITHIN_ANCESTRY_RARE`` require authenticated
+    frequency estimates; ``DERIVED`` requires an authenticated ancestral-state
+    source; and ``NOVEL`` requires callable absence of the effect allele in every
+    declared external catalog.  Evidence roles used to define frequency-based
+    alleles may not include validation, scoring, evaluation or holdout data.
+    """
+    loci = normalize_locus_axis(locus_axis, label="allele_semantics.locus_axis")
+    require(loci, "allele_semantics.locus_axis is empty")
+    require(isinstance(contract, Mapping) and
+            set(contract) == set(ALLELE_SEMANTIC_FIELDS),
+            "allele semantic contract fields differ")
+
+    mode = _strict_id(contract["mode"], label="allele_semantics.mode")
+    require(mode in ALLELE_SEMANTIC_MODES,
+            f"unsupported allele semantic mode: {mode}")
+
+    raw_effect = contract["effect_alleles"]
+    require(isinstance(raw_effect, Sequence) and
+            not isinstance(raw_effect, (str, bytes, bytearray)) and
+            len(raw_effect) == len(loci),
+            "effect_alleles length differs from the locus axis")
+    effect_alleles: tuple[str, ...] = tuple(
+        _normalize_allele(value, label=f"effect_alleles[{index}]")
+        for index, value in enumerate(raw_effect)
+    )
+    for index, (effect, locus) in enumerate(zip(effect_alleles, loci)):
+        require(effect in locus[2:],
+                f"effect_alleles[{index}] is neither REF nor ALT")
+
+    raw_roles = contract["frequency_estimation_roles"]
+    require(isinstance(raw_roles, Sequence) and
+            not isinstance(raw_roles, (str, bytes, bytearray)),
+            "frequency_estimation_roles must be a sequence")
+    roles = tuple(
+        _strict_id(value, label="frequency_estimation_roles")
+        for value in raw_roles
+    )
+    require(len(roles) == len(set(roles)),
+            "frequency_estimation_roles contains duplicates")
+    for role in roles:
+        require(role == role.upper() and
+                re.fullmatch(r"[A-Z][A-Z0-9_:-]*", role) is not None,
+                f"frequency estimation role is not explicit uppercase text: {role}")
+        tokens = set(re.split(r"[_:-]+", role))
+        require(not (tokens & {
+            "SCORE", "TEST", "EVAL", "VALID", "VALIDATION", "HOLDOUT",
+        }),
+                f"frequency estimation uses an evaluation role: {role}")
+
+    frequency_source = _optional_sha256(
+        contract["frequency_source_sha256"],
+        label="frequency_source_sha256",
+    )
+    pooled = None
+    if contract["pooled_alt_frequencies"] is not None:
+        pooled = _frequency_vector(
+            contract["pooled_alt_frequencies"], expected_length=len(loci),
+            label="pooled_alt_frequencies",
+        )
+
+    raw_within = contract["within_ancestry_alt_frequencies"]
+    require(isinstance(raw_within, Mapping),
+            "within_ancestry_alt_frequencies must be a mapping")
+    require(all(isinstance(key, str) for key in raw_within),
+            "within_ancestry_alt_frequencies has a non-text ancestry label")
+    within: dict[str, tuple[float, ...]] = {}
+    for ancestry, values in sorted(raw_within.items()):
+        label = _strict_id(ancestry, label="ancestry label")
+        require(label == label.upper(),
+                f"ancestry label is not uppercase: {label}")
+        within[label] = _frequency_vector(
+            values, expected_length=len(loci),
+            label=f"within_ancestry_alt_frequencies.{label}",
+        )
+
+    threshold = contract["rare_threshold"]
+    if threshold is not None:
+        require(isinstance(threshold, (int, float)) and
+                not isinstance(threshold, bool) and math.isfinite(float(threshold)) and
+                0.0 < float(threshold) < 0.5,
+                "rare_threshold must be finite, positive and below 0.5")
+        threshold = float(threshold)
+
+    ancestral = None
+    if contract["ancestral_alleles"] is not None:
+        raw_ancestral = contract["ancestral_alleles"]
+        require(isinstance(raw_ancestral, Sequence) and
+                not isinstance(raw_ancestral, (str, bytes, bytearray)) and
+                len(raw_ancestral) == len(loci),
+                "ancestral_alleles length differs from the locus axis")
+        ancestral = tuple(
+            _normalize_allele(value, label=f"ancestral_alleles[{index}]")
+            for index, value in enumerate(raw_ancestral)
+        )
+        for index, (allele, locus) in enumerate(zip(ancestral, loci)):
+            require(allele in locus[2:],
+                    f"ancestral_alleles[{index}] is neither REF nor ALT")
+    ancestral_source = _optional_sha256(
+        contract["ancestral_source_sha256"],
+        label="ancestral_source_sha256",
+    )
+
+    raw_catalogs = contract["novelty_catalogs"]
+    require(isinstance(raw_catalogs, Sequence) and
+            not isinstance(raw_catalogs, (str, bytes, bytearray)),
+            "novelty_catalogs must be a sequence")
+    catalogs: list[dict[str, Any]] = []
+    catalog_ids: set[str] = set()
+    allowed_catalog_states = {"PRESENT", "ABSENT_CALLABLE", "UNKNOWN"}
+    for index, catalog in enumerate(raw_catalogs):
+        require(isinstance(catalog, Mapping) and
+                set(catalog) == set(NOVELTY_CATALOG_FIELDS),
+                f"novelty catalog {index} fields differ")
+        catalog_id = _strict_id(
+            catalog["catalog_id"], label=f"novelty catalog {index}.catalog_id"
+        )
+        require(catalog_id not in catalog_ids,
+                f"duplicate novelty catalog: {catalog_id}")
+        catalog_ids.add(catalog_id)
+        states = catalog["effect_allele_states"]
+        require(isinstance(states, Sequence) and
+                not isinstance(states, (str, bytes, bytearray)) and
+                len(states) == len(loci),
+                f"novelty catalog {catalog_id} state length differs")
+        normalized_states = tuple(
+            _strict_id(state, label=f"novelty catalog {catalog_id}.state[{state_index}]")
+            for state_index, state in enumerate(states)
+        )
+        require(set(normalized_states) <= allowed_catalog_states,
+                f"novelty catalog {catalog_id} has an unsupported state")
+        catalogs.append({
+            "catalog_id": catalog_id,
+            "sha256": _require_sha256(
+                catalog["sha256"], label=f"novelty catalog {catalog_id}.sha256"
+            ),
+            "effect_allele_states": normalized_states,
+        })
+
+    tie_policy = _strict_id(contract["tie_policy"], label="tie_policy")
+    require(tie_policy in {"REJECT", "NOT_APPLICABLE"},
+            "tie_policy must be REJECT or NOT_APPLICABLE")
+
+    frequency_modes = {"MINOR", "WITHIN_ANCESTRY_RARE"}
+    if mode in frequency_modes:
+        require(roles, f"{mode} requires frequency_estimation_roles")
+        require(frequency_source is not None,
+                f"{mode} requires frequency_source_sha256")
+    else:
+        require(not roles and frequency_source is None,
+                f"{mode} must not carry frequency-estimation evidence")
+
+    if mode == "ALT":
+        require(all(effect == locus[3] for effect, locus in zip(effect_alleles, loci)),
+                "ALT mode has a non-ALT effect allele")
+        require(pooled is None and not within and threshold is None,
+                "ALT mode must not carry frequency evidence")
+        require(ancestral is None and ancestral_source is None and not catalogs,
+                "ALT mode must not carry derived or novelty evidence")
+        require(tie_policy == "NOT_APPLICABLE",
+                "ALT mode requires NOT_APPLICABLE tie_policy")
+    elif mode == "MINOR":
+        require(pooled is not None and not within and threshold is None,
+                "MINOR requires only pooled ALT frequencies")
+        require(ancestral is None and ancestral_source is None and not catalogs,
+                "MINOR must not carry derived or novelty evidence")
+        require(tie_policy == "REJECT", "MINOR requires REJECT tie_policy")
+        for index, (alt_frequency, effect, locus) in enumerate(
+            zip(pooled, effect_alleles, loci)
+        ):
+            require(alt_frequency != 0.5,
+                    f"MINOR locus {index} has no unique minor allele")
+            expected = locus[3] if alt_frequency < 0.5 else locus[2]
+            require(effect == expected,
+                    f"MINOR effect allele disagrees with frequency at locus {index}")
+    elif mode == "WITHIN_ANCESTRY_RARE":
+        require(pooled is None and len(within) >= 2 and threshold is not None,
+                "WITHIN_ANCESTRY_RARE requires at least two ancestry frequency axes")
+        require(ancestral is None and ancestral_source is None and not catalogs,
+                "WITHIN_ANCESTRY_RARE must not carry derived or novelty evidence")
+        require(tie_policy == "NOT_APPLICABLE",
+                "WITHIN_ANCESTRY_RARE requires NOT_APPLICABLE tie_policy")
+        for ancestry, alt_frequencies in within.items():
+            for index, (alt_frequency, effect, locus) in enumerate(
+                zip(alt_frequencies, effect_alleles, loci)
+            ):
+                effect_frequency = (
+                    alt_frequency if effect == locus[3] else 1.0 - alt_frequency
+                )
+                require(effect_frequency < threshold,
+                        f"effect allele is not rare in {ancestry} at locus {index}")
+    elif mode == "DERIVED":
+        require(pooled is None and not within and threshold is None,
+                "DERIVED must not carry frequency evidence")
+        require(ancestral is not None and ancestral_source is not None,
+                "DERIVED requires ancestral alleles and an authenticated source")
+        require(not catalogs, "DERIVED must not carry novelty evidence")
+        require(tie_policy == "NOT_APPLICABLE",
+                "DERIVED requires NOT_APPLICABLE tie_policy")
+        for index, (effect, ancestor) in enumerate(zip(effect_alleles, ancestral)):
+            require(effect != ancestor,
+                    f"DERIVED effect allele equals the ancestral allele at locus {index}")
+    else:
+        require(pooled is None and not within and threshold is None,
+                "NOVEL must not carry frequency evidence")
+        require(ancestral is None and ancestral_source is None,
+                "NOVEL must not carry ancestral-state evidence")
+        require(catalogs, "NOVEL requires at least one authenticated catalog")
+        require(tie_policy == "NOT_APPLICABLE",
+                "NOVEL requires NOT_APPLICABLE tie_policy")
+        for catalog in catalogs:
+            require(set(catalog["effect_allele_states"]) == {"ABSENT_CALLABLE"},
+                    f"NOVEL is not callable-absent in catalog {catalog['catalog_id']}")
+
+    normalized = {
+        "mode": mode,
+        "locus_axis": loci,
+        "effect_alleles": effect_alleles,
+        "frequency_estimation_roles": roles,
+        "frequency_source_sha256": frequency_source,
+        "pooled_alt_frequencies": pooled,
+        "within_ancestry_alt_frequencies": within,
+        "rare_threshold": threshold,
+        "ancestral_alleles": ancestral,
+        "ancestral_source_sha256": ancestral_source,
+        "novelty_catalogs": catalogs,
+        "tie_policy": tie_policy,
+    }
+    return {
+        "status": "PASS_ALLELE_SEMANTICS",
+        "mode": mode,
+        "locus_count": len(loci),
+        "ref_effect_count": sum(
+            effect == locus[2] for effect, locus in zip(effect_alleles, loci)
+        ),
+        "alt_effect_count": sum(
+            effect == locus[3] for effect, locus in zip(effect_alleles, loci)
+        ),
+        "frequency_estimation_roles": list(roles),
+        "ancestries": sorted(within),
+        "novelty_catalogs": sorted(catalog_ids),
+        "contract_sha256": canonical_sha256(
+            normalized, domain="DNABR_ALLELE_SEMANTICS_V1"
+        ),
+    }
+
+
+def validate_phase_contract(contract: Mapping[str, Any]) -> dict[str, Any]:
+    """Distinguish diploid genotypes, certified phase and ambiguous phase.
+
+    Unphased or ambiguous heterozygotes cannot support haplotype-specific
+    assignments.  A phased representation must authenticate both its phase
+    artifact and ordered haplotype axis.  Haplotype-specific scientific claims
+    additionally require a phase-QC artifact.
+    """
+    require(isinstance(contract, Mapping) and
+            set(contract) == set(PHASE_CONTRACT_FIELDS),
+            "phase contract fields differ")
+    state = _strict_id(contract["state"], label="phase.state")
+    require(state in PHASE_STATES, f"unsupported phase state: {state}")
+    ploidy = contract["ploidy"]
+    require(isinstance(ploidy, int) and not isinstance(ploidy, bool) and ploidy == 2,
+            "phase contract currently requires diploid data")
+    encoding = _strict_id(contract["encoding"], label="phase.encoding")
+    method = contract["phase_method"]
+    if method is not None:
+        method = _strict_id(method, label="phase.phase_method")
+    phase_artifact = _optional_sha256(
+        contract["phase_artifact_sha256"], label="phase.phase_artifact_sha256"
+    )
+    haplotype_axis = _optional_sha256(
+        contract["haplotype_axis_sha256"], label="phase.haplotype_axis_sha256"
+    )
+    phase_qc = _optional_sha256(
+        contract["phase_qc_sha256"], label="phase.phase_qc_sha256"
+    )
+    heterozygote_policy = _strict_id(
+        contract["heterozygote_policy"], label="phase.heterozygote_policy"
+    )
+    claims = contract["haplotype_specific_claims"]
+    require(isinstance(claims, bool),
+            "haplotype_specific_claims must be boolean")
+
+    if state == "GENOTYPE":
+        require(encoding == "DIPLOID_DOSAGE",
+                "GENOTYPE requires DIPLOID_DOSAGE encoding")
+        require(method is None and phase_artifact is None and
+                haplotype_axis is None and phase_qc is None,
+                "GENOTYPE must not carry phase artifacts")
+        require(heterozygote_policy == "UNASSIGNED",
+                "GENOTYPE heterozygotes must remain UNASSIGNED")
+        require(not claims, "GENOTYPE cannot support haplotype-specific claims")
+    elif state == "PHASED":
+        require(encoding == "ORDERED_HAPLOTYPES",
+                "PHASED requires ORDERED_HAPLOTYPES encoding")
+        require(method is not None and phase_artifact is not None and
+                haplotype_axis is not None,
+                "PHASED requires method, artifact and ordered haplotype axis")
+        require(heterozygote_policy == "ASSIGNED_BY_PHASE",
+                "PHASED requires ASSIGNED_BY_PHASE heterozygote policy")
+        if claims:
+            require(phase_qc is not None,
+                    "haplotype-specific claims require phase_qc_sha256")
+    else:
+        require(encoding == "PHASE_UNCERTAIN",
+                "AMBIGUOUS requires PHASE_UNCERTAIN encoding")
+        require((method is None) == (phase_artifact is None),
+                "AMBIGUOUS phase method and artifact must be declared together")
+        require(haplotype_axis is None and phase_qc is None,
+                "AMBIGUOUS cannot certify a haplotype axis or phase QC")
+        require(heterozygote_policy in {"UNASSIGNED", "MARGINALIZE"},
+                "AMBIGUOUS heterozygotes must be UNASSIGNED or MARGINALIZE")
+        require(not claims, "AMBIGUOUS cannot support haplotype-specific claims")
+
+    normalized = {
+        "state": state,
+        "ploidy": ploidy,
+        "encoding": encoding,
+        "phase_method": method,
+        "phase_artifact_sha256": phase_artifact,
+        "haplotype_axis_sha256": haplotype_axis,
+        "phase_qc_sha256": phase_qc,
+        "heterozygote_policy": heterozygote_policy,
+        "haplotype_specific_claims": claims,
+    }
+    return {
+        "status": "PASS_PHASE_CONTRACT",
+        "state": state,
+        "haplotype_specific_claims": claims,
+        "phase_qc_authenticated": phase_qc is not None,
+        "contract_sha256": canonical_sha256(
+            normalized, domain="DNABR_PHASE_CONTRACT_V1"
+        ),
+    }
+
+
+def _reject_parameter_metadata(value: Any, *, path: str) -> None:
+    """Keep activity fingerprints restricted to decision-relevant outputs."""
+    forbidden = {
+        "parameter", "parameters", "params", "config", "configuration",
+        "command", "command_line", "run_id", "timestamp", "provenance",
+    }
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized_key = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
+            require(normalized_key not in forbidden,
+                    f"{path} contains parameter or run metadata: {key}")
+            _reject_parameter_metadata(item, path=f"{path}.{key}")
+    elif isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    ):
+        for index, item in enumerate(value):
+            _reject_parameter_metadata(item, path=f"{path}[{index}]")
+
+
+def _validate_activity_output(value: Any, *, label: str) -> dict[str, Any]:
+    require(isinstance(value, Mapping) and
+            set(value) == set(PARAMETER_ACTIVITY_OUTPUT_FIELDS),
+            f"{label} fields differ")
+    axis = _require_sha256(value["axis_sha256"], label=f"{label}.axis_sha256")
+    values = value["values"]
+    require((isinstance(values, Mapping) and values) or
+            (isinstance(values, Sequence) and
+             not isinstance(values, (str, bytes, bytearray)) and values),
+            f"{label}.values must be a non-empty mapping or sequence")
+    normalized_values = _canonical_value(values, path=f"{label}.values")
+    _reject_parameter_metadata(normalized_values, path=f"{label}.values")
+    return {
+        "axis_sha256": axis,
+        "values": normalized_values,
+        "values_sha256": canonical_sha256(
+            normalized_values, domain="DNABR_PARAMETER_ACTIVITY_OUTPUT_V1"
+        ),
+    }
+
+
+def validate_parameter_activity(
+    baseline_parameters: Mapping[str, Any],
+    baseline_output: Mapping[str, Any],
+    baseline_output_replay: Mapping[str, Any],
+    trials: Sequence[Mapping[str, Any]],
+    *,
+    required_parameters: Sequence[str],
+) -> dict[str, Any]:
+    """Prove that declared parameters are wired to decision-relevant output.
+
+    Each trial must change exactly one required parameter, hold the complete
+    remaining configuration fixed and reproduce its output byte-for-byte at the
+    canonical-value level.  Output snapshots contain only a fixed biological
+    axis hash and decision-relevant values; embedding configuration or run
+    metadata in those values is rejected because it can make an inert parameter
+    appear active.
+    """
+    require(isinstance(baseline_parameters, Mapping) and baseline_parameters,
+            "baseline_parameters is empty")
+    require(all(isinstance(key, str) and key for key in baseline_parameters),
+            "baseline_parameters has an invalid key")
+    baseline = _canonical_value(
+        baseline_parameters, path="baseline_parameters"
+    )
+    required = tuple(required_parameters)
+    require(required and len(required) == len(set(required)) and
+            all(isinstance(name, str) and name for name in required),
+            "required_parameters must be unique non-empty strings")
+    require(set(required) <= set(baseline),
+            "required_parameters references an absent baseline parameter")
+    require(isinstance(trials, Sequence) and
+            not isinstance(trials, (str, bytes, bytearray)) and trials,
+            "parameter activity trials are empty")
+
+    baseline_snapshot = _validate_activity_output(
+        baseline_output, label="baseline_output"
+    )
+    baseline_replay = _validate_activity_output(
+        baseline_output_replay, label="baseline_output_replay"
+    )
+    require(baseline_snapshot == baseline_replay,
+            "baseline output is not reproducible")
+
+    seen: set[str] = set()
+    results: dict[str, dict[str, Any]] = {}
+    baseline_config_sha = canonical_sha256(
+        baseline, domain="DNABR_PARAMETER_CONFIGURATION_V1"
+    )
+    for index, trial in enumerate(trials):
+        require(isinstance(trial, Mapping) and
+                set(trial) == set(PARAMETER_ACTIVITY_TRIAL_FIELDS),
+                f"parameter activity trial {index} fields differ")
+        parameter = _strict_id(
+            trial["parameter"], label=f"parameter activity trial {index}.parameter"
+        )
+        require(parameter in required,
+                f"undeclared parameter activity trial: {parameter}")
+        require(parameter not in seen,
+                f"duplicate parameter activity trial: {parameter}")
+        seen.add(parameter)
+        candidate_raw = trial["parameters"]
+        require(isinstance(candidate_raw, Mapping) and
+                set(candidate_raw) == set(baseline),
+                f"parameter activity trial {parameter} configuration fields differ")
+        candidate = _canonical_value(
+            candidate_raw, path=f"parameter_activity.{parameter}.parameters"
+        )
+        changed = [
+            name for name in baseline if baseline[name] != candidate[name]
+        ]
+        require(changed == [parameter],
+                f"parameter activity trial {parameter} is not one-factor-at-a-time")
+
+        output = _validate_activity_output(
+            trial["output"], label=f"parameter_activity.{parameter}.output"
+        )
+        replay = _validate_activity_output(
+            trial["output_replay"],
+            label=f"parameter_activity.{parameter}.output_replay",
+        )
+        require(output == replay,
+                f"parameter activity output is not reproducible: {parameter}")
+        require(output["axis_sha256"] == baseline_snapshot["axis_sha256"],
+                f"parameter activity changes the comparison axis: {parameter}")
+        require(output["values_sha256"] != baseline_snapshot["values_sha256"],
+                f"parameter is inactive on decision-relevant output: {parameter}")
+        candidate_config_sha = canonical_sha256(
+            candidate, domain="DNABR_PARAMETER_CONFIGURATION_V1"
+        )
+        require(candidate_config_sha != baseline_config_sha,
+                f"parameter activity configuration is unchanged: {parameter}")
+        results[parameter] = {
+            "baseline_value_sha256": canonical_sha256(
+                baseline[parameter], domain="DNABR_PARAMETER_VALUE_V1"
+            ),
+            "perturbed_value_sha256": canonical_sha256(
+                candidate[parameter], domain="DNABR_PARAMETER_VALUE_V1"
+            ),
+            "perturbed_config_sha256": candidate_config_sha,
+            "output_sha256": output["values_sha256"],
+            "replay_exact": True,
+            "active": True,
+        }
+
+    require(seen == set(required),
+            "parameter activity trials do not cover required_parameters exactly")
+    core = {
+        "status": "PASS_PARAMETER_ACTIVITY",
+        "baseline_config_sha256": baseline_config_sha,
+        "baseline_output_sha256": baseline_snapshot["values_sha256"],
+        "axis_sha256": baseline_snapshot["axis_sha256"],
+        "parameters": {name: results[name] for name in sorted(results)},
+    }
+    return {
+        **core,
+        "contract_sha256": canonical_sha256(
+            core, domain="DNABR_PARAMETER_ACTIVITY_CONTRACT_V1"
+        ),
+    }
 
 
 def validate_selection_isolation(
