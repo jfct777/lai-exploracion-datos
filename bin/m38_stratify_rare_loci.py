@@ -109,7 +109,10 @@ def validate_exact_locus_partition(
 
 
 def load_npz(path: Path, expected_members: set[str]) -> dict[str, np.ndarray]:
-    require(path.is_file() and not path.is_symlink(), f"invalid input: {path}")
+    # Nextflow stages immutable inputs as symbolic links inside the task
+    # directory.  Content authentication is enforced separately by SHA-256,
+    # so rejecting those links would reject the normal production interface.
+    require(path.is_file(), f"invalid input: {path}")
     with np.load(path, allow_pickle=False) as archive:
         require(set(archive.files) == expected_members,
                 f"{path.name} members differ")

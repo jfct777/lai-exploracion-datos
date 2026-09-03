@@ -154,6 +154,24 @@ class M38StratificationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "locus axes"):
                 run(bad_axis)
 
+    def test_accepts_nextflow_staged_symlinks_with_authenticated_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_root = root / "source"
+            source_root.mkdir()
+            inputs = make_inputs(source_root)
+            staged = root / "staged"
+            staged.mkdir()
+            linked_inputs: dict[str, Path] = {}
+            for name, source in inputs.items():
+                link = staged / source.name
+                link.symlink_to(source)
+                linked_inputs[name] = link
+            args = arguments(linked_inputs, root / "out")
+            summary = run(args)
+            self.assertEqual(summary["status"],
+                             "PASS_REF_TRAIN_ONLY_DESCRIPTIVE_STRATIFICATION")
+
     def test_workflow_is_personal_bucket_and_fail_closed(self) -> None:
         root = Path(__file__).resolve().parents[1]
         module = (root / "modules/38_RARE_LOCUS_STRATIFICATION.nf").read_text()
