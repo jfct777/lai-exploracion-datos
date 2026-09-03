@@ -158,6 +158,36 @@ def test_supported_tcn_residual_is_simplex_and_can_revive_flare_zero() -> None:
     assert torch.equal(output[:, 2], baseline[:, 2])
 
 
+def test_structural_zero_keeps_a_finite_training_gradient_while_rd_is_exact() -> None:
+    import torch
+    from m37_trace_core import PROBABILITY_FLOOR, TraceSpec, build_tcn
+    from m37_trace_train import probability_nll
+    model = build_tcn(
+        TraceSpec(hidden_dim=32, depth=2, kernel_size=3, dropout=0.0,
+                  dilations=(1, 2)),
+        20,
+    ).train()
+    baseline = torch.full((1, 3, 6), 0.2)
+    baseline[:, :, 5] = 0.0
+    with torch.no_grad():
+        model.head.weight.zero_()
+        model.head.bias.zero_()
+        model.confidence.weight.zero_()
+        model.confidence.bias.zero_()
+    event = (
+        torch.ones((1, 20)), torch.ones(1, dtype=torch.long),
+        torch.zeros(1, dtype=torch.long), torch.zeros(1, dtype=torch.long),
+        torch.tensor([1]), torch.ones(1),
+    )
+    prediction = model(*event, baseline)
+    loss = probability_nll(prediction[:, 1:2], torch.tensor([[5]]))
+    loss.backward()
+    gradient = model.head.bias.grad
+    assert gradient is not None and torch.isfinite(gradient).all()
+    assert abs(float(gradient[5])) > 1e-3
+    assert PROBABILITY_FLOOR == 1e-12
+
+
 def test_rd_removes_every_ragged_event_channel_while_geometry_keeps_only_locations() -> None:
     with tempfile.TemporaryDirectory() as raw:
         root = Path(raw)

@@ -1,18 +1,18 @@
 {
   "schema_version": "1.0.0",
   "stage": "M37_TRACE_COMPACT_SWEEP_AMENDMENT",
-  "status": "PREREGISTERED_FOR_20260903B_NO_EXECUTION",
+  "status": "PREREGISTERED_FOR_20260903C_NO_EXECUTION",
   "parent_contract": "conf/m37_trace_sweep_contract.json",
   "parent_contract_sha256": "50a27f6c597d883b0aeb87671210d7d9478d9ac87821207b58dd30a045e238be",
   "prospective_timing": {
-    "state": "FROZEN_BEFORE_FIRST_CONSUMABLE_20260903B_CANDIDATE_SWEEP_EXECUTION",
+    "state": "FROZEN_BEFORE_FIRST_CONSUMABLE_20260903C_CANDIDATE_SWEEP_EXECUTION",
     "trigger": "The published R0 defaults HMM(hazard=12,lambda=1) and TCN(h=32,d=2,k=3,dropout=0,lr=3e-4,updates=200,dilations=1,2) did not pass the prespecified promotion gate.",
     "interpretation": "Finite design-space coverage after a failed default screen; not a post-hoc rescue, VALID opening, or scientific closure."
   },
   "superseded_execution": {
     "run_id": "m37-r0-compact-sweep-20260903a",
     "disposition": "SUPERSEDED_NO_CONSUMABLE_RESULTS",
-    "timing": "launched before the residual-floor correction and before this 20260903b freeze",
+    "timing": "launched before the residual-floor correction and before the 20260903c freeze",
     "result_use": "FORBIDDEN_FOR_CANDIDATE_SELECTION_OR_INFERENCE",
     "staged_sha256": {
       "m37_trace_core.py": "068aa2b22c37b90d677fb92bcd0ae67540c2001994e0587a0a3114ea103f01c7",
@@ -20,6 +20,13 @@
       "m37_trace_compact_candidates.json": "9112c81d810ffe9c2d771cd24ff69e63cac039f3bfc6281f3846d371fc2ea6ce",
       "m37_trace_compact_sweep_amendment.json": "b3704ce0c4ba2b93855f65176cb8723f4d6f9b356bce680de826762118ae123c"
     }
+  },
+  "superseded_execution_20260903b": {
+    "run_id": "m37-r0-compact-sweep-20260903b",
+    "disposition": "SUPERSEDED_AFTER_LAUNCH_NONCONSUMABLE",
+    "execution": "capacity control, HMM, TCN and paired-metric collection completed; the coordinator then failed before the decision stage",
+    "reason": "the launched snapshot preceded the all-candidate three-seed capacity gate and exposed a Nextflow decision-channel wiring failure",
+    "result_use": "FORBIDDEN_FOR_CANDIDATE_SELECTION_OR_INFERENCE"
   },
   "scope": {
     "root": "R0",
@@ -53,15 +60,16 @@
     "evidence_lambda": [0.25, 0.5, 1.0, 2.0],
     "event_radius_cM": [0.05, 0.1, 0.2, 0.5],
     "event_radius_amendment": {
-      "timing": "PROSPECTIVE_BEFORE_FIRST_CONSUMABLE_20260903B_CANDIDATE_SWEEP_EXECUTION",
+      "timing": "PROSPECTIVE_BEFORE_FIRST_CONSUMABLE_20260903C_CANDIDATE_SWEEP_EXECUTION",
       "role": "training shard calendar and continuous triangular event splat only",
       "metric_alignment": "all candidates are scored at the fixed 0.05, 0.1, 0.2 and 0.5 cM edge tolerances; promotion remains fixed at 0.2 cM",
       "not_allowed": "changing the radius after candidate metrics are observed"
     },
     "execution": {
-      "updates": 200,
       "validation_every": 25,
-      "early_stopping_patience": 4
+      "early_stopping_patience": 4,
+      "budget_ladder_updates": [200, 400, 800, 1600],
+      "paired_arm_budget_audit": "RE, RD, POOLED, SHAM and GEOMETRY share requested_updates, validation_every and early_stopping_patience; each arm records requested_updates, completed_updates and best_checkpoint_update"
     },
     "seed": 1103,
     "coverage": {
@@ -88,20 +96,22 @@
       "evidence_lambda": {"0.25": 1, "0.5": 2, "1.0": 1, "2.0": 2}
     },
     "residual_operator": {
-      "version": "RAW_F0_GATED_MIXTURE_V2",
+      "version": "RAW_F0_GATED_MIXTURE_V3_COHERENT_FLOOR",
       "epsilon": 1e-12,
       "formula": "q=softmax(log(clamp(F0,epsilon))+delta); p=(1-gate)*F0+gate*q; gate=sigmoid(confidence)*spatial_support",
+      "training_loss": "mean[-log(p_true + epsilon)] with the identical epsilon=1e-12",
       "properties": [
         "RD with no splats is exactly raw F0",
         "supported arms can revive a state assigned zero probability by FLARE",
+        "a true state with F0=0 retains a finite training gradient",
         "the output remains on the probability simplex"
       ],
-      "reason": "remove the prior clamp-and-renormalize RD-vs-F0 artifact before any consumable 20260903b candidate sweep execution"
+      "reason": "remove the prior clamp-and-renormalize RD-vs-F0 artifact and the proposal/loss floor mismatch before any consumable 20260903c candidate sweep execution"
     }
   },
   "default_replay": {
     "hmm": "reproduce all five published default-arm R0 metrics before evaluating HMM sweep candidates",
-    "tcn": "reference-only rerun under RAW_F0_GATED_MIXTURE_V2; old TCN metrics are not an equivalence gate because the residual operator changed prospectively",
+    "tcn": "reference-only rerun under RAW_F0_GATED_MIXTURE_V3_COHERENT_FLOOR using the first capacity-qualified candidate; old TCN metrics are not an equivalence gate because the residual operator changed prospectively",
     "absolute_tolerance": 1e-6,
     "relative_tolerance": 1e-6
   },
@@ -132,9 +142,63 @@
     "pareto_only_promotion": "FORBIDDEN"
   },
   "positive_control_policy": {
-    "same_budget_updates": 200,
-    "anchor_candidate_id": "tcn_h32_d2_k3_do0_lr1e3_r02_l1",
-    "promotion_precondition": "HMM additive PASS; TCN additive PASS and nearby-XOR PASS. Candidates may be scored when a TCN control is budget-insufficient, but no TCN candidate may advance.",
-    "failure_rule": "A failed same-budget control means BUDGET_INSUFFICIENT, not absence of biological signal and not scientific closure"
+    "budget_ladder_updates": [200, 400, 800, 1600],
+    "capacity_rung_execution": "each synthetic rung executes exactly its requested updates, scores the final state, disables early stopping and does not restore a best checkpoint",
+    "empirical_reason_for_exact_rungs": "in the prelaunch diagnostic, the requested 1600-update spatial-XOR run stopped at update 300 and restored update 200, making the larger ladder rung ineffective",
+    "promotion_precondition": "Each of the 12 HMM hazard/lambda pairs must pass its deterministic additive control. Each TCN candidate must pass additive, local feature-XOR, its one-bit ablation negative control and structural-zero revival in at least two of the fixed three seeds before it can touch real FIT/TUNE features.",
+    "effective_budget_rule": "For each candidate/seed pair, stop at the first passing rung. For an eligible candidate, use the second-smallest first-pass rung, the minimum budget meeting the 2-of-3 seed rule, unchanged across all five real-data arms.",
+    "failure_rule": "Failure at 200 updates alone means possible undertraining. Failure through 1600 means the candidate did not pass this capacity gate; neither result establishes absence of biological signal."
+  },
+  "invalidated_prelaunch_capacity_fixture": {
+    "disposition": "INVALID_CAPACITY_FIXTURE_NONCONSUMABLE",
+    "real_fit_tune_opened": false,
+    "problems": [
+      "the previous XOR score included a midpoint where triangular event mass and therefore the residual gate were exactly zero",
+      "the previous whole-shard loss was dominated by easy baseline markers outside the XOR target",
+      "the previous single-channel coding did not provide a clean mechanistic test of two-locus integration"
+    ],
+    "allowed_interpretation": "The failed prelaunch diagnostic cannot be used to claim that TCN models lack capacity or that rare variants lack biological information."
+  },
+  "capacity_control": {
+    "timing": "PROSPECTIVE_SYNTHETIC_FIXTURE_BEFORE_ANY_20260903C_REAL_FIT_TUNE_TCN_TRAINING",
+    "fixture_geometry": "9 markers scaled to each candidate event radius; two XOR events are separated by four marker intervals, their positive triangular splats do not overlap, and loss plus scoring use one fixed positive-mass event anchor while excluding the zero-mass midpoint",
+    "capacity_only_loss_mask": "An internal optional mask aligns the sealed synthetic loss and score at that directional anchor. Its default is null, and no production CLI, configuration or workflow can activate it.",
+    "baseline": "uniform across the six diploid ancestry states for additive and XOR controls; for zero revival the target state NN starts at exact probability zero while the other five states share the mass",
+    "pattern_balance": "FIT and held-out VALID contain balanced 00, 01, 10 and 11 two-locus patterns with disjoint synthetic person identifiers",
+    "tasks": {
+      "additive": "one centred log-likelihood contrast in the real evidence-channel slice determines a held-out diploid state",
+      "xor": "two bits are placed in separate ancestry-evidence channels at two neighbouring loci with non-overlapping positive splats; their interaction determines a strict XOR label at the left anchor and either bit alone is uninformative",
+      "zero_revival": "the true NN state has F0 probability exactly zero and must gain held-out probability through trained residual parameters",
+      "candidate_parameter_coverage": "the fixture uses the same 23-channel schema as real materialization; channels 4:10 carry the synthetic evidence so each candidate's frozen evidence_scale is exercised together with architecture, optimizer and event radius"
+    },
+    "mechanistic_checks": {
+      "positive_tcn": "a TCN evaluated at the fixed directional anchor must exceed balanced accuracy 0.75 in at least two of the three fixed seeds",
+      "one_bit_ablation_negative": "the same TCN with one XOR bit removed must remain within 0.10 of chance balanced accuracy 0.50 in at least two of the three fixed seeds",
+      "two_bit_oracle": "a small multilayer perceptron receiving both bits directly must recover the XOR truth; this verifies that the fixture labels themselves are learnable",
+      "scope": "These checks establish only minimal directional two-locus synthetic capacity and absence of an obvious leakage path; they do not establish bidirectional capacity, biological signal or a particular cM reach in real data."
+    },
+    "thresholds": {
+      "hmm_additive_maximum_posterior_change": 0.0001,
+      "additive_balanced_accuracy": 0.8,
+      "xor_balanced_accuracy": 0.75,
+      "xor_one_bit_ablation_maximum_distance_from_chance": 0.1,
+      "zero_revival_mean_probability": 0.5,
+      "zero_revival_log_loss_gain": 0.5
+    },
+    "screen_seed": 1103,
+    "screen_seed_reuse_interpretation": "Seed 1103 is the first fixed replicate and one of the three transparently reported replicates for every candidate; no candidate is ranked by it.",
+    "screen_candidate_count": 6,
+    "budget_ladder_updates": [200, 400, 800, 1600],
+    "rung_execution": "DETERMINISTIC_RESTART_SAME_SEED_EACH_RUNG",
+    "rung_training_policy": "EXACT_REQUESTED_UPDATES_FINAL_STATE_NO_EARLY_STOPPING_NO_BEST_CHECKPOINT_RESTORE",
+    "rung_training_policy_reason": "a prelaunch diagnostic requested 1600 spatial-XOR updates but early stopping completed 300 and restored checkpoint 200; exact rungs are required for the ladder to measure additional optimization budget",
+    "capacity_score": "minimum relative held-out log-loss gain across the three tasks",
+    "candidate_evaluation": "ALL_DECLARED_CANDIDATES_ACROSS_ALL_FIXED_SEEDS_NO_RANKING",
+    "replication_seeds": [1103, 2207, 3301],
+    "aggregation": "report all seeds plus mean and median for all six candidates; ranking candidates or choosing only the best seed is forbidden",
+    "candidate_gate": "all three positive tasks and the one-bit XOR ablation negative control pass in at least two of three seeds",
+    "effective_budget_rule": "second-smallest first-pass rung, applied unchanged to RE, RD, POOLED, SHAM and GEOMETRY",
+    "real_data_gate": "if no candidate passes, no TCN process receives real FIT/TUNE features",
+    "valid_access": "FORBIDDEN"
   }
 }

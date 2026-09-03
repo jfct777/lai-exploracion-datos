@@ -3,14 +3,14 @@
   "stage": "M37_TRACE_COMPACT_SWEEP_PRE",
   "status": "PREREGISTERED_FIT_TUNE_ONLY",
   "freeze": {
-    "state": "NEWLY_FROZEN_BEFORE_CONSUMABLE_20260903B_CANDIDATE_EXECUTION",
-    "reason": "finite R0 follow-up after the published defaults failed promotion; TCN uses the prospectively corrected raw-F0 gated residual operator"
+    "state": "NEWLY_FROZEN_BEFORE_CONSUMABLE_20260903C_CANDIDATE_EXECUTION",
+    "reason": "finite R0 follow-up after the published defaults failed promotion; TCN uses the prospectively corrected raw-F0 residual and the repaired candidate-specific capacity gate frozen before real FIT/TUNE access"
   },
   "contract_binding": {
     "parent": "conf/m37_trace_sweep_contract.json",
     "parent_sha256": "50a27f6c597d883b0aeb87671210d7d9478d9ac87821207b58dd30a045e238be",
     "amendment": "conf/m37_trace_compact_sweep_amendment.json",
-    "amendment_sha256": "7bab8f64a41f8a63f44b12d41c9f5a1934aea9fc1767acefdfdd025dc6940bc6"
+    "amendment_sha256": "70dc59d626ee3d64620959e7a8559172c0a73a75b836da6abaac5ace5afd151f"
   },
   "scope": {
     "root": "R0",
@@ -27,6 +27,12 @@
     "tune_fraction": 0.2,
     "split_seed": 3401103,
     "event_radius_cM": 0.2
+  },
+  "execution_budget_policy": {
+    "updates_200_role": "initial capacity rung and static fallback before synthetic calibration",
+    "tcn_runtime_override": "each eligible candidate uses its bound effective_updates from the capacity artifact for all five arms",
+    "paired_arm_audit": "all five arms share requested_updates, validation_every and early_stopping_patience; completed_updates and best_checkpoint_update are recorded per arm under the same TUNE early-stopping rule",
+    "hmm_runtime_override": "none"
   },
   "families": {
     "hmm": {
@@ -66,13 +72,23 @@
   },
   "positive_control_status": {
     "hmm": {
-      "status": "REQUIRED_RUNTIME_ADDITIVE_DETECTABILITY",
-      "interpretation": "Aligned synthetic evidence must measurably change the HMM posterior; XOR is not applicable to this additive evidence model."
+      "status": "REQUIRED_RUNTIME_CANDIDATE_SPECIFIC_ADDITIVE_DETECTABILITY",
+      "candidate_count": 12,
+      "interpretation": "Aligned synthetic evidence must measurably change the HMM posterior for every declared hazard/lambda pair; XOR is not applicable to this additive evidence model."
     },
     "tcn": {
-      "status_at_200_updates": "REQUIRED_RUNTIME_SAME_BUDGET_FIXTURE",
-      "anchor_candidate_id": "tcn_h32_d2_k3_do0_lr1e3_r02_l1",
-      "failure_interpretation": "BUDGET_INSUFFICIENT_FOR_INTERACTION; score-only exploration may finish, but no TCN candidate may advance."
+      "status_across_budget_ladder": "REQUIRED_CANDIDATE_SPECIFIC_SYNTHETIC_CAPACITY_GATE",
+      "screen_seed": 1103,
+      "candidate_count": 6,
+      "candidate_evaluation": "ALL_DECLARED_CANDIDATES_ACROSS_ALL_FIXED_SEEDS_NO_RANKING",
+      "budget_ladder_updates": [200, 400, 800, 1600],
+      "rung_execution": "DETERMINISTIC_RESTART_SAME_SEED_EACH_RUNG",
+      "rung_training_policy": "EXACT_REQUESTED_UPDATES_FINAL_STATE_NO_EARLY_STOPPING_NO_BEST_CHECKPOINT_RESTORE",
+      "effective_budget_rule": "SECOND_SMALLEST_FIRST_PASS_RUNG_SHARED_BY_ALL_FIVE_ARMS",
+      "replication_seeds": [1103, 2207, 3301],
+      "required_seed_passes": 2,
+      "required_controls": ["additive", "xor_interaction", "xor_one_bit_ablation", "zero_revival"],
+      "failure_interpretation": "A candidate that fails capacity in at least two seeds cannot run on real FIT/TUNE; this cannot support an absence-of-biological-signal claim."
     }
   },
   "candidates": [

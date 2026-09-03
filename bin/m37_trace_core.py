@@ -20,6 +20,11 @@ import numpy as np
 STATE_PAIRS = ((0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2))
 MISSING_GENOTYPE = 3
 STATE_INDEX = np.array(((0, 1, 2), (1, 3, 4), (2, 4, 5)), dtype=np.uint8)
+# One floor is shared by the residual proposal, training loss and scorer.  It
+# is small enough not to alter the raw FLARE path, but unlike a post-softmax
+# clamp it keeps a finite gradient when a supported event must revive a state
+# to which FLARE assigned exactly zero probability.
+PROBABILITY_FLOOR = 1e-12
 
 
 def require(condition: bool, message: str) -> None:
@@ -337,6 +342,9 @@ def build_tcn(spec: TraceSpec, event_channels: int):
             # used by the scorer, then mixes q with raw F0.  Consequently RD is
             # exact F0, while RE/POOLED/SHAM/GEOMETRY can still revive a state
             # to which FLARE assigned probability zero.
-            proposal = torch.softmax(torch.log(baseline.clamp_min(1e-12)) + delta, dim=-1)
+            proposal = torch.softmax(
+                torch.log(baseline.clamp_min(PROBABILITY_FLOOR)) + delta,
+                dim=-1,
+            )
             return (1.0 - gate) * baseline + gate * proposal
     return TraceTCN()

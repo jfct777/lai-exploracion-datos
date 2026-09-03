@@ -10,7 +10,21 @@ from pathlib import Path
 import numpy as np
 
 from m33_safe_bridge_core import write_deterministic_npz
-from m37_trace_core import TraceSpec, build_tcn, hmm_posterior, m34_labels_to_states, require
+from m37_trace_core import (PROBABILITY_FLOOR, TraceSpec, build_tcn,
+                            hmm_posterior, m34_labels_to_states, require)
+
+
+def probability_nll(prediction, labels):
+    """Mean NLL with the same additive floor used by TRACE scoring.
+
+    Adding the floor inside the logarithm, instead of clamping the probability
+    before ``log``, preserves a finite derivative for a structurally zero F0
+    state when an event-supported residual proposes that state.
+    """
+    selected = prediction.reshape(-1, prediction.shape[-1]).gather(
+        1, labels.reshape(-1, 1),
+    ).squeeze(1)
+    return -(selected + PROBABILITY_FLOOR).log().mean()
 
 
 def load_features(path: Path) -> dict[str, np.ndarray]:
@@ -172,7 +186,12 @@ def train(features: dict[str, np.ndarray], predict_features: dict[str, np.ndarra
           hazard: float, evidence_scale: float, spec: TraceSpec, updates: int, learning_rate: float,
           batch_people: int, marker_shard: int, validation_every: int, patience: int, seed: int,
           checkpoint: Path | None = None, tune_fraction: float = .2, split_seed: int = 3401103,
-          event_radius_cm: float = .2) -> tuple[np.ndarray, np.ndarray]:
+          event_radius_cm: float = .2,
+          training_diagnostics: dict[str, int | bool | None] | None = None,
+          early_stopping: bool = True,
+          restore_best: bool = True,
+          _capacity_loss_marker_mask: np.ndarray | None = None,
+          ) -> tuple[np.ndarray, np.ndarray]:
     baseline, evidence, marker = features["baseline_states"], features["evidence_field"], features["marker_cM"]
     if family == "hmm":
         _, tune_people = deterministic_train_tune(features, split_seed, tune_fraction)
@@ -180,6 +199,16 @@ def train(features: dict[str, np.ndarray], predict_features: dict[str, np.ndarra
                               predict_features["marker_cM"], hazard, evidence_scale), tune_people)
     require(family == "tcn", "TRACE family differs")
     require(truth is not None and truth.shape == baseline.shape[:2], "TCN needs phase-free FIT truth")
+    capacity_loss_marker_mask: np.ndarray | None = None
+    if _capacity_loss_marker_mask is not None:
+        capacity_loss_marker_mask = np.asarray(_capacity_loss_marker_mask)
+        require(
+            capacity_loss_marker_mask.dtype == np.bool_ and
+            capacity_loss_marker_mask.shape == (baseline.shape[1],) and
+            bool(capacity_loss_marker_mask.any()) and
+            not early_stopping and not restore_best and checkpoint is None,
+            "capacity-only loss mask differs",
+        )
     import torch
     torch.manual_seed(seed)
     train_people, tune_people = deterministic_train_tune(features, split_seed, tune_fraction)
@@ -188,6 +217,8 @@ def train(features: dict[str, np.ndarray], predict_features: dict[str, np.ndarra
             "TRACE TCN exceeds the preregistered compact capacity cap")
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-3)
     best_loss, best_state, stale = float("inf"), None, 0
+    completed_updates = 0
+    best_checkpoint_update: int | None = None
     calendar = event_centered_schedule(features, updates, split_seed, event_radius_cm, train_people)
     for update in range(updates):
         people = train_people[np.arange(update * batch_people, update * batch_people + batch_people) % len(train_people)]
@@ -200,26 +231,54 @@ def train(features: dict[str, np.ndarray], predict_features: dict[str, np.ndarra
         expanded = model(*event, torch.from_numpy(baseline[people, expanded_left:expanded_right]))
         prediction = expanded[:, left - expanded_left:right - expanded_left]
         labels = torch.from_numpy(truth[people, left:right].astype(np.int64, copy=False))
-        loss = torch.nn.functional.nll_loss(torch.log(prediction.clamp_min(1e-7)).reshape(-1, 6), labels.reshape(-1))
+        if capacity_loss_marker_mask is not None:
+            local_mask = capacity_loss_marker_mask[left:right]
+            require(bool(local_mask.any()), "capacity-only loss shard lacks supported markers")
+            prediction = prediction[:, local_mask]
+            labels = labels[:, local_mask]
+        loss = probability_nll(prediction, labels)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
-        if (update + 1) % validation_every == 0:
+        completed_updates = update + 1
+        if early_stopping and (update + 1) % validation_every == 0:
             validation = _predict_batched(model, features, batch_people, marker_shard, evidence_scale,
                                           event_radius_cm, tune_people,
                                           receptive_halo(spec))
             tune_truth = truth[tune_people]
             index = np.arange(tune_truth.size)
-            observed = -np.log(np.maximum(validation.reshape(-1, 6)[index, tune_truth.reshape(-1)], 1e-12)).mean()
+            # Mirror the differentiable training convention exactly.  The
+            # reporting scorer keeps its historical clipping convention so
+            # canonical F0/HMM metrics remain comparable.
+            observed = -np.log(
+                validation.reshape(-1, 6)[index, tune_truth.reshape(-1)] +
+                PROBABILITY_FLOOR
+            ).mean()
             if observed < best_loss:
                 best_loss, best_state, stale = observed, {key: value.detach().clone() for key, value in model.state_dict().items()}, 0
+                best_checkpoint_update = update + 1
             else:
                 stale += 1
                 if stale >= patience:
                     break
             model.train()
-    if best_state is not None:
+    if restore_best and best_state is not None:
         model.load_state_dict(best_state)
+    if training_diagnostics is not None:
+        training_diagnostics.clear()
+        training_diagnostics.update({
+            "requested_updates": int(updates),
+            "completed_updates": int(completed_updates),
+            "best_checkpoint_update": best_checkpoint_update,
+            "validation_every": int(validation_every),
+            "early_stopping_patience": int(patience),
+            "early_stopping_enabled": bool(early_stopping),
+            "restore_best_checkpoint": bool(restore_best),
+        })
+        if capacity_loss_marker_mask is not None:
+            training_diagnostics["capacity_loss_marker_count"] = int(
+                capacity_loss_marker_mask.sum(),
+            )
     if checkpoint:
         torch.save({"state_dict": model.state_dict(), "event_channels": features["event_values"].shape[1], "spec": spec.__dict__}, checkpoint)
     with torch.no_grad():
@@ -292,10 +351,13 @@ def main() -> None:
     split_name = authenticate_feature_pair(fit_features, predict_features)
     if args.truth:
         authenticate_truth_axes(args.truth, fit_features)
+    training_diagnostics: dict[str, int | bool | None] = {}
     result, tune_people = train(fit_features, predict_features, truth, args.family, args.hazard_per_morgan,
                    args.evidence_scale, TraceSpec(args.hidden_dim, args.depth, args.kernel_size, args.dropout, dilations),
                    args.updates, args.learning_rate, args.batch_people, args.marker_shard,
-                   args.validation_every, args.early_stopping_patience, args.seed, args.checkpoint, args.tune_fraction, args.split_seed, args.event_radius_cm)
+                   args.validation_every, args.early_stopping_patience, args.seed, args.checkpoint,
+                   args.tune_fraction, args.split_seed, args.event_radius_cm,
+                   training_diagnostics)
     predict_keys = np.asarray(predict_features["sample_key_sha256"])
     fit_keys = np.asarray(fit_features["sample_key_sha256"])
     # A candidate-selection invocation predicts FIT and scores only TUNE.  A
@@ -329,6 +391,8 @@ def main() -> None:
         "split_seed": args.split_seed,
         "event_radius_cM": args.event_radius_cm,
         "effective_hyperparameters": effective_hyperparameters,
+        "training_diagnostics": (training_diagnostics if args.family == "tcn" else
+                                 "NOT_APPLICABLE_DETERMINISTIC_HMM"),
         "fit_features_sha256": hashlib.sha256(args.features.read_bytes()).hexdigest(),
         "fit_features_receipt_sha256": hashlib.sha256(args.features_receipt.read_bytes()).hexdigest(),
         "predict_features_sha256": hashlib.sha256(args.predict_features.read_bytes()).hexdigest(),

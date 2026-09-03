@@ -146,33 +146,50 @@ def apply_positive_control_gate(
     decisions: list[dict[str, Any]], criteria: dict[str, Any],
     control_by_family: dict[str, dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Allow scoring with an underpowered control, but never advancement."""
-    require(control_by_family.get("hmm", {}).get("status") ==
-            "PASS_ADDITIVE_DETECTABILITY",
+    """Bind every TCN decision to its replicated synthetic-capacity gate."""
+    hmm_control = control_by_family.get("hmm", {})
+    require(hmm_control.get("status") ==
+            "PASS_ALL_CANDIDATES_ADDITIVE_DETECTABILITY" and
+            hmm_control.get("all_candidates_pass") is True,
             "M37 compact HMM detectability control did not pass")
+    tcn_decisions_present = any(row.get("family") == "tcn" for row in decisions)
     tcn_control = control_by_family.get("tcn", {})
-    tcn_additive = tcn_control.get("additive", {}).get("status")
-    tcn_xor = tcn_control.get("xor_interaction", {}).get("status")
+    tcn_candidates = tcn_control.get("candidates", {})
+    eligible = set(tcn_control.get("eligible_candidate_ids", []))
+    require(isinstance(tcn_candidates, dict) and
+            ((tcn_control.get("status") == "PASS_AT_LEAST_ONE_CANDIDATE" and
+              bool(eligible)) if tcn_decisions_present else
+             (tcn_control.get("status") == "FAIL_NO_CAPABLE_CANDIDATE" and
+              not eligible)),
+            "M37 compact TCN capacity evidence differs")
     criteria["positive_control_precondition"] = {
-        "hmm": "PASS_ADDITIVE_DETECTABILITY",
-        "tcn": "additive PASS and nearby-XOR PASS",
-        "incomplete_action": "STOP_EXPLORATORY",
+        "hmm": "candidate-specific additive detectability PASS for every declared pair",
+        "tcn": "additive, local feature-XOR, one-bit ablation and zero-revival PASS in at least 2/3 fixed seeds",
+        "seeds": [1103, 2207, 3301],
+        "best_seed_selection": "FORBIDDEN",
+        "tcn_real_data_action": ("TCN_REAL_DATA_RUN_CAPACITY_QUALIFIED_ONLY"
+                                 if tcn_decisions_present else
+                                 "TCN_REAL_DATA_NOT_RUN"),
+        "failed_capacity_scientific_interpretation": "NOT_A_CLOSURE_OF_R0",
     }
     for row in decisions:
-        row["same_budget_control"] = control_by_family[row["family"]]
-        row["same_budget_control_pass"] = (
-            row["family"] == "hmm" or (tcn_additive == "PASS" and tcn_xor == "PASS")
-        )
-        if row["family"] == "tcn" and (tcn_additive != "PASS" or tcn_xor != "PASS"):
-            row["status"] = "STOP_EXPLORATORY"
-            row["budget_assessment"] = "BUDGET_INSUFFICIENT_FOR_REQUIRED_CONTROLS"
-            row["interpretation"] = (
-                "At least one 200-update held-out control did not pass; this candidate "
-                "cannot advance or support a biological absence claim."
-            )
-        if row["family"] == "tcn" and tcn_xor != "PASS":
-            row["interaction_assessment"] = "BUDGET_INSUFFICIENT_FOR_INTERACTION"
-            row["interaction_absence_claim"] = "FORBIDDEN"
+        if row["family"] == "hmm":
+            candidate_control = hmm_control.get("candidates", {}).get(row["candidate_id"])
+            require(isinstance(candidate_control, dict) and
+                    candidate_control.get("status") == "PASS_ADDITIVE_DETECTABILITY" and
+                    candidate_control.get("pass") is True,
+                    "an HMM metric was produced without candidate-specific detectability")
+            row["capacity_control"] = candidate_control
+            row["capacity_control_pass"] = True
+            continue
+        candidate_id = str(row["candidate_id"])
+        candidate_control = tcn_candidates.get(candidate_id)
+        require(candidate_id in eligible and isinstance(candidate_control, dict) and
+                candidate_control.get("status") == "PASS_CAPACITY_2_OF_3" and
+                int(candidate_control.get("pass_count", -1)) >= 2,
+                "a TCN metric was produced without candidate-specific capacity evidence")
+        row["capacity_control"] = candidate_control
+        row["capacity_control_pass"] = True
     return decisions, criteria
 
 
@@ -198,7 +215,8 @@ def main() -> None:
             "M37 compact collection/receipt differs")
     family_audits = [_json(path) for path in args.family_audit]
     family_audit_receipts = [_json(path) for path in args.family_audit_receipt]
-    require({row.get("family") for row in family_audits} == {"hmm", "tcn"} and
+    observed_families = {row.get("family") for row in family_audits}
+    require(observed_families in ({"hmm"}, {"hmm", "tcn"}) and
             len(family_audit_receipts) == len(family_audits) and
             all(row.get("stage") == "M37_TRACE_COMPACT_SWEEP" and
                 row.get("status") == "PASS_FIT_TUNE_ONLY" and
@@ -240,7 +258,7 @@ def main() -> None:
                 baseline_provenance.get("upstream_receipt_sha256"),
                 "M37 compact metric/F0 provenance binding differs")
     receipt_by_family = {str(row.get("family", "")): row for row in family_audit_receipts}
-    require(set(receipt_by_family) == {"hmm", "tcn"},
+    require(set(receipt_by_family) == observed_families,
             "M37 compact family audit receipt identities differ")
     for path, audit in zip(args.family_audit, family_audits):
         audit_receipt = receipt_by_family[str(audit["family"])]
@@ -268,9 +286,15 @@ def main() -> None:
     decisions, criteria = decide(rows, args.root)
     require(all(row["run_id"] == args.run_id for row in decisions),
             "M37 compact decision run_id differs")
-    control_by_family = {
-        str(row["family"]): row.get("positive_control_status") for row in family_audits
+    all_control_encodings = {
+        json.dumps(row.get("positive_control_all_status"), sort_keys=True,
+                   separators=(",", ":"))
+        for row in family_audits
     }
+    require(len(all_control_encodings) == 1 and
+            next(iter(all_control_encodings)) not in ("null", ""),
+            "M37 compact full positive-control evidence differs")
+    control_by_family = family_audits[0]["positive_control_all_status"]
     decisions, criteria = apply_positive_control_gate(
         decisions, criteria, control_by_family,
     )

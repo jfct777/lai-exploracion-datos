@@ -2,6 +2,8 @@
 """Verify the exact config order intended for the M37 Google Batch launch."""
 from __future__ import annotations
 
+import hashlib
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -10,7 +12,37 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def validate_contract_binding(
+    manifest_path: Path,
+    parent_contract_path: Path,
+    amendment_path: Path,
+) -> None:
+    """Reject a launch when the frozen manifest no longer binds exact contracts."""
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    amendment = json.loads(amendment_path.read_text(encoding="utf-8"))
+    binding = manifest.get("contract_binding", {})
+    observed_parent = _sha256(parent_contract_path)
+    observed_amendment = _sha256(amendment_path)
+    if (
+        binding.get("parent_sha256") != observed_parent
+        or binding.get("amendment_sha256") != observed_amendment
+        or amendment.get("parent_contract_sha256") != observed_parent
+    ):
+        raise AssertionError(
+            "M37 compact manifest/parent/amendment hash binding differs"
+        )
+
+
 def main() -> None:
+    validate_contract_binding(
+        ROOT / "conf" / "m37_trace_compact_candidates.json",
+        ROOT / "conf" / "m37_trace_sweep_contract.json",
+        ROOT / "conf" / "m37_trace_compact_sweep_amendment.json",
+    )
     if not shutil.which("nextflow"):
         raise RuntimeError("Nextflow is required for the compact M37 config preflight")
     configs = ",".join(str(ROOT / "conf" / name) for name in (
@@ -28,7 +60,7 @@ def main() -> None:
         "process.executor = 'google-batch'",
         "process.resourceLabels.team = 'frank'",
         "params.m37_results_dir = 'gs://teams-usp/frank/lai-exploracion-datos/runs'",
-        "workDir = 'gs://teams-usp/frank/lai-exploracion-datos/work/nextflow/m37-r0-compact-sweep-20260903b'",
+        "workDir = 'gs://teams-usp/frank/lai-exploracion-datos/work/nextflow/m37-r0-compact-sweep-20260903c'",
         "@sha256:c03864a9ed0c56b00fd1a234daee2d17ddfa57d4c426628bd59cd9daf351ee99",
     )
     missing = [value for value in required if value not in observed]

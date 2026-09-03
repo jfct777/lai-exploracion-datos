@@ -133,8 +133,27 @@ def _write_contracts(root: Path) -> tuple[Path, Path, Path]:
         "hmm": {"hazard_per_morgan": [12.0], "evidence_lambda": [1.0]},
         "tcn": {"event_radius_cM": [0.02], "evidence_lambda": [1.0],
                 "candidate_ids": ["tcn_fixture"],
-                "execution": {"updates": 2, "validation_every": 1,
-                              "early_stopping_patience": 1}},
+                "execution": {"validation_every": 1,
+                              "early_stopping_patience": 1,
+                              "budget_ladder_updates": [2, 4, 8, 16]}},
+        "capacity_control": {
+            "thresholds": {
+                "hmm_additive_maximum_posterior_change": 1e-4,
+                "additive_balanced_accuracy": .8,
+                "xor_balanced_accuracy": .75,
+                "xor_one_bit_ablation_maximum_distance_from_chance": .1,
+                "zero_revival_mean_probability": .5,
+                "zero_revival_log_loss_gain": .5,
+            },
+            "screen_seed": 1103,
+            "screen_candidate_count": 1,
+            "budget_ladder_updates": [2, 4, 8, 16],
+            "rung_execution": "DETERMINISTIC_RESTART_SAME_SEED_EACH_RUNG",
+            "candidate_evaluation":
+                "ALL_DECLARED_CANDIDATES_ACROSS_ALL_FIXED_SEEDS_NO_RANKING",
+            "replication_seeds": [1103, 2207, 3301],
+            "valid_access": "FORBIDDEN",
+        },
     })
     manifest = root / "manifest.json"
     _write_json(manifest, {
@@ -167,8 +186,24 @@ def _write_contracts(root: Path) -> tuple[Path, Path, Path]:
                                     "parameters": {}},
                         }},
         "positive_control_status": {"hmm": {"status": "NA"},
-                                    "tcn": {"status_at_2_updates": "FIXTURE_ONLY",
-                                            "anchor_candidate_id": "tcn_fixture"}},
+                                    "tcn": {
+                                        "status_across_budget_ladder": "FIXTURE_ONLY",
+                                        "screen_seed": 1103,
+                                        "candidate_count": 1,
+                                        "candidate_evaluation":
+                                            "ALL_DECLARED_CANDIDATES_ACROSS_ALL_FIXED_SEEDS_NO_RANKING",
+                                        "budget_ladder_updates": [2, 4, 8, 16],
+                                        "rung_execution":
+                                            "DETERMINISTIC_RESTART_SAME_SEED_EACH_RUNG",
+                                        "effective_budget_rule":
+                                            "SECOND_SMALLEST_FIRST_PASS_RUNG_SHARED_BY_ALL_FIVE_ARMS",
+                                        "replication_seeds": [1103, 2207, 3301],
+                                        "required_seed_passes": 2,
+                                        "required_controls": [
+                                            "additive", "xor_interaction",
+                                            "xor_one_bit_ablation", "zero_revival",
+                                        ],
+                                    }},
         "candidates": [
             {"candidate_id": "hmm_fixture", "family": "hmm", "parameters": {}},
             {"candidate_id": "tcn_fixture", "family": "tcn", "parameters": {}},
@@ -197,20 +232,42 @@ def _write_positive_control(root: Path, run_id: str, manifest: Path,
         "parent_contract_sha256": _sha(parent),
         "contract_amendment_sha256": _sha(amendment),
         "authenticated_source_sha256": auth,
+        "truth_or_real_features_opened": False,
         "controls": {
-            "hmm": {"status": "PASS_ADDITIVE_DETECTABILITY"},
-            "tcn": {
-                "anchor_candidate_id": "tcn_fixture",
-                "updates": 2,
-                "architecture": {
-                    "hidden_dim": 32, "depth": 2, "kernel_size": 3,
-                    "dropout": 0.0, "dilations": [1, 2],
-                    "learning_rate": .0003, "seed": 1103,
-                    "event_radius_cM": .02, "evidence_scale": 1.0,
-                    "validation_every": 1, "early_stopping_patience": 1,
+            "hmm": {
+                "status": "PASS_ALL_CANDIDATES_ADDITIVE_DETECTABILITY",
+                "candidate_count": 1,
+                "all_candidates_pass": True,
+                "candidates": {
+                    "hmm_fixture": {
+                        "status": "PASS_ADDITIVE_DETECTABILITY", "pass": True,
+                    },
                 },
-                "additive": {"status": "PASS"},
-                "xor_interaction": {"status": "BUDGET_INSUFFICIENT_FOR_INTERACTION"},
+            },
+            "tcn": {
+                "status": "PASS_AT_LEAST_ONE_CANDIDATE",
+                "candidate_count": 1,
+                "budget_ladder_updates": [2, 4, 8, 16],
+                "evaluated_candidate_ids": ["tcn_fixture"],
+                "eligible_candidate_ids": ["tcn_fixture"],
+                "replication_seeds": [1103, 2207, 3301],
+                "selection_of_best_candidate": "FORBIDDEN",
+                "selection_of_best_seed": "FORBIDDEN",
+                "candidates": {
+                    "tcn_fixture": {
+                        "status": "PASS_CAPACITY_2_OF_3", "pass_count": 2,
+                        "effective_updates": 2,
+                        "seeds": [1103, 2207, 3301],
+                        "seed_results": {
+                            "1103": {"pass": True, "first_pass_updates": 2,
+                                     "evaluated_updates": [2]},
+                            "2207": {"pass": True, "first_pass_updates": 2,
+                                     "evaluated_updates": [2]},
+                            "3301": {"pass": False, "first_pass_updates": None,
+                                     "evaluated_updates": [2, 4, 8, 16]},
+                        },
+                    },
+                },
                 "scientific_closure_if_failed": "FORBIDDEN",
             },
         },
@@ -322,7 +379,35 @@ def test_compact_runner_replays_defaults_and_emits_only_metric_evidence() -> Non
             observed_metrics = sorted(output.glob("*.metrics.json"))
             observed_receipts = sorted(output.glob("*.metrics.receipt.json"))
             assert len(observed_metrics) == len(observed_receipts) == 5
+            receipt_payloads = [
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in observed_receipts
+            ]
+            if family == "tcn":
+                # The capacity gate fixes one candidate-specific budget.  RE
+                # and every paired control must then share both that budget
+                # and the early-stopping schedule.
+                observed_training_schedules = {
+                    (
+                        row["effective_hyperparameters"]["updates"],
+                        row["effective_hyperparameters"]["validation_every"],
+                        row["effective_hyperparameters"]["early_stopping_patience"],
+                    )
+                    for row in receipt_payloads
+                }
+                assert observed_training_schedules == {(2, 1, 1)}
+                for row in receipt_payloads:
+                    diagnostic = row["training_diagnostics"]
+                    assert diagnostic["requested_updates"] == 2
+                    assert 1 <= diagnostic["completed_updates"] <= 2
+                    assert diagnostic["best_checkpoint_update"] in {1, 2}
+                    assert diagnostic["validation_every"] == 1
+                    assert diagnostic["early_stopping_patience"] == 1
+                    assert diagnostic["early_stopping_enabled"] is True
+                    assert diagnostic["restore_best_checkpoint"] is True
             first = json.loads(observed_metrics[0].read_text(encoding="utf-8"))
+            assert first["schema_version"] == "1.0.0"
+            assert first["stage"] == "M37_TRACE_SCORE"
             assert first["run_id"] == "fixture-run" and first["per_individual"]
             assert first["baseline_metadata"]["method"] == "FLARE"
             assert first["baseline_metadata"]["source_sha256"] == F0_SHA
@@ -332,7 +417,11 @@ def test_compact_runner_replays_defaults_and_emits_only_metric_evidence() -> Non
             }
             metric_paths.extend(observed_metrics)
             metric_receipts.extend(observed_receipts)
-            first_receipt = json.loads(observed_receipts[0].read_text(encoding="utf-8"))
+            first_receipt = receipt_payloads[0]
+            if family == "tcn":
+                assert first["training_diagnostics"] == first_receipt[
+                    "training_diagnostics"
+                ]
             assert first_receipt["output_sha256"] == _sha(observed_metrics[0])
             assert first_receipt["manifest_sha256"] == _sha(manifest)
             assert first_receipt["contract_amendment_sha256"] == _sha(amendment)
@@ -342,7 +431,7 @@ def test_compact_runner_replays_defaults_and_emits_only_metric_evidence() -> Non
         decisions, criteria = decide(rows, "R0")
         decisions, criteria = apply_positive_control_gate(
             decisions, criteria,
-            {row["family"]: row["positive_control_status"] for row in audits},
+            audits[0]["positive_control_all_status"],
         )
         assert len(decisions) == 2
         assert {row["status"] for row in decisions} <= {"ADVANCE_EXPLORATORY", "STOP_EXPLORATORY"}
@@ -350,8 +439,49 @@ def test_compact_runner_replays_defaults_and_emits_only_metric_evidence() -> Non
         assert criteria["pareto_only_promotion"] == "FORBIDDEN"
         assert {row["family"] for row in audits} == {"hmm", "tcn"}
         tcn_decision = next(row for row in decisions if row["family"] == "tcn")
-        assert tcn_decision["status"] == "STOP_EXPLORATORY"
-        assert not tcn_decision["same_budget_control_pass"]
+        assert tcn_decision["capacity_control_pass"]
+        assert tcn_decision["capacity_control"]["pass_count"] == 2
+
+
+def test_failed_tcn_capacity_does_not_block_hmm_exploratory_decisions() -> None:
+    baseline = {"f1_boundary": {"0.2": .1}, "log_loss": .4,
+                "brier": .2, "macro_ancestry_dose_mae": .2,
+                "ancestry_dose_mae": {"NAM": .2},
+                "false_transitions_per_morgan": 1.0}
+    metric = {**baseline, "baseline": baseline, "evaluation_split": "FIT_TUNE",
+              "root": "R0", "candidate_id": "hmm_fixture", "arm": "RE",
+              "run_id": "fixture"}
+    arms = []
+    for arm in ARMS:
+        row_metric = json.loads(json.dumps(metric))
+        row_metric["arm"] = arm
+        row_metric["per_individual"] = [{
+            "sample_key_sha256": "a",
+            "boundary_counts": {
+                value: {"TP": 0, "FP": 0, "FN": 0}
+                for value in ("0.05", "0.1", "0.2", "0.5")
+            },
+        }]
+        arms.append({"candidate_id": "hmm_fixture", "family": "hmm",
+                     "root": "R0", "arm": arm, "metrics": row_metric})
+    decisions, criteria = decide(arms, "R0")
+    decisions, criteria = apply_positive_control_gate(decisions, criteria, {
+        "hmm": {
+            "status": "PASS_ALL_CANDIDATES_ADDITIVE_DETECTABILITY",
+            "all_candidates_pass": True,
+            "candidates": {"hmm_fixture": {
+                "status": "PASS_ADDITIVE_DETECTABILITY", "pass": True,
+            }},
+        },
+        "tcn": {
+            "status": "FAIL_NO_CAPABLE_CANDIDATE", "candidates": {},
+            "eligible_candidate_ids": [],
+        },
+    })
+    assert len(decisions) == 1 and decisions[0]["family"] == "hmm"
+    assert criteria["positive_control_precondition"]["tcn_real_data_action"] == (
+        "TCN_REAL_DATA_NOT_RUN"
+    )
 
 
 def test_compact_manifest_rejects_any_valid_scope() -> None:

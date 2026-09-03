@@ -156,6 +156,35 @@ def _load_manifest(path: Path, family: str, root: str,
             isinstance(equivalence, dict) and isinstance(candidates, list) and
             isinstance(positive_control_status, dict) and family in positive_control_status,
             "M37 compact manifest sections differ")
+    capacity = amendment.get("capacity_control")
+    if family == "tcn":
+        declared_control = positive_control_status.get("tcn")
+        require(isinstance(capacity, dict) and isinstance(declared_control, dict) and
+                capacity.get("screen_seed") == declared_control.get("screen_seed") == 1103 and
+                capacity.get("screen_candidate_count") ==
+                declared_control.get("candidate_count") ==
+                sum(row.get("family") == "tcn" for row in candidates) and
+                capacity.get("candidate_evaluation") ==
+                declared_control.get("candidate_evaluation") ==
+                "ALL_DECLARED_CANDIDATES_ACROSS_ALL_FIXED_SEEDS_NO_RANKING" and
+                capacity.get("budget_ladder_updates") ==
+                declared_control.get("budget_ladder_updates") and
+                capacity.get("rung_execution") ==
+                declared_control.get("rung_execution") ==
+                "DETERMINISTIC_RESTART_SAME_SEED_EACH_RUNG" and
+                isinstance(declared_control.get("budget_ladder_updates"), list) and
+                declared_control.get("budget_ladder_updates") and
+                declared_control.get("budget_ladder_updates")[0] == execution.get("updates") and
+                declared_control.get("effective_budget_rule") ==
+                "SECOND_SMALLEST_FIRST_PASS_RUNG_SHARED_BY_ALL_FIVE_ARMS" and
+                capacity.get("replication_seeds") ==
+                declared_control.get("replication_seeds") == [1103, 2207, 3301] and
+                declared_control.get("required_seed_passes") == 2 and
+                declared_control.get("required_controls") ==
+                ["additive", "xor_interaction", "xor_one_bit_ablation",
+                 "zero_revival"] and
+                capacity.get("valid_access") == "FORBIDDEN",
+                "M37 TCN capacity-control contract differs")
     require(family in ("hmm", "tcn") and isinstance(families.get(family), dict),
             "M37 compact family differs")
     replay = equivalence.get("replay", {}).get(family)
@@ -255,12 +284,14 @@ def _validate_contract_domain(parent: dict[str, Any], amendment: dict[str, Any],
         calibrated = amendment.get("tcn", {}).get("execution")
         require(isinstance(calibrated, dict),
                 "M37 compact TCN calibrated execution is absent")
-        calibrated_execution = {
-            **parent_execution,
-            **{key: int(value) for key, value in calibrated.items()},
-        }
-        require(observed_execution in (parent_execution, calibrated_execution),
-                "M37 compact TCN execution is neither canonical replay nor calibrated budget")
+        ladder = calibrated.get("budget_ladder_updates")
+        require(isinstance(ladder, list) and ladder and
+                ladder == sorted(set(ladder)) and
+                all(isinstance(value, int) and value > 0 for value in ladder) and
+                observed_execution["updates"] in ladder and
+                all(observed_execution[key] == int(calibrated.get(key, expected))
+                    for key, expected in parent_execution.items() if key != "updates"),
+                "M37 compact TCN execution is outside the calibrated budget ladder")
     if family == "hmm":
         require(float(effective["hazard_per_morgan"]) in set(map(float, parent["hmm"]["hazard_per_morgan"])) and
                 float(effective["evidence_scale"]) in set(map(float, parent["hmm"]["evidence_lambda"])),
@@ -551,6 +582,7 @@ def _execute_candidate(candidate_id: str, family: str, effective: dict[str, Any]
     common_train: np.ndarray | None = None
     for arm in ARMS:
         features = features_by_arm[arm]
+        training_diagnostics: dict[str, int | bool | None] = {}
         spec = TraceSpec(
             int(effective.get("hidden_dim", 32)), int(effective.get("depth", 2)),
             int(effective.get("kernel_size", 3)), float(effective.get("dropout", 0.0)),
@@ -566,6 +598,7 @@ def _execute_candidate(candidate_id: str, family: str, effective: dict[str, Any]
             checkpoint=None, tune_fraction=float(effective["tune_fraction"]),
             split_seed=int(effective["split_seed"]),
             event_radius_cm=float(effective["event_radius_cM"]),
+            training_diagnostics=training_diagnostics,
         )
         train_people = np.setdiff1d(np.arange(len(features["sample_key_sha256"])),
                                     tune_people, assume_unique=True)
@@ -577,6 +610,7 @@ def _execute_candidate(candidate_id: str, family: str, effective: dict[str, Any]
                     "M37 compact TRAIN/TUNE split changed between arms")
         metrics[arm] = _candidate_metric(probabilities, tune_people, features, truth,
                                          candidate_id, family, root, arm)
+        metrics[arm]["training_diagnostics"] = training_diagnostics
         del probabilities
         gc.collect()
     require(common_tune is not None and common_train is not None,
@@ -617,6 +651,7 @@ def run_family(run_id: str, family: str, root: str, manifest_path: Path,
             positive_control.get("candidate_manifest_sha256") == sha256(manifest_path) and
             positive_control.get("parent_contract_sha256") == sha256(parent_contract_path) and
             positive_control.get("contract_amendment_sha256") == sha256(amendment_path) and
+            positive_control.get("truth_or_real_features_opened") is False and
             isinstance(positive_control.get("controls", {}).get(family), dict) and
             positive_control_receipt.get("stage") == "M37_TRACE_COMPACT_POSITIVE_CONTROL" and
             positive_control_receipt.get("run_id") == run_id and
@@ -628,35 +663,74 @@ def run_family(run_id: str, family: str, root: str, manifest_path: Path,
             "M37 compact runtime positive-control evidence differs")
     family_control = positive_control["controls"][family]
     if family == "hmm":
-        require(family_control.get("status") == "PASS_ADDITIVE_DETECTABILITY",
-                "M37 HMM failed its additive detectability control")
+        hmm_controls = family_control.get("candidates")
+        expected_hmm_ids = {str(row["candidate_id"]) for row in candidates}
+        require(family_control.get("status") ==
+                "PASS_ALL_CANDIDATES_ADDITIVE_DETECTABILITY" and
+                family_control.get("all_candidates_pass") is True and
+                family_control.get("candidate_count") == len(candidates) and
+                isinstance(hmm_controls, dict) and set(hmm_controls) == expected_hmm_ids and
+                all(row.get("status") == "PASS_ADDITIVE_DETECTABILITY" and
+                    row.get("pass") is True for row in hmm_controls.values()),
+                "M37 HMM candidate-specific additive detectability differs")
     else:
-        calibrated_updates = int(_json(amendment_path)["tcn"]["execution"]["updates"])
-        require(family_control.get("updates") == calibrated_updates and
-                family_control.get("additive", {}).get("status") in
-                {"PASS", "BUDGET_INSUFFICIENT"} and
-                family_control.get("xor_interaction", {}).get("status") in
-                {"PASS", "BUDGET_INSUFFICIENT_FOR_INTERACTION"} and
+        candidate_controls = family_control.get("candidates")
+        evaluated_ids = family_control.get("evaluated_candidate_ids")
+        eligible_ids = family_control.get("eligible_candidate_ids")
+        expected_seeds = manifest["positive_control_status"]["tcn"]["replication_seeds"]
+        expected_ladder = manifest["positive_control_status"]["tcn"]["budget_ladder_updates"]
+        expected_candidate_ids = {str(row["candidate_id"]) for row in candidates}
+        require(family_control.get("status") == "PASS_AT_LEAST_ONE_CANDIDATE" and
+                isinstance(candidate_controls, dict) and
+                isinstance(evaluated_ids, list) and isinstance(eligible_ids, list) and
+                set(evaluated_ids) == set(candidate_controls) == expected_candidate_ids and
+                family_control.get("candidate_count") == len(expected_candidate_ids) and
+                family_control.get("budget_ladder_updates") == expected_ladder and
+                0 < len(eligible_ids) <= len(evaluated_ids) and
+                set(eligible_ids) <= expected_candidate_ids and
+                family_control.get("replication_seeds") == expected_seeds and
+                family_control.get("selection_of_best_candidate") == "FORBIDDEN" and
+                family_control.get("selection_of_best_seed") == "FORBIDDEN" and
                 family_control.get("scientific_closure_if_failed") == "FORBIDDEN",
-                "M37 TCN same-budget control state differs")
-        anchor_id = str(family_control.get("anchor_candidate_id", ""))
-        anchor = next((row for row in candidates if row.get("candidate_id") == anchor_id), None)
-        require(isinstance(anchor, dict) and
-                manifest["positive_control_status"]["tcn"].get("anchor_candidate_id") == anchor_id,
-                "M37 TCN positive-control anchor is not bound to the candidate manifest")
-        anchor_effective = _effective_parameters(manifest, "tcn", anchor)
-        control_effective = {
-            **family_control.get("architecture", {}),
-            "updates": family_control.get("updates"),
-        }
-        linked_keys = (
-            "hidden_dim", "depth", "kernel_size", "dropout", "dilations",
-            "learning_rate", "seed", "event_radius_cM", "evidence_scale",
-            "validation_every", "early_stopping_patience", "updates",
-        )
-        require(all(anchor_effective.get(key) == control_effective.get(key)
-                    for key in linked_keys),
-                "M37 TCN anchor does not exactly match its positive control")
+                "M37 TCN candidate-specific capacity gate differs")
+        for candidate_id, control in candidate_controls.items():
+            seed_results = control.get("seed_results") if isinstance(control, dict) else None
+            require(isinstance(seed_results, dict) and
+                    control.get("seeds") == expected_seeds and
+                    set(seed_results) == {str(seed) for seed in expected_seeds},
+                    "M37 TCN candidate lacks all fixed-seed capacity ladders")
+            for seed_result in seed_results.values():
+                evaluated_updates = seed_result.get("evaluated_updates")
+                first_pass_updates = seed_result.get("first_pass_updates")
+                require(isinstance(evaluated_updates, list) and evaluated_updates and
+                        evaluated_updates == expected_ladder[:len(evaluated_updates)] and
+                        (first_pass_updates is None or
+                         first_pass_updates == evaluated_updates[-1]) and
+                        seed_result.get("pass") is (first_pass_updates is not None),
+                        "M37 TCN candidate capacity ladder differs")
+        for candidate_id in eligible_ids:
+            control = candidate_controls.get(candidate_id)
+            require(isinstance(control, dict) and
+                    control.get("status") == "PASS_CAPACITY_2_OF_3" and
+                    int(control.get("pass_count", -1)) >= 2 and
+                    int(control.get("effective_updates", -1)) in expected_ladder,
+                    "M37 TCN eligible candidate lacks replicated capacity evidence")
+        # Only capacity-qualified candidates are allowed to touch real FIT/TUNE.
+        candidates = [
+            {
+                **row,
+                "parameters": {
+                    **row.get("parameters", {}),
+                    "updates": int(candidate_controls[row["candidate_id"]]["effective_updates"]),
+                },
+            }
+            for row in candidates if row["candidate_id"] in eligible_ids
+        ]
+        require(candidates, "M37 TCN has no capacity-qualified real-data candidate")
+        # The residual operator changed prospectively, so the non-binding TCN
+        # reference uses a qualified candidate and is reused by the sweep.
+        replay = {**candidates[0], "canonical_candidate_id":
+                  replay["canonical_candidate_id"]}
     canonical, canonical_collection_receipt = _load_canonical_collection(
         canonical_metrics_path, canonical_receipt_path, root,
     )
@@ -758,6 +832,8 @@ def run_family(run_id: str, family: str, root: str, manifest_path: Path,
         tune_axis_sha = hashlib.sha256(
             features[ARMS[0]]["sample_key_sha256"][tune_people].tobytes()).hexdigest()
         for arm in ARMS:
+            candidate_metrics[arm]["schema_version"] = "1.0.0"
+            candidate_metrics[arm]["stage"] = "M37_TRACE_SCORE"
             candidate_metrics[arm]["run_id"] = run_id
             metric_path = output_dir / f"{candidate_id}.{family}.{arm}.metrics.json"
             _write_json(metric_path, candidate_metrics[arm])
@@ -773,6 +849,10 @@ def run_family(run_id: str, family: str, root: str, manifest_path: Path,
                 "evaluation_split": "FIT_TUNE",
                 "execution_mode": "IN_MEMORY_NO_PREDICTION_OR_CHECKPOINT_EXPORT",
                 "effective_hyperparameters": effective,
+                "training_diagnostics": candidate_metrics[arm].get(
+                    "training_diagnostics",
+                    "NOT_APPLICABLE_DETERMINISTIC_HMM",
+                ),
                 "manifest_sha256": sha256(manifest_path),
                 "parent_contract_sha256": sha256(parent_contract_path),
                 "contract_amendment_sha256": sha256(amendment_path),
@@ -838,6 +918,10 @@ def run_family(run_id: str, family: str, root: str, manifest_path: Path,
             "valid_access": "FORBIDDEN",
         },
         "positive_control_status": family_control,
+        "positive_control_all_status": positive_control["controls"],
+        "capacity_qualified_candidate_ids": (
+            [str(row["candidate_id"]) for row in candidates] if family == "tcn" else []
+        ),
         "tcn_rd_raw_f0_identity": (True if family == "tcn" else
                                     "NOT_APPLICABLE_HMM_SMOOTHING_MODEL"),
         "positive_control_precondition": manifest["positive_control_status"].get(family),

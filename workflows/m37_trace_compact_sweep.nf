@@ -1,6 +1,6 @@
 nextflow.enable.dsl=2
 
-include { M37_TRACE_COMPACT_POSITIVE_CONTROL; M37_TRACE_COMPACT_SWEEP; M37_TRACE_COMPACT_DECISION } from '../modules/37_TRACE_COMPACT_SWEEP'
+include { m37_compact_capacity_families; m37_compact_decision_parts; M37_TRACE_COMPACT_CAPACITY_SCREEN; M37_TRACE_COMPACT_CAPACITY_REPLICATION; M37_TRACE_COMPACT_SWEEP; M37_TRACE_COMPACT_DECISION } from '../modules/37_TRACE_COMPACT_SWEEP'
 include { M37_TRACE_COLLECT_METRICS } from '../modules/37_TRACE_LAI'
 
 workflow {
@@ -40,8 +40,6 @@ workflow {
         file(parentValue, checkIfExists: true) : file("${repoDir}/${parentValue}", checkIfExists: true)
     def contractAmendment = amendmentValue.startsWith('/') || amendmentValue.startsWith('gs://') ?
         file(amendmentValue, checkIfExists: true) : file("${repoDir}/${amendmentValue}", checkIfExists: true)
-    def featureFiles = params.m37_compact_feature_files.collect { value -> file(value, checkIfExists: true) }
-    def featureReceipts = params.m37_compact_feature_receipts.collect { value -> file(value, checkIfExists: true) }
     def sourceFiles = [
         'm33_safe_bridge_core.py', 'm37_trace_core.py', 'm37_trace_train.py',
         'm37_trace_score.py', 'm37_trace_collect_metrics.py',
@@ -54,14 +52,34 @@ workflow {
         file("${repoDir}/conf/m37_trace_gcp.config", checkIfExists: true),
     ]
 
-    M37_TRACE_COMPACT_POSITIVE_CONTROL(
+    def capacitySources = [
+        'm33_safe_bridge_core.py', 'm37_trace_core.py', 'm37_trace_train.py',
+        'm37_trace_compact_positive_control.py',
+    ].collect { name -> file("${repoDir}/bin/${name}", checkIfExists: true) }
+
+    M37_TRACE_COMPACT_CAPACITY_SCREEN(
         channel.of(tuple(candidateManifest, parentContract, contractAmendment)),
-        ['m33_safe_bridge_core.py', 'm37_trace_core.py', 'm37_trace_train.py',
-         'm37_trace_compact_positive_control.py']
-            .collect { name -> file("${repoDir}/bin/${name}", checkIfExists: true) },
+        capacitySources,
     )
-    def familyInput = M37_TRACE_COMPACT_POSITIVE_CONTROL.out.evidence.flatMap { positive, positiveReceipt ->
-        ['hmm', 'tcn'].collect { family ->
+    def replicationInput = M37_TRACE_COMPACT_CAPACITY_SCREEN.out.evidence.map {
+        screen, screenReceipt, selection, selectionReceipt ->
+        tuple(candidateManifest, parentContract, contractAmendment,
+              screen, screenReceipt, selection, selectionReceipt)
+    }
+    M37_TRACE_COMPACT_CAPACITY_REPLICATION(replicationInput, capacitySources)
+
+    // HMM remains an independent exploratory lane.  The synthetic artifact is
+    // inspected before constructing any real-data TCN task: a failed TCN gate
+    // removes only TCN, while the 12 HMM pairs remain runnable and reportable.
+    def familyInput = M37_TRACE_COMPACT_CAPACITY_REPLICATION.out.evidence.flatMap { positive, positiveReceipt ->
+        def families = m37_compact_capacity_families(positive)
+        def featureFiles = params.m37_compact_feature_files.collect {
+            value -> file(value, checkIfExists: true)
+        }
+        def featureReceipts = params.m37_compact_feature_receipts.collect {
+            value -> file(value, checkIfExists: true)
+        }
+        families.collect { family ->
             tuple(family, candidateManifest, parentContract, contractAmendment,
                   file(params.m37_compact_canonical_metrics, checkIfExists: true),
                   file(params.m37_compact_canonical_metrics_receipt, checkIfExists: true),
@@ -95,10 +113,9 @@ workflow {
         .collect(flat: false)
     def decisionInput = M37_TRACE_COLLECT_METRICS.out.bundle
         .combine(familyAudits)
-        .map { root, metrics, receipt, auditRows ->
-            tuple(root, metrics, receipt,
-                  auditRows.collect { row -> row[0] },
-                  auditRows.collect { row -> row[1] })
+        .map { combined ->
+            def parts = m37_compact_decision_parts(combined)
+            tuple(parts[0], parts[1], parts[2], parts[3], parts[4])
         }
     M37_TRACE_COMPACT_DECISION(
         decisionInput,

@@ -1,14 +1,91 @@
 nextflow.enable.dsl=2
 
-process M37_TRACE_COMPACT_POSITIVE_CONTROL {
-    tag { "${params.m37_run_id}_same-budget-controls" }
+
+def m37_compact_capacity_families(positive_control_path) {
+    // Use the NIO provider directly: GCS-backed Nextflow Paths cannot be
+    // converted safely with ``toFile()``.
+    def capacity = java.nio.file.Files.newBufferedReader(positive_control_path).withCloseable {
+        reader -> new groovy.json.JsonSlurper().parse(reader)
+    }
+    def eligible = capacity?.controls?.tcn?.eligible_candidate_ids
+    if (!(eligible instanceof List)) {
+        throw new IllegalArgumentException('M37 TCN capacity roster is missing')
+    }
+    return eligible.isEmpty() ? ['hmm'] : ['hmm', 'tcn']
+}
+
+
+def m37_compact_decision_parts(combined) {
+    if (!(combined instanceof List) || combined.size() < 4) {
+        def observedSize = combined instanceof List ? combined.size() : 'not-a-list'
+        throw new IllegalArgumentException(
+            "M37 compact decision channel shape differs: ${observedSize} fields"
+        )
+    }
+    // ``combine`` flattens the collected audit rows into the left tuple.  A
+    // one-argument closure is therefore required for both the HMM-only
+    // (4 fields) and HMM+TCN (5 fields) branches.
+    def auditRows = combined.subList(3, combined.size())
+    if (!(auditRows instanceof List) || auditRows.isEmpty() ||
+        !auditRows.every { row -> row instanceof List && row.size() == 2 }) {
+        throw new IllegalArgumentException('M37 compact family-audit channel shape differs')
+    }
+    return [combined[0], combined[1], combined[2],
+            auditRows.collect { row -> row[0] },
+            auditRows.collect { row -> row[1] }]
+}
+
+
+process M37_TRACE_COMPACT_CAPACITY_SCREEN {
+    tag { "${params.m37_run_id}_capacity-screen" }
     publishDir { "${params.m37_results_dir}/${params.m37_run_id}/audit" }, mode: 'copy', overwrite: false
     cpus 2
     memory '4 GB'
-    time '30m'
+    // The adaptive ladder may execute four deterministic restarts per
+    // candidate.  This is a ceiling, not reserved billable runtime.
+    time '4h'
 
     input:
     tuple path(candidate_manifest), path(parent_contract), path(contract_amendment)
+    path source_files
+
+    output:
+    tuple path('m37.capacity_screen.json'),
+          path('m37.capacity_screen.receipt.json'),
+          path('m37.capacity_selection.json'),
+          path('m37.capacity_selection.receipt.json'), emit: evidence
+
+    script:
+    def authFlags = source_files.collect { path -> "--auth-file 'staged/bin/${path.name}'" }.join(' ')
+    """
+    set -euo pipefail
+    export USER=m37-runner
+    export LOGNAME=m37-runner
+    mkdir -p staged/bin
+    cp ${source_files} staged/bin/
+    PYTHONPATH=staged/bin python3 staged/bin/m37_trace_compact_positive_control.py \
+      --phase screen \
+      --run-id '${params.m37_run_id}' --candidate-manifest ${candidate_manifest} \
+      --parent-contract ${parent_contract} --contract-amendment ${contract_amendment} \
+      --container-digest '${params.m37_container_digest}' \
+      ${authFlags} \
+      --output m37.capacity_screen.json \
+      --selection-output m37.capacity_selection.json
+    """
+}
+
+
+process M37_TRACE_COMPACT_CAPACITY_REPLICATION {
+    tag { "${params.m37_run_id}_capacity-replication" }
+    publishDir { "${params.m37_results_dir}/${params.m37_run_id}/audit" }, mode: 'copy', overwrite: false
+    cpus 2
+    memory '4 GB'
+    time '4h'
+
+    input:
+    tuple path(candidate_manifest), path(parent_contract), path(contract_amendment),
+          path(capacity_screen), path(capacity_screen_receipt),
+          path(capacity_selection), path(capacity_selection_receipt)
     path source_files
 
     output:
@@ -24,10 +101,12 @@ process M37_TRACE_COMPACT_POSITIVE_CONTROL {
     mkdir -p staged/bin
     cp ${source_files} staged/bin/
     PYTHONPATH=staged/bin python3 staged/bin/m37_trace_compact_positive_control.py \
+      --phase replicate \
       --run-id '${params.m37_run_id}' --candidate-manifest ${candidate_manifest} \
       --parent-contract ${parent_contract} --contract-amendment ${contract_amendment} \
       --container-digest '${params.m37_container_digest}' \
-      --updates '${params.m37_compact_positive_control_updates}' \
+      --screen ${capacity_screen} --screen-receipt ${capacity_screen_receipt} \
+      --selection ${capacity_selection} --selection-receipt ${capacity_selection_receipt} \
       ${authFlags} \
       --output m37.compact_positive_control.json
     """
