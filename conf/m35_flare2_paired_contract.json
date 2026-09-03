@@ -1,0 +1,93 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "M35_FLARE2_PAIRED_CHR22",
+  "status": "PLAN_ONLY_PRECHECK_DEFAULT",
+  "chromosome": "22",
+  "ancestry_order": ["AFR", "EUR", "NAM"],
+  "comparison": {
+    "left": "FLARE_0_6_DIRECT",
+    "right": "FLARE2_PANEL_PROBS_CLUSTERED_MODEL",
+    "estimand": "paired_prediction_delta_on_identical_mosaic_marker_spine",
+    "fairness_invariants": [
+      "reference_vcf_and_sample_level_macro_assignment",
+      "target_mosaics_and_target_phase",
+      "marker_ref_alt_axis",
+      "genetic_map",
+      "ancestry_order",
+      "random_seed_and_threads",
+      "shared_scorer"
+    ]
+  },
+  "reference_panel_policy": {
+    "fine_mode": "population_or_subpopulation_panels_with_explicit_panel_to_macro_map",
+    "coarse_mode": "macroancestry_panels_allowed_only_when_manifest_labels_COARSE_MACROANCESTRY_EXPLICIT",
+    "cluster_mapping": "aggregate_model_p_matrix_over_all_panels_of_each_macroancestry_then_assign_one_to_one",
+    "paired_semantics": "direct_FLARE_uses_macro_panels_while_FLARE2_uses_authenticated_fine_panels_with_the_same_sample_level_macro_assignment",
+    "canonical_ref_train_metadata": {
+      "roles_uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m27f-blind-split-20260816a/results/27f_blind_split/m27f_split.private.tsv",
+      "roles_sha256": "7e4abe2aa57c7375023268e56e3c1dbf9c7bbedc31c3acf1e07b4b07dabfdd07",
+      "metadata_uri": "gs://projects-usp/nam-diversity/natwgs.1000G.sgdp.hgdp.hg38/metadata_complete_revised.txt",
+      "metadata_sha256": "d5035d2effa9855999ec684309b9d3d4a3db07184fbb089e73e74957e6fe13d0"
+    }
+  },
+  "methods": {
+    "flare_0_6": {
+      "parameters": {
+        "array": false,
+        "probs": true,
+        "em": true,
+        "min-mac": 1,
+        "min-maf": 0.0,
+        "gen": 12.0,
+        "update-p": false,
+        "panel-probs": false,
+        "seed": 3401103,
+        "nthreads": 4
+      }
+    },
+    "flare2": {
+      "panel_probability_parameters": {
+        "array": false,
+        "probs": false,
+        "em": true,
+        "min-mac": 1,
+        "min-maf": 0.0,
+        "gen": 12.0,
+        "update-p": false,
+        "panel-probs": true,
+        "seed": 3401103,
+        "nthreads": 4
+      },
+      "final_parameters": {
+        "array": false,
+        "probs": true,
+        "em": true,
+        "min-mac": 1,
+        "min-maf": 0.0,
+        "gen": 12.0,
+        "update-p": true,
+        "panel-probs": false,
+        "seed": 3401103,
+        "nthreads": 4
+      },
+      "cluster_assignment": {
+        "source": "model_p_matrix_and_declared_reference_panels_only",
+        "method": "exhaustive_one_to_one_log_probability_assignment",
+        "min_probability": 0.5,
+        "min_log_margin": 0.25,
+        "on_ambiguity": "fail"
+      },
+      "model_builder_argv": ["python3", "create_model_file.py", "3", "PANELS", "MODEL_PREFIX"]
+    }
+  },
+  "scoring": {
+    "scorer_role": "separate_paired_scoring_stage",
+    "shared_prediction_axis_required": true,
+    "known_answer_required_before_inference": true
+  },
+  "resource_plan": {
+    "request": {"cpus": 4, "memory": "8 GB", "time": "12h", "max_forks": 1},
+    "basis": "Two FLARE invocations plus FLARE2 model construction; allocation is conservative planning derived from M34 requests, not a measured M35 cost.",
+    "promotion_gate": "Record wall time, peak RSS and staged byte counts from a preflight-only or bounded pilot before any larger expansion."
+  }
+}

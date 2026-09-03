@@ -1,0 +1,21 @@
+{
+  "amendment_id": "M35D_R1_COMMON_AXIS_AFTER_GATE_BEFORE_SCORE",
+  "contract_sha256": "55f954f166b077d0dd0b4f392499c483812fc5d94bede241a7464fc6c1982b6f",
+  "created_utc": "2026-09-02T23:22:34Z",
+  "decision": {
+    "canonical_M34_F0": "retain_as_42986_marker_context_only_without_cross_axis_delta",
+    "excluded_marker_count": 254,
+    "exclusion_reason": "monomorphic_in_the_preassigned_69_person_reference_after_FLARE_min_mac_1",
+    "full_R1_marker_count": 42986,
+    "paired_scoring": "derive_an_exact_R1_truth_subset_and_score_both_methods_on_the_same_42732_markers",
+    "retained_marker_count": 42732
+  },
+  "discovery_stage": "paired_inference_axis_audit_before_any_M35D_score",
+  "gate_sha256": "094cc35fbcc8f8bb5dadf462694c9c82edd69d7d1a8bee6bdb707e5cb84ad1c1",
+  "rationale": "FLARE 0.6 and FLARE2 both retained the same ordered marker subset; forcing a 42986-marker audit would reject two geometrically matched predictions, while comparing either one to full-axis aggregate metrics would be invalid.",
+  "reserved_root_policy": "R2_must_not_be_read_referenced_or_scored",
+  "schema_version": "1.0.0",
+  "selection_policy_changed": false,
+  "status": "FROZEN_TECHNICAL_AMENDMENT_AFTER_BLIND_GATE_BEFORE_M35D_SCORING",
+  "truth_values_used_to_define_amendment": false
+}

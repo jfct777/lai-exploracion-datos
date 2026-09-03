@@ -1,0 +1,137 @@
+{
+  "schema_version": "1.0.0",
+  "experiment_id": "M35B_FLARE2_BALANCED_SENSITIVITY_CHR22",
+  "status": "PREREGISTERED_EXPLORATORY_SCREEN",
+  "scope": {
+    "chromosome": "22",
+    "marker_count": 42986,
+    "marker_axis_sha256": "e82ef9b853283de33f5873b2fbdebebe79291969a9fe43deb4c8d685d4a71ea0",
+    "target_set": "M34_R0_VALID_32_UNCHANGED",
+    "target_truth_hidden_until_cluster_gate": true,
+    "claim": "diagnose_whether_the_M35_FLARE2_cluster_NO_GO_depended_on_341_387_25_reference_imbalance"
+  },
+  "inputs": {
+    "reference_vcf": {
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-128-r0-20260827a/valid/indexed/reference/m34_ref_train.chr22.vcf.gz",
+      "generation": "1787833242485887",
+      "sha256": "eaf878473888e5c44847a3bad99226a9e0a34c9b9255376f8116ca6e6a3c32fc"
+    },
+    "reference_tbi": {
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-128-r0-20260827a/valid/indexed/reference/m34_ref_train.chr22.vcf.gz.tbi",
+      "generation": "1787833242417430",
+      "sha256": "5998120ff6d725a06316698f8b6e4012d1f54487ca945d1b1ec803d2e12c1b99"
+    },
+    "target_vcf": {
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-128-r0-20260827a/valid/indexed/target/m34_target.chr22.vcf.gz",
+      "generation": "1787833402442078",
+      "sha256": "56f77e42c178ce194e9cdca1a86574a349f9581a380ca1bf616c526ff33a0ac9"
+    },
+    "target_tbi": {
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-128-r0-20260827a/valid/indexed/target/m34_target.chr22.vcf.gz.tbi",
+      "generation": "1787833402431441",
+      "sha256": "907949955c5d8fd8bbfefbc756ac58687ef6e9d933c99b6cec66d72b3611d164"
+    },
+    "genetic_map": {
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-128-r0-20260827a/valid/flare/m34_valid_flare/flare.map",
+      "generation": "1787833742781892",
+      "sha256": "6e93dae8e25612c79c1b8a11ba936c2693743e5bc8c697fdc07565900ea7d3d0"
+    },
+    "roles": {
+      "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m27f-blind-split-20260816a/results/27f_blind_split/m27f_split.private.tsv",
+      "generation": "1786897821863538",
+      "sha256": "7e4abe2aa57c7375023268e56e3c1dbf9c7bbedc31c3acf1e07b4b07dabfdd07"
+    },
+    "truth": {
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-128-r0-20260827a/valid/truth/m34_valid_truth/truth.npz",
+      "generation": "1787834052933586",
+      "sha256": "8fbeebc814738d0c9ee49fdfd811ce6d4a5cb8a5f6f95301f24ccf8df570a897",
+      "permitted_stage": "FINAL_SCORE_AFTER_PRIMARY_GATE_ONLY"
+    },
+    "canonical_f0_metrics": {
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-128-r0-20260827a/metrics/FLARE/F0/baseline_R0_r0p2cM/F0/FLARE.F0.baseline_R0_r0p2cM.F0.metrics.json",
+      "generation": "1787834302419496",
+      "sha256": "17f2d3b172b039dd825528a115478c41fd901f179bbbb148f2e3a19776fb9f95",
+      "role": "contextual_full_reference_baseline_not_the_paired_balanced_control"
+    }
+  },
+  "reference_balance": {
+    "source_counts": {"AFR": 341, "EUR": 387, "NAM": 25},
+    "selected_counts_per_seed": {"AFR": 25, "EUR": 25, "NAM": 25},
+    "selection_method": "population_floor_then_capacity_weighted_Hamilton_with_sha256_ties",
+    "selection_seeds": [350101, 350202, 350303],
+    "selection_independence_note": "seeds_are_fixed_sensitivity_subsets_not_independent_populations"
+  },
+  "cluster_screen": {
+    "primary_granularity": "coarse",
+    "sensitivity_granularity": "fine",
+    "gmm_seeds": [351103, 352207, 353301],
+    "flare_panel_probability_seed": 3401103,
+    "n_ancestries": 3,
+    "nam_support_minimum": 0.5,
+    "assignment_log_margin_minimum": 0.25,
+    "primary_gate": "all_9_coarse_selection_by_gmm_combinations_must_pass",
+    "fine_gate_role": "reported_sensitivity_not_used_for_promotion",
+    "no_post_hoc_seed_selection": true
+  },
+  "primary_final_pair": {
+    "selection_seed": 350101,
+    "gmm_seed": 351103,
+    "granularity": "coarse",
+    "direct_flare_reference": "same_balanced_75_sample_subset",
+    "paired_methods": ["FLARE_0_6_BALANCED", "FLARE2_BALANCED"],
+    "launch_condition": "primary_cluster_gate_passes_9_of_9"
+  },
+  "flare_parameters": {
+    "panel_probability": {
+      "array": false,
+      "probs": false,
+      "em": true,
+      "min-mac": 1,
+      "min-maf": 0.0,
+      "gen": 12.0,
+      "update-p": false,
+      "panel-probs": true,
+      "seed": 3401103,
+      "nthreads": 2
+    },
+    "direct": {
+      "array": false,
+      "probs": true,
+      "em": true,
+      "min-mac": 1,
+      "min-maf": 0.0,
+      "gen": 12.0,
+      "update-p": false,
+      "panel-probs": false,
+      "seed": 3401103,
+      "nthreads": 2
+    },
+    "final": {
+      "array": false,
+      "probs": true,
+      "em": true,
+      "min-mac": 1,
+      "min-maf": 0.0,
+      "gen": 12.0,
+      "update-p": true,
+      "panel-probs": false,
+      "seed": 3401103,
+      "nthreads": 2
+    }
+  },
+  "stop_rules": {
+    "before_truth": [
+      "any_input_hash_or_axis_differs",
+      "any_subset_is_not_exactly_25_25_25",
+      "any_coarse_combination_has_NAM_support_below_0.5",
+      "any_coarse_combination_has_log_margin_below_0.25"
+    ],
+    "after_truth": "report_the_preassigned_paired_point_estimate_without_retuning_or_seed_selection"
+  },
+  "claim_limits": [
+    "exploratory_single_chromosome_single_target_root",
+    "three_subsets_share_the_same_source_reference_panel",
+    "does_not_test_rare_variants_or_DNABR_real_targets",
+    "does_not_modify_or_open_M27F_VALID_or_TEST_roles"
+  ]
+}
