@@ -1,0 +1,17 @@
+# Fuentes generadas o privadas: no forman parte de la arquitectura del código.
+.git/
+.claude/
+.nextflow/
+graphify-out/
+work/
+results/
+runs/
+.m38b-post-e2e*/
+
+# Cachés y trazas locales.
+**/__pycache__/
+*.pyc
+.pytest_cache/
+trace-*.txt
+report-*.html
+timeline-*.html
