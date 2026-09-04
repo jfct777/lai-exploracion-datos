@@ -1,0 +1,47 @@
+{
+  "artifacts": [
+    {
+      "basename": "m38b.analytic.metrics.json",
+      "logical_id": "analytic_metrics",
+      "sha256": "48fee605e638428d59e7efc4e6fc140d28fdfd880165710d344fc4d9189a9632",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m38b-r0-oof-models-20260903c/score/m38b.analytic.metrics.json"
+    },
+    {
+      "basename": "m38b.analytic.metrics.receipt.json",
+      "logical_id": "analytic_receipt",
+      "sha256": "ab46210e370abb8e94d2dfb5b9106c0f59e80a9d11fcdc35ba01da6b041a9561",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m38b-r0-oof-models-20260903c/score/m38b.analytic.metrics.receipt.json"
+    },
+    {
+      "basename": "m38b.tcn.metrics.json",
+      "logical_id": "tcn_metrics",
+      "sha256": "e49def9553d1eba941dd75236d1c66c0a5153e16af614482812f899c2198851e",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m38b-r0-oof-models-20260903c/score/m38b.tcn.metrics.json"
+    },
+    {
+      "basename": "m38b.tcn.metrics.receipt.json",
+      "logical_id": "tcn_receipt",
+      "sha256": "824a91d76d5a6e94cffbd0bc07f4f39f152eb6860b834648d03e2439d9335c7b",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m38b-r0-oof-models-20260903c/score/m38b.tcn.metrics.receipt.json"
+    },
+    {
+      "basename": "m38b.positive.metrics.json",
+      "logical_id": "positive_metrics",
+      "sha256": "4335d99550d694d298393a9c5c25034a79aa3f40c605652927cff2890e804f11",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m38b-r0-oof-models-20260903c/controls/positive/score/m38b.positive.metrics.json"
+    },
+    {
+      "basename": "m38b.positive.metrics.receipt.json",
+      "logical_id": "positive_receipt",
+      "sha256": "6a47ae2cca65a594ae7c38de227ba5d5e1e13c892600d8b31d21de21ec39564f",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m38b-r0-oof-models-20260903c/controls/positive/score/m38b.positive.metrics.receipt.json"
+    }
+  ],
+  "decision_script": {
+    "basename": "m38b_decide.py",
+    "sha256": "f91aacde1fe762211d0293fd4d488c4225f52ffed5f9cdbdb5fddc738605485b"
+  },
+  "schema_version": "1.0.0",
+  "source_run_uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m38b-r0-oof-models-20260903c",
+  "stage": "M38B_FINALIZER_INPUTS"
+}
