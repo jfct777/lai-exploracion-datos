@@ -38,7 +38,7 @@ def verify_model_contract_receipt(path: Path) -> dict[str, object]:
         and receipt.get("source_binding") == "DETERMINISTIC_LOAD_BEARING_SOURCE_MANIFEST"
         and isinstance(receipt.get("source_manifest_sha256"), str)
         and len(receipt["source_manifest_sha256"]) == 64
-        and len(receipt.get("source_manifest", [])) == 27,
+        and len(receipt.get("source_manifest", [])) == 28,
         "M38B authenticated model contract differs",
     )
     return receipt

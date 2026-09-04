@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
+import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -45,8 +49,61 @@ class M38BModelContractTests(unittest.TestCase):
             self.assertEqual(observed["amendment_2_sha256"], digest(amendment_2))
             self.assertEqual(observed["source_binding"],
                              "DETERMINISTIC_LOAD_BEARING_SOURCE_MANIFEST")
-            self.assertEqual(len(observed["source_manifest"]), 27)
+            self.assertEqual(len(observed["source_manifest"]), 28)
             self.assertEqual(len(observed["source_manifest_sha256"]), 64)
+
+    def test_declared_python_sources_cover_local_import_closure(self) -> None:
+        """Every local transitive import must be staged and authenticated."""
+        declared = {name for name in LOAD_BEARING_SOURCE_NAMES if name.endswith(".py")}
+        closure = set(declared)
+        frontier = list(declared)
+        while frontier:
+            name = frontier.pop()
+            parsed = ast.parse((ROOT / "bin" / name).read_text(encoding="utf-8"))
+            for node in ast.walk(parsed):
+                if isinstance(node, ast.Import):
+                    modules = [alias.name.split(".", 1)[0] for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    modules = [node.module.split(".", 1)[0]]
+                else:
+                    continue
+                for module in modules:
+                    dependency = f"{module}.py"
+                    if (ROOT / "bin" / dependency).is_file() and dependency not in closure:
+                        closure.add(dependency)
+                        frontier.append(dependency)
+        self.assertEqual(closure, declared, f"unstaged local imports: {sorted(closure - declared)}")
+
+    def test_production_entrypoints_import_from_staged_sources_only(self) -> None:
+        """Mirror the isolated staged/bin environment used by Google Batch."""
+        with tempfile.TemporaryDirectory(prefix="m38b-import-smoke-") as raw:
+            staged = Path(raw) / "staged" / "bin"
+            staged.mkdir(parents=True)
+            python_sources = sorted(
+                name for name in LOAD_BEARING_SOURCE_NAMES if name.endswith(".py")
+            )
+            for name in python_sources:
+                shutil.copy2(ROOT / "bin" / name, staged / name)
+            entrypoints = (
+                "m38b_validate_model_contract", "m38b_subset_factors",
+                "m38b_bind_marker_axis", "m38b_strict_sham", "m38b_materialize_arm",
+                "m38b_make_folds", "m38b_positive_control", "m38b_partition_fold",
+                "m38b_train_fold", "m38b_collect_oof", "m38b_pack_scoring",
+                "m38b_score_oof", "m38b_score_positive", "m38b_decide",
+            )
+            environment = os.environ.copy()
+            environment["PYTHONPATH"] = str(staged)
+            environment["PYTHONNOUSERSITE"] = "1"
+            result = subprocess.run(
+                [sys.executable, "-c", ";".join(f"import {name}" for name in entrypoints)],
+                cwd=staged,
+                env=environment,
+                text=True,
+                capture_output=True,
+                timeout=120,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_tampered_amendment_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

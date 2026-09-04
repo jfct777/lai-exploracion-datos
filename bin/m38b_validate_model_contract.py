@@ -13,7 +13,8 @@ from m33_safe_bridge_core import write_exclusive_json
 
 
 LOAD_BEARING_SOURCE_NAMES = frozenset({
-    "m33_safe_bridge_core.py", "m34_parse_flare_truth.py", "m37_trace_core.py",
+    "m33_safe_bridge_core.py", "m34_generate_mosaics.py", "m34_parse_flare_truth.py",
+    "m37_trace_core.py",
     "m37_bind_marker_axis.py", "m37_trace_materialize.py", "m37_trace_train.py",
     "m38b_oof_core.py", "m38b_validate_model_contract.py", "m38b_subset_factors.py",
     "m38b_bind_marker_axis.py", "m38b_strict_sham.py", "m38b_materialize_arm.py",

@@ -73,7 +73,8 @@ workflow {
     def amendment1 = file("${repoDir}/conf/m38b_r0_oof_amendment_1.json", checkIfExists: true)
     def amendment2 = file("${repoDir}/conf/m38b_r0_oof_amendment_2.json", checkIfExists: true)
     def sourceNames = [
-        'm33_safe_bridge_core.py', 'm34_parse_flare_truth.py',
+        'm33_safe_bridge_core.py', 'm34_generate_mosaics.py',
+        'm34_parse_flare_truth.py',
         'm37_trace_core.py', 'm37_bind_marker_axis.py',
         'm37_trace_materialize.py', 'm37_trace_train.py', 'm38b_oof_core.py',
         'm38b_validate_model_contract.py', 'm38b_subset_factors.py',

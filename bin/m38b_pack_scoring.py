@@ -36,7 +36,7 @@ def model_contract_provenance(path: Path | None) -> dict[str, str]:
         and document.get("source_binding") == "DETERMINISTIC_LOAD_BEARING_SOURCE_MANIFEST"
         and isinstance(document.get("source_manifest_sha256"), str)
         and len(document["source_manifest_sha256"]) == 64
-        and len(document.get("source_manifest", [])) == 27,
+        and len(document.get("source_manifest", [])) == 28,
         "M38B scoring-pack model contract differs",
     )
     return {
