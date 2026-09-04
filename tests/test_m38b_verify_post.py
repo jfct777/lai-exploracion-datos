@@ -124,6 +124,64 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def make_partition_binding(
+    run_dir: Path, identity: str, fold: int, inner_seed: int,
+) -> dict:
+    is_positive = identity in subject.EXPECTED_POSITIVE_IDS
+    arm = "POSITIVE" if is_positive else identity
+    feature_stem = run_dir / f"partitions/features/m38b.{identity}.fold{fold}"
+    fit_features = Path(f"{feature_stem}.fit.features.npz")
+    score_features = Path(f"{feature_stem}.score.features.npz")
+    feature_receipt_path = Path(f"{feature_stem}.features.receipt.json")
+    write_npz(fit_features, {"rows": np.arange(64, dtype=np.int64)})
+    write_npz(score_features, {"rows": np.arange(32, dtype=np.int64)})
+    write_json(feature_receipt_path, {
+        "stage": "M38B_PARTITION_FEATURES",
+        "status": "PASS_TRUTH_BLIND_FEATURE_PARTITION",
+        "fold": fold,
+        "arm": arm,
+        "source_arm": arm,
+        "source_stage": ("M38B_POSITIVE_CONTROL_MATERIALIZE" if is_positive
+                         else "M37_TRACE_MATERIALIZE"),
+        "diagnostic_only": is_positive,
+        "positive_control_delta": (subject.DELTA_IDS[identity] if is_positive else None),
+        "inner_split_seed": inner_seed,
+        "fit_output_sha256": subject.sha256_file(fit_features),
+        "score_output_sha256": subject.sha256_file(score_features),
+        "fit_people": 64,
+        "score_people": 32,
+        "truth_read": False,
+    })
+
+    truth_stem = run_dir / f"partitions/truth/m38b.fold{fold}"
+    fit_truth = Path(f"{truth_stem}.fit.truth.npz")
+    truth_receipt_path = Path(f"{truth_stem}.truth.receipt.json")
+    write_npz(fit_truth, {"rows": np.arange(64, dtype=np.int64)})
+    write_json(truth_receipt_path, {
+        "stage": "M38B_PARTITION_TRUTH",
+        "status": "PASS_NON_SELECTING_TRUTH_PARTITION",
+        "fold": fold,
+        "inner_split_seed": inner_seed,
+        "fit_output_sha256": subject.sha256_file(fit_truth),
+        "fit_people": 64,
+        "score_people": 32,
+        "model_selection_performed": False,
+    })
+    return {
+        "diagnostic_only": is_positive,
+        "inner_split_seed": inner_seed,
+        "train_people": 48,
+        "select_people": 16,
+        "score_people": 32,
+        "score_truth_input": None,
+        "fit_features_sha256": subject.sha256_file(fit_features),
+        "score_features_sha256": subject.sha256_file(score_features),
+        "feature_receipt_sha256": subject.sha256_file(feature_receipt_path),
+        "fit_truth_sha256": subject.sha256_file(fit_truth),
+        "truth_receipt_sha256": subject.sha256_file(truth_receipt_path),
+    }
+
+
 def make_positive_materializations(run_dir: Path) -> None:
     real_path = run_dir / "features/m38b.RE.trace.npz"
     real_receipt = run_dir / "features/m38b.RE.trace.receipt.json"
@@ -168,6 +226,7 @@ def make_analytic_oof(run_dir: Path) -> dict[str, str]:
     fold_ids = np.empty(96, dtype=np.uint8)
     sources = []
     for fold in range(3):
+        partition_binding = make_partition_binding(run_dir, "RE", fold, 9000 + fold)
         selected = np.arange(fold * 32, (fold + 1) * 32)
         probability = np.full((32, 4, 6), 0.1, dtype=np.float32)
         probability[:, :, fold] = 0.5
@@ -199,6 +258,7 @@ def make_analytic_oof(run_dir: Path) -> dict[str, str]:
             "amendment_sha256": provenance["amendment_sha256"],
             "amendment_2_sha256": provenance["amendment_2_sha256"],
             "output_sha256": subject.sha256_file(prediction),
+            **partition_binding,
         })
         sources.append({
             "fold": fold, "seed": 1103,
@@ -496,6 +556,44 @@ class M38BPostVerifierTests(unittest.TestCase):
             subject.verify_oof_derivation(
                 root, "analytic", "RE", provenance, subject.HashLedger(root),
             )
+
+    def test_prediction_receipt_binds_exact_fold_partitions_for_all_arm_types(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            for index, identity in enumerate(("RE", "SHAM", "POS_d1")):
+                with self.subTest(identity=identity):
+                    receipt = make_partition_binding(root, identity, index, 7000 + index)
+                    subject.verify_prediction_partition_binding(
+                        root, identity, index, receipt, subject.HashLedger(root),
+                    )
+
+    def test_prediction_partition_binding_rejects_mutated_hashes_counts_and_truth_access(self) -> None:
+        mutations = {
+            "fit_features_sha256": "fit_features_sha256 binding differs",
+            "score_features_sha256": "score_features_sha256 binding differs",
+            "feature_receipt_sha256": "feature_receipt_sha256 binding differs",
+            "fit_truth_sha256": "fit_truth_sha256 binding differs",
+            "truth_receipt_sha256": "truth_receipt_sha256 binding differs",
+            "inner_split_seed": "inner split seed differs",
+            "train_people": "prediction.train_people must equal 48",
+            "select_people": "prediction.select_people must equal 16",
+            "score_people": "prediction.score_people must equal 32",
+            "score_truth_input": "SCORE truth must remain inaccessible",
+        }
+        for field, message in mutations.items():
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                receipt = make_partition_binding(root, "RE", 0, 7000)
+                if field.endswith("_sha256"):
+                    receipt[field] = "0" * 64
+                elif field == "score_truth_input":
+                    receipt[field] = "forbidden.score.truth.npz"
+                else:
+                    receipt[field] += 1
+                with self.assertRaisesRegex(subject.M38BPostVerificationError, message):
+                    subject.verify_prediction_partition_binding(
+                        root, "RE", 0, receipt, subject.HashLedger(root),
+                    )
 
     def test_rebound_oof_drift_fails_exact_fold_aggregation(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

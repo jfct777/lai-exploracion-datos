@@ -659,6 +659,119 @@ def _scalar_text(array: np.ndarray, label: str) -> str:
     return value.decode("utf-8") if isinstance(value, (bytes, np.bytes_)) else str(value)
 
 
+def verify_prediction_partition_binding(
+    run_dir: Path,
+    identity: str,
+    fold: int,
+    prediction_receipt: Mapping[str, Any],
+    ledger: HashLedger,
+) -> None:
+    """Bind one prediction receipt to its exact truth-blind fold inputs.
+
+    SCORE truth is deliberately absent: fitting may read only FIT truth.  The
+    prediction receipt must instead identify the feature and truth partition
+    receipts byte-for-byte; those receipts, in turn, must identify the exact
+    partition artifacts used by the fit.
+    """
+    is_positive = identity in EXPECTED_POSITIVE_IDS
+    expected_arm = "POSITIVE" if is_positive else identity
+    require(expected_arm in {"RE", "SHAM", "POSITIVE"},
+            f"unsupported partition-binding identity: {identity}")
+
+    feature_stem = run_dir / f"partitions/features/m38b.{identity}.fold{fold}"
+    fit_features = Path(f"{feature_stem}.fit.features.npz")
+    score_features = Path(f"{feature_stem}.score.features.npz")
+    feature_receipt_path = Path(f"{feature_stem}.features.receipt.json")
+    truth_stem = run_dir / f"partitions/truth/m38b.fold{fold}"
+    fit_truth = Path(f"{truth_stem}.fit.truth.npz")
+    truth_receipt_path = Path(f"{truth_stem}.truth.receipt.json")
+
+    fit_features_hash = ledger.audit(fit_features)
+    score_features_hash = ledger.audit(score_features)
+    feature_receipt_hash = ledger.audit(feature_receipt_path)
+    fit_truth_hash = ledger.audit(fit_truth)
+    truth_receipt_hash = ledger.audit(truth_receipt_path)
+    feature_receipt = strict_json_load(feature_receipt_path)
+    truth_receipt = strict_json_load(truth_receipt_path)
+
+    require(
+        feature_receipt.get("stage") == "M38B_PARTITION_FEATURES"
+        and feature_receipt.get("status") == "PASS_TRUTH_BLIND_FEATURE_PARTITION"
+        and feature_receipt.get("fold") == fold
+        and feature_receipt.get("arm") == expected_arm
+        and feature_receipt.get("source_arm") == expected_arm
+        and feature_receipt.get("fit_output_sha256") == fit_features_hash
+        and feature_receipt.get("score_output_sha256") == score_features_hash
+        and feature_receipt.get("truth_read") is False,
+        f"{identity}/fold{fold} feature partition receipt differs",
+    )
+    require_exact_int(feature_receipt.get("fit_people"), 64,
+                      f"{identity}/fold{fold}.feature_receipt.fit_people")
+    require_exact_int(feature_receipt.get("score_people"), 32,
+                      f"{identity}/fold{fold}.feature_receipt.score_people")
+    if is_positive:
+        require(
+            feature_receipt.get("diagnostic_only") is True
+            and feature_receipt.get("source_stage") ==
+                "M38B_POSITIVE_CONTROL_MATERIALIZE"
+            and feature_receipt.get("positive_control_delta") == DELTA_IDS[identity],
+            f"{identity}/fold{fold} positive feature provenance differs",
+        )
+    else:
+        require(
+            feature_receipt.get("diagnostic_only") is False
+            and feature_receipt.get("source_stage") == "M37_TRACE_MATERIALIZE"
+            and feature_receipt.get("positive_control_delta") is None,
+            f"{identity}/fold{fold} production feature provenance differs",
+        )
+
+    require(
+        truth_receipt.get("stage") == "M38B_PARTITION_TRUTH"
+        and truth_receipt.get("status") == "PASS_NON_SELECTING_TRUTH_PARTITION"
+        and truth_receipt.get("fold") == fold
+        and truth_receipt.get("fit_output_sha256") == fit_truth_hash
+        and truth_receipt.get("model_selection_performed") is False,
+        f"{identity}/fold{fold} FIT truth partition receipt differs",
+    )
+    require_exact_int(truth_receipt.get("fit_people"), 64,
+                      f"{identity}/fold{fold}.truth_receipt.fit_people")
+    require_exact_int(truth_receipt.get("score_people"), 32,
+                      f"{identity}/fold{fold}.truth_receipt.score_people")
+
+    inner_seed = prediction_receipt.get("inner_split_seed")
+    require(
+        type(inner_seed) is int
+        and feature_receipt.get("inner_split_seed") == inner_seed
+        and truth_receipt.get("inner_split_seed") == inner_seed,
+        f"{identity}/fold{fold} inner split seed differs",
+    )
+    require_exact_int(prediction_receipt.get("train_people"), 48,
+                      f"{identity}/fold{fold}.prediction.train_people")
+    require_exact_int(prediction_receipt.get("select_people"), 16,
+                      f"{identity}/fold{fold}.prediction.select_people")
+    require_exact_int(prediction_receipt.get("score_people"), 32,
+                      f"{identity}/fold{fold}.prediction.score_people")
+    require(
+        prediction_receipt.get("diagnostic_only") is is_positive,
+        f"{identity}/fold{fold} prediction diagnostic identity differs",
+    )
+    require(
+        "score_truth_input" in prediction_receipt
+        and prediction_receipt["score_truth_input"] is None,
+        f"{identity}/fold{fold} SCORE truth must remain inaccessible",
+    )
+    expected_bindings = {
+        "fit_features_sha256": fit_features_hash,
+        "score_features_sha256": score_features_hash,
+        "feature_receipt_sha256": feature_receipt_hash,
+        "fit_truth_sha256": fit_truth_hash,
+        "truth_receipt_sha256": truth_receipt_hash,
+    }
+    for name, expected_hash in expected_bindings.items():
+        require(prediction_receipt.get(name) == expected_hash,
+                f"{identity}/fold{fold} {name} binding differs")
+
+
 def verify_oof_derivation(run_dir: Path, family: str, identity: str,
                           provenance: Mapping[str, str], ledger: HashLedger,
                           event_hash: str | None = None,
@@ -787,6 +900,9 @@ def verify_oof_derivation(run_dir: Path, family: str, identity: str,
                     and prediction_receipt.get("amendment_2_sha256") ==
                         provenance["amendment_2_sha256"],
                     f"{family}/{identity}/fold{fold}/seed{seed} prediction receipt differs")
+            verify_prediction_partition_binding(
+                run_dir, identity, fold, prediction_receipt, ledger,
+            )
             if family == "tcn":
                 require(prediction_receipt.get("checkpoint_sha256") ==
                         ledger.audit(checkpoint_path),
