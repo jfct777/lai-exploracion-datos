@@ -111,8 +111,10 @@ process M38B_MATERIALIZE_ARM {
     publishDir { "${params.m38b_oof_results_dir}/${params.m38b_oof_run_id}/features" }, mode: 'copy', overwrite: false
     cpus 4; memory '12 GB'; time '60m'; maxForks params.m38b_oof_materialize_max_forks
     input:
-    tuple val(arm), path(selected), path(target), path(reference), path(factorsReceipt),
-          path(referenceReceipt), path(minusF0), path(markerAxis), path(markerAxisReceipt)
+    tuple val(arm), path(selected), path(target), path(reference),
+          path(factorsReceipt, stageAs: 'receipts/factors.receipt.json'),
+          path(referenceReceipt, stageAs: 'receipts/reference.receipt.json'),
+          path(minusF0), path(markerAxis), path(markerAxisReceipt)
     path sourceFiles
     output:
     tuple val(arm), path("m38b.${arm}.trace.npz"), path("m38b.${arm}.trace.receipt.json"), emit: bundle
