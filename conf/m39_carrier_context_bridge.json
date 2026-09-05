@@ -1,0 +1,61 @@
+{
+  "schema_version": "m39-carrier-context-bridge-v1",
+  "scope": "technical_only_chr22_R0_FIT",
+  "inputs": {
+    "reference_vcf": {
+      "path": "m34_ref_train.chr22.vcf.gz",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-128-r0-20260827a/fit/bridge/m34_fit_bridge/m34_ref_train.chr22.vcf.gz",
+      "sha256": "20f38a170c7f847a17a52df38b511186f46d047916d7075734dac60f30617c8a"
+    },
+    "target_vcf": {
+      "path": "m34_target.chr22.vcf.gz",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-128-r0-20260827a/fit/bridge/m34_fit_bridge/m34_target.chr22.vcf.gz",
+      "sha256": "c7209b0cf7eb2cf996e79915cdebe22857febc162ee080f828a2518e69deb98d"
+    },
+    "selected_loci": {
+      "path": "m34_selected_loci.npz",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-128-r0-20260827a/fit/bridge/m34_fit_bridge/m34_selected_loci.npz",
+      "sha256": "0bdf50d6812abf3d74975774f1a7257b52c3c263822e8aeaa59cd673c5c31fd0"
+    },
+    "target_rare": {
+      "path": "m34_target_rare_diploid.npz",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-128-r0-20260827a/fit/bridge/m34_fit_bridge/m34_target_rare_diploid.npz",
+      "sha256": "2b635db033571740799288bb234dad5a1b20d4c847ec624ed488bc56881ecae5"
+    },
+    "reference_summary": {
+      "path": "m34_reference_rare_summary.npz",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-128-r0-20260827a/fit/bridge/m34_fit_bridge/m34_reference_rare_summary.npz",
+      "sha256": "47502fa4697d2d1f88ea526bcaf1dd7fe49e6aa13b404c85d6d1d741a6af2fc9"
+    },
+    "genetic_map": {
+      "path": "genetic.map.chr22",
+      "uri": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/maps/genetic.map.chr22",
+      "sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9"
+    },
+    "split_manifest": {
+      "path": "m27f_split.private.tsv",
+      "uri": "gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/runs/m27f-blind-split-20260816a/results/27f_blind_split/m27f_split.private.tsv",
+      "sha256": "7e4abe2aa57c7375023268e56e3c1dbf9c7bbedc31c3acf1e07b4b07dabfdd07"
+    }
+  },
+  "parameters": {
+    "chromosome": "22",
+    "expected_reference_people": 753,
+    "expected_target_people": 96,
+    "expected_full_loci": 42986,
+    "expected_excluded_loci": 660,
+    "loci": 64,
+    "K": 8,
+    "radii_cm": [0.05, 0.2, 0.5],
+    "common_maf_min": 0.01,
+    "anchor_selection": "evenly_spaced_selected_locus_indices",
+    "frequency_role": "REF_TRAIN",
+    "minor_orientation": "REF_TRAIN_ALT_count_le_REF_count_tie_ALT",
+    "rare_phase": "discarded_diploid_dosage_only",
+    "target_partition": "FIT"
+  },
+  "claims": {
+    "allowed": ["allele_and_mask_reconciliation", "individual_carrier_context_materialization", "resource_profile"],
+    "not_evaluated": ["LAI_improvement", "population_structure", "NAM_generalization", "rare_haplotype_phase"]
+  }
+}
