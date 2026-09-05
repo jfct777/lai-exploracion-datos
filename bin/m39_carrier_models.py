@@ -7,6 +7,7 @@ explicit reference-pair latent variable; it is not used as a network likelihood.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 
 import torch
@@ -16,6 +17,7 @@ from torch.nn import functional as F
 STATE_NAMES = ("AA", "AE", "AN", "EE", "EN", "NN")
 VARIANTS = ("gated_deepset", "carrier_cross_attention", "bilinear_context")
 ARMS = ("common", "pooled", "carrier", "perturbed")
+CORRECTION_HEADS = ("multiplicative", "probability_mixture")
 
 
 def _require(condition: bool, message: str) -> None:
@@ -126,11 +128,17 @@ class CarrierContextModel(nn.Module):
     coords are validated but not used to fit a positional label shortcut. Locus
     smoothing is intentionally outside this local evidence module. Candidate
     selection, masks and the locus grid must be common-derived upstream.
+
+    The optional probability_mixture head requires an explicit positive six-state
+    mixture_prior. Its supported predictions start near, not exactly at, baseline:
+    each of two mixture gates starts at mixture_init. Missing rare information
+    falls back to the common prediction; absent common support returns baseline.
     """
 
     def __init__(self, common_features: int, variant: str = "gated_deepset", *,
                  width: int = 32, heads: int = 2, rank: int = 8,
-                 residual_bound: float = 4.0) -> None:
+                 residual_bound: float = 4.0, correction_head: str = "multiplicative",
+                 mixture_init: float = 0.01, mixture_prior: Tensor | None = None) -> None:
         super().__init__()
         _require(common_features > 0 and width > 0 and heads > 0 and rank > 0,
                  "feature count, width, heads and rank must be positive")
@@ -138,6 +146,20 @@ class CarrierContextModel(nn.Module):
         _require(variant != "carrier_cross_attention" or width % heads == 0,
                  "cross-attention width must be divisible by heads")
         _require(residual_bound > 0, "residual_bound must be positive")
+        _require(correction_head in CORRECTION_HEADS,
+                 f"correction_head must be one of {CORRECTION_HEADS}")
+        self.correction_head = correction_head
+        if correction_head == "probability_mixture":
+            _require(mixture_prior is not None, "probability_mixture requires explicit mixture_prior")
+            _require(math.isfinite(mixture_init) and 0 < mixture_init < 1,
+                     "mixture_init must be finite and strictly between zero and one")
+            prior = torch.as_tensor(mixture_prior, dtype=torch.get_default_dtype(),
+                                    device="cpu").detach().clone()
+            _require(prior.shape == (6,) and bool(torch.isfinite(prior).all())
+                     and bool((prior > 0).all())
+                     and bool(torch.allclose(prior.sum(), prior.new_tensor(1.), atol=5e-6, rtol=0)),
+                     "mixture_prior must be a strictly positive six-state simplex")
+            self.register_buffer("mixture_log_prior", (prior / prior.sum()).log())
         self.common_features, self.variant = common_features, variant
         self.width, self.heads, self.residual_bound = width, heads, residual_bound
         self.common_encoder = nn.Sequential(nn.Linear(common_features, width), nn.GELU(),
@@ -168,6 +190,10 @@ class CarrierContextModel(nn.Module):
         nn.init.zeros_(self.common_head[-1].bias)
         nn.init.zeros_(self.rare_head[-1].weight)
         nn.init.zeros_(self.rare_head[-1].bias)
+        if correction_head == "probability_mixture":
+            for gate in (self.common_gate, self.rare_gate):
+                nn.init.zeros_(gate.weight)
+                nn.init.constant_(gate.bias, math.log(mixture_init / (1 - mixture_init)))
 
     def _common(self, batch: Mapping[str, Tensor]) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         context, mask, baseline, coords = (
@@ -260,9 +286,47 @@ class CarrierContextModel(nn.Module):
         values = values * call_fraction[..., None] * mask[..., None]
         return self._encode_values(context, mask, common, values, call_fraction)
 
+    def _forward_mixture(self, batch: Mapping[str, Tensor], arm: str,
+                         return_aux: bool) -> Tensor | dict[str, Tensor]:
+        """Two convex corrections; no baseline log/floor or multiplicative bound.
+
+        qC=softmax(log prior+hC); pC=(1-lambdaC)*p0+lambdaC*qC.
+        qR=softmax(log prior+hC+hR); p=(1-lambdaR)*pC+lambdaR*qR.
+        Gates depend on common features and observed support, never on truth.
+        """
+        context, mask, baseline, common = self._common(batch)
+        common_features = _symmetrize(common)
+        support = mask.flatten(2).any(-1, keepdim=True).to(context.dtype)
+        common_gate = torch.sigmoid(self.common_gate(common_features)) * support
+        common_logits = self.common_head(common_features)
+        common_expert = torch.softmax(self.mixture_log_prior + common_logits, dim=-1)
+        common_probability = (1 - common_gate) * baseline + common_gate * common_expert
+        rare_gate = torch.zeros_like(common_gate)
+        rare_expert = common_expert
+        representation = torch.zeros_like(common_features)
+        if arm != "common":
+            if arm == "pooled":
+                rare, available = self._pooled(context, mask, common, batch)
+            else:
+                rare, available = self._carrier(context, mask, common, batch)
+            representation = _symmetrize(rare)
+            rare_gate = torch.sigmoid(self.rare_gate(common_features)) * available[..., None]
+            rare_expert = torch.softmax(
+                self.mixture_log_prior + common_logits + self.rare_head(representation), dim=-1)
+        probabilities = (1 - rare_gate) * common_probability + rare_gate * rare_expert
+        if return_aux:
+            return {"probabilities": probabilities, "common_probabilities": common_probability,
+                    "common_expert_probabilities": common_expert,
+                    "rare_expert_probabilities": rare_expert,
+                    "common_gate": common_gate, "rare_gate": rare_gate,
+                    "rare_representation": representation}
+        return probabilities
+
     def forward(self, batch: Mapping[str, Tensor], arm: str = "carrier", *,
                 return_aux: bool = False) -> Tensor | dict[str, Tensor]:
         _require(arm in ARMS, f"arm must be one of {ARMS}")
+        if self.correction_head == "probability_mixture":
+            return self._forward_mixture(batch, arm, return_aux)
         context, mask, baseline, common = self._common(batch)
         common_features = _symmetrize(common)
         support = mask.flatten(2).any(-1, keepdim=True).to(context.dtype)

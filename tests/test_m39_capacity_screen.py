@@ -35,6 +35,18 @@ class CapacityFixtureTest(unittest.TestCase):
         self.assertEqual(subset['common_context'].shape[:2], (2, 1))
         self.assertEqual(subset['coords'].shape, (1,))
 
+    def test_wrong_baselines_do_not_change_labels_or_visible_context(self):
+        original, labels = interaction_fixture(3, 51)
+        for mode in ('zero_wrong', 'floor_wrong'):
+            batch, other = interaction_fixture(3, 51, mode)
+            torch.testing.assert_close(labels, other, rtol=0, atol=0)
+            for key in set(batch)-{'baseline'}:
+                torch.testing.assert_close(original[key], batch[key], rtol=0, atol=0)
+            self.assertEqual(score(batch['baseline'], labels)['accuracy'], 0.)
+            self.assertEqual(score(batch['baseline'], labels)['zero_true_state_probability_fraction'],
+                             1. if mode == 'zero_wrong' else 0.)
+            self.assertEqual(bool((batch['baseline'][..., 1] == 0).all()), mode == 'zero_wrong')
+
 
 if __name__ == '__main__':
     unittest.main()

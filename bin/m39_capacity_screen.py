@@ -20,7 +20,7 @@ import torch
 from m39_carrier_models import CarrierContextModel, VARIANTS
 
 
-def interaction_fixture(blocks: int, seed: int) -> tuple[dict, torch.Tensor]:
+def interaction_fixture(blocks: int, seed: int, baseline_mode: str = 'balanced') -> tuple[dict, torch.Tensor]:
     """Balanced XOR with identical common inputs under both possible labels.
 
     Common similarity identifies a context, while rare genotype identifies
@@ -54,6 +54,11 @@ def interaction_fixture(blocks: int, seed: int) -> tuple[dict, torch.Tensor]:
     pooled[..., 3] = 1.0
     baseline = np.full((size, 1, 6), 1e-6, dtype=np.float32)
     baseline[..., (1, 4)] = (1-4e-6)/2
+    if baseline_mode in ('zero_wrong', 'floor_wrong'):
+        baseline.fill(0 if baseline_mode == 'zero_wrong' else 1e-12)
+        baseline[..., 0] = 1 if baseline_mode == 'zero_wrong' else 1-5e-12
+    elif baseline_mode != 'balanced':
+        raise ValueError('Unknown synthetic baseline mode')
     batch = {
         'common_context': torch.from_numpy(context),
         'candidate_mask': torch.from_numpy(mask),
@@ -80,22 +85,28 @@ def score(probabilities: torch.Tensor, labels: torch.Tensor) -> dict:
     if null_ll.item() < math.log(2) - 1e-6:
         raise ValueError('Identical-input null violates its analytic lower bound')
     return {'log_loss': ll.item(),
+            'log_loss_probability_floor': 1e-12,
+            'zero_true_state_probability_fraction': (
+                probabilities.gather(-1, labels[..., None]) == 0).float().mean().item(),
             'accuracy': (probabilities.argmax(-1) == labels).float().mean().item(),
             'identical_input_null_log_loss': null_ll.item()}
 
 
 def run_case(variant: str, width: int, learning_rate: float, steps: int,
-             seed: int, outdir: Path) -> dict:
+             seed: int, outdir: Path, *, correction_head: str = 'multiplicative',
+             baseline_mode: str = 'balanced', mixture_init: float = .01) -> dict:
     outdir.mkdir(parents=True, exist_ok=False)
     torch.set_num_threads(2)
     torch.use_deterministic_algorithms(True)
-    train, y_train = interaction_fixture(16, seed + 1)
-    evaluation, y_evaluation = interaction_fixture(32, seed + 2)
+    train, y_train = interaction_fixture(16, seed + 1, baseline_mode)
+    evaluation, y_evaluation = interaction_fixture(32, seed + 2, baseline_mode)
     start = time.monotonic()
     results = []
     for arm in ('common', 'pooled', 'carrier'):
         torch.manual_seed(seed)
-        model = CarrierContextModel(4, variant, width=width)
+        model = CarrierContextModel(4, variant, width=width, correction_head=correction_head,
+                                    mixture_init=mixture_init,
+                                    mixture_prior=[1/6]*6 if correction_head == 'probability_mixture' else None)
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
         generator = torch.Generator().manual_seed(seed + 3)
         curve = []
@@ -124,6 +135,10 @@ def run_case(variant: str, width: int, learning_rate: float, steps: int,
                             probabilities=probabilities.numpy(), labels=y_evaluation.numpy())
         results.append({'arm': arm, **metrics, 'training_curve': curve,
                         'trainable_parameters': sum(p.numel() for p in model.parameters()),
+                        'parameters_with_allocated_gradient_at_last_step': sum(
+                            p.numel() for p in model.parameters() if p.grad is not None),
+                        'nonzero_gradient_elements_at_last_step': sum(
+                            int(torch.count_nonzero(p.grad)) for p in model.parameters() if p.grad is not None),
                         'wall_seconds': time.monotonic()-arm_start,
                         'checkpoint_sha256': checkpoint_hash})
     real = next(r for r in results if r['arm'] == 'carrier')
@@ -132,9 +147,13 @@ def run_case(variant: str, width: int, learning_rate: float, steps: int,
     control_pass = all(r['log_loss'] >= math.log(2)-1e-5 and r['accuracy'] <= .50001
                        for r in controls)
     report = {
-        'schema_version': 'm39-capacity-v1',
+        'schema_version': 'm39-capacity-v2',
         'scope': 'synthetic_interaction_capacity_not_biological_result',
         'variant': variant, 'width': width, 'learning_rate': learning_rate,
+        'correction_head': correction_head, 'baseline_mode': baseline_mode,
+        'mixture_init': mixture_init,
+        'mixture_prior': [1/6]*6 if correction_head == 'probability_mixture' else None,
+        'baseline_metrics': score(evaluation['baseline'], y_evaluation),
         'steps': steps, 'seed': seed, 'train_examples': len(y_train),
         'evaluation_examples': len(y_evaluation),
         'capacity_pass': capacity_pass, 'control_pass': control_pass,
@@ -157,11 +176,18 @@ def main() -> None:
     parser.add_argument('--learning-rate', type=float, default=.003)
     parser.add_argument('--steps', type=int, default=300)
     parser.add_argument('--seed', type=int, default=39052026)
+    parser.add_argument('--correction-head', choices=('multiplicative', 'probability_mixture'),
+                        default='multiplicative')
+    parser.add_argument('--baseline-mode', choices=('balanced', 'zero_wrong', 'floor_wrong'),
+                        default='balanced')
+    parser.add_argument('--mixture-init', type=float, default=.01)
     parser.add_argument('--outdir', type=Path, required=True)
     args = parser.parse_args()
     if not 1 <= args.steps <= 2000 or not 0 < args.learning_rate < 1:
         parser.error('steps must be 1..2000 and learning rate between zero and one')
-    result = run_case(args.variant, args.width, args.learning_rate, args.steps, args.seed, args.outdir)
+    result = run_case(args.variant, args.width, args.learning_rate, args.steps, args.seed, args.outdir,
+                      correction_head=args.correction_head, baseline_mode=args.baseline_mode,
+                      mixture_init=args.mixture_init)
     print(json.dumps({key: result[key] for key in
                       ('variant', 'width', 'capacity_pass', 'control_pass', 'wall_seconds')}))
 

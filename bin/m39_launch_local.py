@@ -23,6 +23,7 @@ def main() -> None:
     parser.add_argument('--lane', choices=('bridge', 'capacity'), required=True)
     parser.add_argument('--contract', type=Path)
     parser.add_argument('--input-dir', type=Path)
+    parser.add_argument('--capacity-params', type=Path)
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
     run_dir = args.run_dir.resolve()
@@ -52,6 +53,8 @@ def main() -> None:
         '--m39_output_dir', str(output),
     ]
     if args.lane == 'bridge':
+        if args.capacity_params:
+            parser.error('Bridge cannot consume synthetic capacity parameters')
         input_dir = (args.input_dir or run_dir/'inputs').resolve()
         if not input_dir.is_relative_to(repo/'.claude'/'runs') or not input_dir.is_dir():
             parser.error('Bridge inputs must be staged in the private project runs')
@@ -62,6 +65,16 @@ def main() -> None:
         command += ['--m39_contract', str(contract)]
     elif args.contract or args.input_dir:
         parser.error('The synthetic lane cannot read bridge inputs or contracts')
+    if args.capacity_params:
+        parameter_file = args.capacity_params.resolve()
+        if not parameter_file.is_relative_to(repo) or not parameter_file.is_file():
+            parser.error('Capacity parameters must be a JSON file within this project')
+        parameters = json.loads(parameter_file.read_text())
+        allowed = {'m39_capacity_widths', 'm39_capacity_rates', 'm39_capacity_steps',
+                   'm39_capacity_seed', 'm39_capacity_heads', 'm39_capacity_baselines'}
+        if not isinstance(parameters, dict) or not set(parameters) <= allowed:
+            parser.error('Capacity overrides may only change diagnostic parameters')
+        command += ['-params-file', str(parameter_file)]
     session = f'{run_dir.name}-{args.lane}'
     receipt_path = run_dir/f'{args.lane}.launch.json'
     descriptor = os.open(receipt_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -75,6 +88,8 @@ def main() -> None:
                'new_cloud_instances': 0, 'status': 'launch_requested'}
     if args.lane == 'bridge':
         receipt['bridge_contract_sha256'] = hashlib.sha256(contract.read_bytes()).hexdigest()
+    if args.capacity_params:
+        receipt['capacity_params_sha256'] = hashlib.sha256(parameter_file.read_bytes()).hexdigest()
     with os.fdopen(descriptor, 'w') as handle:
         json.dump(receipt, handle, indent=2)
         handle.write('\n')

@@ -1,7 +1,7 @@
 nextflow.enable.dsl=2
 
 process M39_CAPACITY_CASE {
-    tag "${variant}-w${width}-lr${rate}"
+    tag "${variant}-w${width}-lr${rate}-${head}-${fixture}"
     publishDir params.m39_output_dir, mode: 'copy', overwrite: false
     container params.m39_image
     cpus 2
@@ -9,16 +9,17 @@ process M39_CAPACITY_CASE {
     time '15m'
     maxForks 2
     input:
-    tuple val(variant), val(width), val(rate)
+    tuple val(variant), val(width), val(rate), val(head), val(fixture)
     path sources
     output:
-    path "${variant}-w${width}-lr${rate}", emit: evaluated
+    path "${variant}-w${width}-lr${rate}-${head}-${fixture}", emit: evaluated
     script:
     """
     PYTHONPATH=. python3 m39_capacity_screen.py \\
       --variant '${variant}' --width '${width}' --learning-rate '${rate}' \\
       --steps '${params.m39_capacity_steps}' --seed '${params.m39_capacity_seed}' \\
-      --outdir '${variant}-w${width}-lr${rate}'
+      --correction-head '${head}' --baseline-mode '${fixture}' \\
+      --outdir '${variant}-w${width}-lr${rate}-${head}-${fixture}'
     """
 }
 
@@ -34,12 +35,25 @@ workflow {
     if (!(params.m39_capacity_rates instanceof List) ||
         !params.m39_capacity_rates.every { it in [0.001, 0.003] })
         error 'Capacity learning rates must be 0.001 or 0.003'
+    if (!(params.m39_capacity_heads instanceof List) ||
+        !params.m39_capacity_heads.every { it in ['multiplicative', 'probability_mixture'] })
+        error 'Unsupported probability correction head'
+    if (!(params.m39_capacity_baselines instanceof List) ||
+        !params.m39_capacity_baselines.every { it in ['balanced', 'zero_wrong', 'floor_wrong'] })
+        error 'Unsupported synthetic baseline'
     def cases = ['gated_deepset', 'carrier_cross_attention', 'bilinear_context'].collectMany { variant ->
         params.m39_capacity_widths.collectMany { width ->
-            params.m39_capacity_rates.collect { rate -> tuple(variant, width, rate) }
+            params.m39_capacity_rates.collectMany { rate ->
+                params.m39_capacity_heads.collectMany { head ->
+                    params.m39_capacity_baselines.collect { fixture ->
+                        tuple(variant, width, rate, head, fixture)
+                    }
+                }
+            }
         }
     }
-    if (cases.size() > 12) error 'At most twelve diagnostic configurations per run'
+    if (cases.size() < 1 || cases.size() > 12 || cases.unique(false).size() != cases.size())
+        error 'Use one to twelve distinct diagnostic configurations per run'
     def repoDir = projectDir.resolve('..')
     def sources = ['m39_capacity_screen.py', 'm39_carrier_models.py'].collect {
         file("${repoDir}/bin/${it}", checkIfExists: true)

@@ -1,0 +1,8 @@
+{
+  "m39_capacity_widths": [32],
+  "m39_capacity_rates": [0.003],
+  "m39_capacity_steps": 600,
+  "m39_capacity_seed": 39052026,
+  "m39_capacity_heads": ["multiplicative", "probability_mixture"],
+  "m39_capacity_baselines": ["zero_wrong", "floor_wrong"]
+}
