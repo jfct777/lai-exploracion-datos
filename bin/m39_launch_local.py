@@ -21,6 +21,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-dir', type=Path, required=True)
     parser.add_argument('--lane', choices=('bridge', 'capacity'), required=True)
+    parser.add_argument('--contract', type=Path)
+    parser.add_argument('--input-dir', type=Path)
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
     run_dir = args.run_dir.resolve()
@@ -50,7 +52,16 @@ def main() -> None:
         '--m39_output_dir', str(output),
     ]
     if args.lane == 'bridge':
-        command += ['--m39_input_dir', str(run_dir/'inputs')]
+        input_dir = (args.input_dir or run_dir/'inputs').resolve()
+        if not input_dir.is_relative_to(repo/'.claude'/'runs') or not input_dir.is_dir():
+            parser.error('Bridge inputs must be staged in the private project runs')
+        command += ['--m39_input_dir', str(input_dir)]
+        contract = (args.contract or repo/'conf/m39_carrier_context_bridge.json').resolve()
+        if not contract.is_relative_to(repo) or not contract.is_file():
+            parser.error('Bridge contract must be an existing file in this project')
+        command += ['--m39_contract', str(contract)]
+    elif args.contract or args.input_dir:
+        parser.error('The synthetic lane cannot read bridge inputs or contracts')
     session = f'{run_dir.name}-{args.lane}'
     receipt_path = run_dir/f'{args.lane}.launch.json'
     descriptor = os.open(receipt_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -62,6 +73,8 @@ def main() -> None:
                'config_sha256': hashlib.sha256((repo/cfg).read_bytes()).hexdigest(),
                'scope': 'technical_or_synthetic_only',
                'new_cloud_instances': 0, 'status': 'launch_requested'}
+    if args.lane == 'bridge':
+        receipt['bridge_contract_sha256'] = hashlib.sha256(contract.read_bytes()).hexdigest()
     with os.fdopen(descriptor, 'w') as handle:
         json.dump(receipt, handle, indent=2)
         handle.write('\n')
