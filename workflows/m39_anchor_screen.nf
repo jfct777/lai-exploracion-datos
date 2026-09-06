@@ -7,7 +7,7 @@ process M39_ANCHOR_TRAIN {
     cpus 2
     memory '3 GB'
     time '2h'
-    maxForks 2
+    maxForks 3
     input:
     tuple val(config), path(features)
     path development
@@ -43,12 +43,14 @@ process M39_ANCHOR_LOCK {
     input:
     path cases
     path sources
+    path binding_receipt
     output:
     path 'selection.lock.json'
     script:
     """
     PYTHONPATH=. python3 m39_anchor_plan.py --mode lock \\
-      --results ${cases.collect { "'${it}'" }.join(' ')} --output selection.lock.json
+      --results ${cases.collect { "'${it}'" }.join(' ')} --output selection.lock.json \\
+      --binding-receipt '${binding_receipt}'
     """
 }
 
@@ -109,7 +111,8 @@ workflow {
         }
         ADAPTIVE(extra, development, channel.value(sources))
         def allCases = INITIAL.out.trained.mix(ADAPTIVE.out.trained).collect()
-        M39_ANCHOR_LOCK(allCases, channel.value(sources))
+        M39_ANCHOR_LOCK(allCases, channel.value(sources),
+            channel.value(file("${params.m39_binding_dir}/receipt.json", checkIfExists: true)))
         def features = [.05, .2, .5].collect {
             file("${params.m39_feature_dir}/radius_${it}cm", checkIfExists: true)
         }

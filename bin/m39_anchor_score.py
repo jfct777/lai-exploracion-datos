@@ -32,6 +32,8 @@ def score_locked(lock_path: Path, cases: list[Path], features: list[Path],
     lock = json.loads(lock_path.read_text())
     require(lock['schema_version'] == 'm39-anchor-selection-lock-v1' and not lock['score_read'],
             'pre-SCORE selection lock required')
+    require(sha256(score_path) == lock['expected_score_sha256'],
+            'SCORE partition differs from authenticated exact truth binding')
     paths = {p.name: p for p in cases}
     require(set(paths) == {r['id'] for r in lock['cases']}, 'lock/case set mismatch')
     radii = {}
@@ -64,6 +66,8 @@ def score_locked(lock_path: Path, cases: list[Path], features: list[Path],
                 mean=np.asarray(saved['normalization_mean']), scale=np.asarray(saved['normalization_scale']))
             require('train_indices' not in data and 'select_indices' not in data,
                     'SCORE payload must not include training roles')
+            require(np.array_equal(data['score_indices'], np.arange(len(labels))),
+                    'SCORE roles must exhaust exactly the scoring people')
             model = CarrierContextModel(**saved['model_kwargs'])
             model.load_state_dict(saved['state_dict'])
             probabilities = predict(model, batch, np.arange(len(labels)), arm,
