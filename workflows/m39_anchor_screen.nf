@@ -93,8 +93,11 @@ workflow {
     if (!params.m39_output_dir || !params.m39_plan || !params.m39_binding_dir || !params.m39_feature_dir)
         error 'Output, plan, binding and feature directories are required'
     if (file(params.m39_output_dir).exists() && !workflow.resume) error 'Use a fresh output directory'
+    def profileFlag = params.m39_profile_only.toString().toLowerCase()
+    if (!(profileFlag in ['true', 'false'])) error 'Profile mode must be true or false'
+    def profileOnly = profileFlag == 'true'
     def plan = new groovy.json.JsonSlurper().parseText(file(params.m39_plan).text)
-    if (plan.cases.size() != (params.m39_profile_only ? 1 : 12)) error 'Unexpected initial case count'
+    if (plan.cases.size() != (profileOnly ? 1 : 12)) error 'Unexpected initial case count'
     def sources = ['m39_carrier_models.py', 'm39_anchor_screen.py', 'm39_anchor_plan.py', 'm39_anchor_score.py'].collect {
         file("${projectDir.resolve('..')}/bin/${it}", checkIfExists: true)
     }
@@ -103,7 +106,7 @@ workflow {
     }
     def development = channel.value(file("${params.m39_binding_dir}/development.npz", checkIfExists: true))
     INITIAL(channel.fromList(plan.cases.collect(toCase)), development, channel.value(sources))
-    if (!params.m39_profile_only) {
+    if (!profileOnly) {
         def first = INITIAL.out.trained.collect()
         M39_ANCHOR_ADAPT(first, channel.value(sources))
         def extra = M39_ANCHOR_ADAPT.out.flatMap { path ->
