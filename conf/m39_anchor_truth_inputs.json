@@ -1,0 +1,65 @@
+{
+  "schema_version": "m39-anchor-truth-v1",
+  "scope": "exploratory_chr22_R0_FIT_no_training",
+  "parameters": {
+    "people": 96,
+    "anchors": 660,
+    "fminus_markers": 42326,
+    "full_markers": 42986,
+    "fold": 0,
+    "role_counts": {"TRAIN": 48, "SELECT": 16, "SCORE": 32},
+    "write_all": false
+  },
+  "inputs": {
+    "features": {
+      "path": ".claude/runs/m39-carrier-context-20260905c/bridge-output/bridge/radius_0.05cm/features.npz",
+      "sha256": "0818c77bdfb3a03765119c7b0205b843161537faa0888d8dfa7e0df63551a6f0",
+      "uri": "local:m39-carrier-context-20260905c/bridge-output/bridge/radius_0.05cm/features.npz"
+    },
+    "bridge_receipt": {
+      "path": ".claude/runs/m39-carrier-context-20260905c/bridge-output/bridge/receipt.json",
+      "sha256": "3a2987c6001f12143333b900224e6e1cf1cfb649d1830a41018ba5124c269c12",
+      "uri": "local:m39-carrier-context-20260905c/bridge-output/bridge/receipt.json"
+    },
+    "selected_loci": {
+      "path": ".claude/runs/m39-carrier-context-20260905b/inputs/m34_selected_loci.npz",
+      "sha256": "0bdf50d6812abf3d74975774f1a7257b52c3c263822e8aeaa59cd673c5c31fd0",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-128-r0-20260827a/fit/bridge/m34_fit_bridge/m34_selected_loci.npz"
+    },
+    "genetic_map": {
+      "path": ".claude/runs/m39-carrier-context-20260905b/inputs/genetic.map.chr22",
+      "sha256": "33c7a94e0cbc0ce3cc3ff83cd3838119a881cb7e838825521a778e07a01ee6e9",
+      "uri": "gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/maps/genetic.map.chr22"
+    },
+    "fminus": {
+      "path": ".claude/runs/m39-anchor-screen-20260906a/inputs/m38b_f_minus_s660_f0.npz",
+      "sha256": "80ace3480cc97a8d1e9c990c6285971dc4094f375a0654137084d7a2d6e445df",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m38b-r0-prepare-baselines-20260903a/fit/f0/m38b_fit_f_minus_s660_f0/m38b_f_minus_s660_f0.npz"
+    },
+    "fminus_cm": {
+      "path": ".claude/runs/m39-anchor-screen-20260906a/inputs/m38b_common_marker_cM.npz",
+      "sha256": "6b3ea98243cef084098d7675603154d496b0c07c2e742cf87a1028aa54517233",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m38b-r0-prepare-baselines-20260903a/fit/aligned/m38b_fit_aligned_baselines/m38b_common_marker_cM.npz"
+    },
+    "full": {
+      "path": ".claude/runs/m39-anchor-screen-20260906a/inputs/m34_f0.npz",
+      "sha256": "78263df0fb674b72d53f4ddb6544ad4a2efd204fcd2ec739da29c55a0a9dc1f6",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-128-r0-20260827a/fit/f0/m34_fit_f0/m34_f0.npz"
+    },
+    "full_cm": {
+      "path": ".claude/runs/m39-anchor-screen-20260906a/inputs/marker_cM.npz",
+      "sha256": "df07aedf4565832ea0230dab6667c3c7a4e165ded942be76c78e81b2ff6eb4a5",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-128-r0-20260827a/fit/f0/m34_fit_f0/marker_cM.npz"
+    },
+    "folds": {
+      "path": ".claude/runs/m39-anchor-screen-20260906a/inputs/m38b.folds.npz",
+      "sha256": "0691a0ce3d92f2a556e01808ddd7a19fc96fbdc06ef392fc7c1b8e653c75aa55",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m38b-r0-oof-models-20260903c/folds/m38b.folds.npz"
+    },
+    "truth_segments": {
+      "path": ".claude/runs/m39-anchor-screen-20260906a/inputs/m34_truth.chr22.tsv.gz",
+      "sha256": "69415cd792492d312051515f6f04047af055a5722dbff53f568d72b97d8d1cba",
+      "uri": "gs://teams-usp/frank/lai-exploracion-datos/runs/m34-nam-128-r0-20260827a/fit/mosaics/m34_fit_mosaic/m34_truth.chr22.tsv.gz"
+    }
+  }
+}
