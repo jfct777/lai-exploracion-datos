@@ -18,7 +18,10 @@ workflow {
     }
     def folds = file(params.m39_folds, checkIfExists: true)
     if (folds.name != profile.folds.path) error 'Fold filename differs from profile'
-    inputs += folds
+    // Path implements Iterable: list += path would append its path components.
+    inputs.add(folds)
+    if (inputs.size() != bridge.inputs.size() + 1 || inputs.any { !java.nio.file.Files.isRegularFile(it) })
+        error 'Staged input inventory must contain seven bridge files and one folds file'
     if (inputs*.name.unique().size() != inputs.size()) error 'Duplicate inputs'
     if (file(params.m39_output_dir).exists() && !workflow.resume) error 'Choose a new output directory'
     def repoDir = projectDir.resolve('..')
