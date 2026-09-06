@@ -260,6 +260,29 @@ class AuthenticatedAudit(unittest.TestCase):
         with self.assertRaisesRegex(audit.ZeroOriginAuditError, "duplicated"):
             self.run_audit()
 
+    def test_sample_reordering_is_hash_join_not_positional(self):
+        for source in ("fminus", "full"):
+            data = audit.load_npz(self.paths[source])
+            order = np.array([5, 2, 0, 4, 1, 3])
+            change_npz(self.paths[source], sample_key_sha256=data["sample_key_sha256"][order], F0=data["F0"][order])
+            resign(self.paths, source)
+        result = self.run_audit()
+        self.assertEqual(result["results"]["fminus"]["max_absolute_replay_error"], 0)
+
+    def test_unknown_npz_member_rejected_before_array_reads(self):
+        np.savez_compressed(self.paths["score"], forbidden=np.array([object()], dtype=object))
+        resign(self.paths, "score")
+        with self.assertRaisesRegex(audit.ZeroOriginAuditError, "inventory differs before array reads"):
+            self.run_audit()
+
+    def test_binder_role_counts_rejected(self):
+        binding = json.loads(self.paths["binding_receipt"].read_text())
+        binding["outputs"]["score.npz"]["roles"]["SCORE"] = 9
+        write_json(self.paths["binding_receipt"], binding)
+        resign(self.paths, "binding_receipt")
+        with self.assertRaisesRegex(audit.ZeroOriginAuditError, "role counts"):
+            self.run_audit()
+
     def test_role_overlap_rejected(self):
         change_npz(self.paths["development"], select_indices=np.array([1, 2]))
         resign(self.paths, "development")

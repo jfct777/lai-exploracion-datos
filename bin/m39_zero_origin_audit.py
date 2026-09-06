@@ -53,8 +53,10 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def load_npz(path: Path) -> dict[str, np.ndarray]:
+def load_npz(path: Path, expected_fields: set[str] | None = None) -> dict[str, np.ndarray]:
     with np.load(path, allow_pickle=False) as archive:
+        if expected_fields is not None:
+            require(set(archive.files) == expected_fields, "NPZ inventory differs before array reads")
         return {key: archive[key] for key in archive.files}
 
 
@@ -254,7 +256,9 @@ def audit(manifest_path: Path, input_root: Path, output: Path, chunk_people: int
     for role in ("fminus", "fminus_cm", "full", "full_cm"):
         require(binding.get("inputs", {}).get(role, {}).get("sha256") == authenticated[role]["sha256"],
                 "source artifact not authenticated by binder")
-    bound = {role: load_npz(paths[role]) for role in ("development", "score")}
+    bound_fields = set(AXIS_FIELDS) | {"sample_key_sha256", "source_indices", "baseline", "full_baseline", "truth_state"}
+    bound = {role: load_npz(paths[role], bound_fields | ({"train_indices", "select_indices"}
+                           if role == "development" else {"score_indices"})) for role in ("development", "score")}
     for role, data in bound.items():
         validate_bound(data, role)
         descriptor = binding["outputs"][role + ".npz"]
@@ -272,13 +276,13 @@ def audit(manifest_path: Path, input_root: Path, output: Path, chunk_people: int
     anchors = variant_axis(dev)
     results, minus_axis = {}, None
     for source, target in (("fminus", "baseline"), ("full", "full_baseline")):
-        data = load_npz(paths[source])
+        data = load_npz(paths[source], F0_FIELDS)
         require(set(data) == F0_FIELDS, "F0 inventory differs")
         validate_keys(data["sample_key_sha256"])
         require(set(data["sample_key_sha256"].tolist()) == set(all_keys.tolist()), "F0 sample universe differs")
         axis = variant_axis(data, "marker_")
         require(data["F0"].shape == (len(all_keys), 2, len(axis), 3), "F0 dimensions differ")
-        cm_data = load_npz(paths[source + "_cm"])
+        cm_data = load_npz(paths[source + "_cm"], {"marker_cM"})
         require(set(cm_data) == {"marker_cM"} and cm_data["marker_cM"].shape == (len(axis),)
                 and cm_data["marker_cM"].dtype == np.dtype("float64"), "source cM inventory differs")
         if source == "fminus":
