@@ -170,7 +170,7 @@ def extract_inputs(paths: dict[str, Path], config: dict) -> dict:
     locus_index = {(int(bp), r.decode(), a.decode()): i for i, (bp, r, a) in
                    enumerate(zip(selected["pos"], selected["ref"], selected["alt"]))}
     nr, nq, ns = p["expected_reference_people"], p["expected_target_people"], p["expected_excluded_loci"]
-    common_ref, common_target, common_cm = [], [], []
+    common_ref, common_target, common_cm, common_keys = [], [], [], []
     rare_ref = np.full((ns, nr, 2), -1, dtype=np.int8)
     rare_target = np.full((ns, nq, 2), -1, dtype=np.int8)
     seen_rare = set()
@@ -217,6 +217,7 @@ def extract_inputs(paths: dict[str, Path], config: dict) -> dict:
             common_ref.append(ref_states)
             common_target.append(query_states)
             common_cm.append(genetic_map.bp_to_cm(rkey[1]))
+            common_keys.append(rkey)
             counts["common_loci"] += 1
             counts["reference_missing_common_alleles"] += int((ref_states < 0).sum())
             counts["target_missing_common_alleles"] += int((query_states < 0).sum())
@@ -256,6 +257,10 @@ def extract_inputs(paths: dict[str, Path], config: dict) -> dict:
             "common_ref": np.stack(common_ref) if common_ref else np.empty((0, nr, 2), dtype=np.int8),
             "common_target": np.stack(common_target) if common_target else np.empty((0, nq, 2), dtype=np.int8),
             "common_cm": np.asarray(common_cm, dtype=np.float64),
+            "common_pos": np.asarray([k[1] for k in common_keys], dtype=np.int64),
+            "common_ref_allele": np.asarray([k[2] for k in common_keys], dtype="S1"),
+            "common_alt_allele": np.asarray([k[3] for k in common_keys], dtype="S1"),
+            "common_locus_id": np.asarray([_locus_id(*k) for k in common_keys], dtype=np.uint64),
             "ref_dosage": ref_dosage, "ref_observed": ref_observed,
             "query_dosage": query_dosage.T, "query_observed": query_observed.T,
             "counts": counts}

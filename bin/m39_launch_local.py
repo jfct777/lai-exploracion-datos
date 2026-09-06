@@ -20,10 +20,12 @@ import subprocess
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-dir', type=Path, required=True)
-    parser.add_argument('--lane', choices=('bridge', 'capacity'), required=True)
+    parser.add_argument('--lane', choices=('bridge', 'capacity', 'ordered'), required=True)
     parser.add_argument('--contract', type=Path)
     parser.add_argument('--input-dir', type=Path)
     parser.add_argument('--capacity-params', type=Path)
+    parser.add_argument('--profile-config', type=Path)
+    parser.add_argument('--folds', type=Path)
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
     run_dir = args.run_dir.resolve()
@@ -38,8 +40,21 @@ def main() -> None:
     names = {
         'bridge': ('conf/m39_carrier_context_local.config', 'workflows/m39_carrier_context_bridge.nf'),
         'capacity': ('conf/m39_capacity_local.config', 'workflows/m39_capacity_screen.nf'),
+        'ordered': ('conf/m39_ordered_local.config', 'workflows/m39_ordered_context_profile.nf'),
     }
     cfg, workflow = names[args.lane]
+    if args.lane == 'ordered':
+        # The new lane must not silently execute unversioned scientific sources.
+        versioned = [cfg, workflow, 'modules/39_ORDERED_CONTEXT_PROFILE.nf',
+                     'conf/m39_carrier_context_local.config', 'conf/m39_ordered_profile.json',
+                     'bin/m39_launch_local.py', 'bin/m39_profile_ordered.py',
+                     'bin/m39_ordered_context.py', 'bin/m39_carrier_context.py',
+                     'bin/m34_prepare_panel_factors.py', 'bin/m34_generate_mosaics.py',
+                     'bin/m33_safe_bridge_core.py']
+        verified = subprocess.run(['git', 'ls-files', '--error-unmatch', '--', *versioned],
+                                  cwd=repo, capture_output=True, text=True)
+        if verified.returncode:
+            parser.error('Commit every ordered workflow source before launching')
     output = run_dir / f'{args.lane}-output'
     if output.exists():
         parser.error('Output already exists; choose a new run directory')
@@ -52,7 +67,7 @@ def main() -> None:
         '-with-timeline', str(run_dir/f'{args.lane}.timeline.html'),
         '--m39_output_dir', str(output),
     ]
-    if args.lane == 'bridge':
+    if args.lane in ('bridge', 'ordered'):
         if args.capacity_params:
             parser.error('Bridge cannot consume synthetic capacity parameters')
         input_dir = (args.input_dir or run_dir/'inputs').resolve()
@@ -65,6 +80,15 @@ def main() -> None:
         command += ['--m39_contract', str(contract)]
     elif args.contract or args.input_dir:
         parser.error('The synthetic lane cannot read bridge inputs or contracts')
+    if args.lane == 'ordered':
+        profile_config = (args.profile_config or repo/'conf/m39_ordered_profile.json').resolve()
+        if not profile_config.is_relative_to(repo) or not profile_config.is_file():
+            parser.error('Ordered profile must be a file in the project')
+        if not args.folds or not args.folds.resolve().is_relative_to(repo/'.claude'/'runs') or not args.folds.is_file():
+            parser.error('Ordered profile needs the private historical folds file')
+        command += ['--m39_ordered_profile', str(profile_config), '--m39_folds', str(args.folds.resolve())]
+    elif args.profile_config or args.folds:
+        parser.error('Ordered profile options cannot be used by another lane')
     if args.capacity_params:
         parameter_file = args.capacity_params.resolve()
         if not parameter_file.is_relative_to(repo) or not parameter_file.is_file():
@@ -86,8 +110,11 @@ def main() -> None:
                'config_sha256': hashlib.sha256((repo/cfg).read_bytes()).hexdigest(),
                'scope': 'technical_or_synthetic_only',
                'new_cloud_instances': 0, 'status': 'launch_requested'}
-    if args.lane == 'bridge':
+    if args.lane in ('bridge', 'ordered'):
         receipt['bridge_contract_sha256'] = hashlib.sha256(contract.read_bytes()).hexdigest()
+    if args.lane == 'ordered':
+        receipt['ordered_profile_sha256'] = hashlib.sha256(profile_config.read_bytes()).hexdigest()
+        receipt['folds_sha256'] = hashlib.sha256(args.folds.read_bytes()).hexdigest()
     if args.capacity_params:
         receipt['capacity_params_sha256'] = hashlib.sha256(parameter_file.read_bytes()).hexdigest()
     with os.fdopen(descriptor, 'w') as handle:
