@@ -315,7 +315,31 @@ class CarrierContextModel(nn.Module):
                 self.mixture_log_prior + common_logits + self.rare_head(representation), dim=-1)
         probabilities = (1 - rare_gate) * common_probability + rare_gate * rare_expert
         if return_aux:
+            # Training uses the exact mixture in log space. Scoring may report a
+            # common floor, but that floor must not erase a rescuable gradient.
+            log_base = torch.where(baseline > 0, baseline, torch.ones_like(baseline)).log()
+            log_base = log_base.masked_fill(baseline == 0, -torch.inf)
+            raw_common_gate = self.common_gate(common_features)
+            common_on = support.bool()
+            log_gc = F.logsigmoid(raw_common_gate)
+            log_not_gc = F.logsigmoid(-raw_common_gate)
+            log_qc = F.log_softmax(self.mixture_log_prior + common_logits, dim=-1)
+            # Compute finite enabled experts even on disabled rows, then select
+            # the exact fallback. This avoids logaddexp(-inf,-inf) in backward.
+            log_pc = torch.where(common_on,
+                torch.logaddexp(log_not_gc + log_base, log_gc + log_qc), log_base)
+            log_probabilities = log_pc
+            if arm != "common":
+                raw_rare_gate = self.rare_gate(common_features)
+                rare_on = available[..., None]
+                log_gr = F.logsigmoid(raw_rare_gate)
+                log_not_gr = F.logsigmoid(-raw_rare_gate)
+                log_qr = F.log_softmax(
+                    self.mixture_log_prior + common_logits + self.rare_head(representation), dim=-1)
+                log_probabilities = torch.where(rare_on,
+                    torch.logaddexp(log_not_gr + log_pc, log_gr + log_qr), log_pc)
             return {"probabilities": probabilities, "common_probabilities": common_probability,
+                    "log_probabilities": log_probabilities,
                     "common_expert_probabilities": common_expert,
                     "rare_expert_probabilities": rare_expert,
                     "common_gate": common_gate, "rare_gate": rare_gate,
