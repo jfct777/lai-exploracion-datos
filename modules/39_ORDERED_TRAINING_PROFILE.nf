@@ -11,7 +11,7 @@ process M39_ORDERED_TRAINING_PROFILE {
 
     input:
     val case_id
-    path store_dir, stageAs: 'ordered-store'
+    val store_dir
     path parent_receipt, stageAs: 'parent-receipt.json'
     path folds, stageAs: 'historical-folds.npz'
     path profile_config, stageAs: 'profile-config.json'
@@ -27,7 +27,7 @@ process M39_ORDERED_TRAINING_PROFILE {
     OPENBLAS_NUM_THREADS=${task.cpus} OMP_NUM_THREADS=${task.cpus} MKL_NUM_THREADS=${task.cpus} \\
       TORCHINDUCTOR_CACHE_DIR=/tmp/m39-torch-cache \\
       PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. python3 m39_profile_ordered_training.py \\
-      --store-dir '${store_dir}' --parent-receipt '${parent_receipt}' \\
+      --store-dir '/m39-ordered-store' --parent-receipt '${parent_receipt}' \\
       --folds '${folds}' --profile-config '${profile_config}' --case-id '${case_id}' \\
       --output-dir '${case_id}' --source-commit '${source_commit}'
     """

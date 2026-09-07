@@ -28,6 +28,9 @@ workflow {
     if (ids.unique(false).size() != ids.size()) error 'Duplicate case identifiers'
     def store = file(params.m39_store_dir, checkIfExists: true)
     if (!java.nio.file.Files.isDirectory(store)) error 'Store must be a directory'
+    if (!(params.m39_store_dir.toString() ==~ /\/[A-Za-z0-9_.\/-]+/) ||
+        store.toRealPath().toString() != params.m39_store_dir.toString())
+        error 'Store bind source must be an absolute resolved shell-safe directory'
     def parentReceipt = file(params.m39_parent_receipt, checkIfExists: true)
     def folds = file(params.m39_folds, checkIfExists: true)
     if (!java.nio.file.Files.isRegularFile(parentReceipt) || !java.nio.file.Files.isRegularFile(folds))
@@ -41,7 +44,8 @@ workflow {
                    'm34_prepare_panel_factors.py', 'm34_generate_mosaics.py', 'm33_safe_bridge_core.py']
         .collect { file("${repoDir}/bin/${it}", checkIfExists: true) }
     // Only the case channel is a queue: all authenticated inputs are shared values.
-    M39_ORDERED_TRAINING_PROFILE(channel.fromList(ids), channel.value(store),
+    // A value, not a path input: Docker binds only this exact store explicitly.
+    M39_ORDERED_TRAINING_PROFILE(channel.fromList(ids), channel.value(store.toString()),
         channel.value(parentReceipt), channel.value(folds), channel.value(profileFile),
         channel.value(sources), channel.value(params.m39_source_commit))
 }

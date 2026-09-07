@@ -251,7 +251,11 @@ class OrderedLAIModel(nn.Module):
         value = _masked_tokens(value, valid)
         for block in self.blocks:
             value = block(value, valid)
-        value = _masked_tokens(self.output_norm(value), valid)
+        # The final affine transform commutes with the masked temporal mean.
+        # Apply it once after pooling, avoiding a long float32 bias-gradient
+        # reduction over thousands of repeated per-site cotangents.
+        value = F.layer_norm(value, self.output_norm.normalized_shape, eps=self.output_norm.eps)
+        value = _masked_tokens(value, valid)
         return value[:, core_start:core_stop].sum(dim=1).reshape(count, 2, 3, candidates, -1)
 
     def encode_candidates(self, batch: Mapping[str, Tensor], *, chunked: bool = True) -> Tensor:
@@ -275,8 +279,12 @@ class OrderedLAIModel(nn.Module):
             else:
                 current = encode(*arguments)
             total = current if total is None else total + current
-        denominator = batch["site_mask"].sum(dim=1).clamp_min(1).to(total.dtype)
-        return total / denominator[:, None, None, None, None]
+        site_counts = batch["site_mask"].sum(dim=1)
+        denominator = site_counts.clamp_min(1).to(total.dtype)
+        pooled = total / denominator[:, None, None, None, None]
+        encoded = pooled * self.output_norm.weight + self.output_norm.bias
+        valid = batch["candidate_mask"] & (site_counts > 0)[:, None, None, None]
+        return _masked_tokens(encoded, valid)
 
     @staticmethod
     def _rare_tensor(batch: Mapping[str, Tensor], key: str, shape: tuple[int, ...],

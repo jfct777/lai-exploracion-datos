@@ -138,6 +138,86 @@ class OrderedModelsTests(unittest.TestCase):
                     self.assertIsNotNone(right.grad)
                     self.assert_tensors_close(left.grad, right.grad, atol=2e-6, rtol=2e-4)
 
+    def test_final_affine_after_pool_preserves_legacy_function_and_gradients(self):
+        for family in ("cnn", "attention"):
+            model = model_for(family)
+            with torch.no_grad():
+                model.output_norm.weight.copy_(torch.linspace(0.4, 1.8, 8, dtype=torch.float64))
+                model.output_norm.bias.copy_(torch.linspace(-0.3, 0.5, 8, dtype=torch.float64))
+            batch = fixture(length=23)
+            hidden = []
+            hook = model.blocks[-1].register_forward_hook(lambda module, args, out: hidden.append(out))
+            try:
+                encoded = model.encode_candidates(batch, chunked=False)
+            finally:
+                hook.remove()
+            valid = batch["site_mask"][:, None, None, None, :] & batch["candidate_mask"][..., None]
+            original_normalized = model.output_norm(hidden[0])
+            original_normalized = torch.where(valid.reshape(-1, 23, 1), original_normalized,
+                                              torch.zeros_like(original_normalized))
+            original = original_normalized.sum(dim=1).reshape_as(encoded)
+            original = original / batch["site_mask"].sum(dim=1).clamp_min(1)[:, None, None, None, None]
+            self.assert_tensors_close(encoded, original)
+            reference_rare, query_rare = model._rare_features(batch, encoded, "real")
+            losses = [F.cross_entropy(model.head(value, batch["candidate_mask"], reference_rare, query_rare),
+                                      torch.tensor([0, 4])) for value in (encoded, original)]
+            parameters = list(model.parameters())
+            new_gradients = torch.autograd.grad(losses[0], parameters, retain_graph=True)
+            old_gradients = torch.autograd.grad(losses[1], parameters)
+            for new, old in zip(new_gradients, old_gradients):
+                self.assert_tensors_close(new, old, atol=5e-10, rtol=5e-8)
+
+    def test_dense_bias_gradient_matches_analytic_pooled_cotangent(self):
+        for family in ("cnn", "attention"):
+            full = model_for(family, dtype=torch.float32, width=8, depth=1,
+                             kernels=(3, 7), dilations=(1,), heads=2, core_sites=256)
+            blocked = copy.deepcopy(full)
+            batch = fixture(count=1, candidates=8, length=3579, dtype=torch.float32)
+            # Unequal candidates/sites and an absent group exercise every mask.
+            batch["candidate_mask"][0, 0, 2] = False
+            batch["site_mask"][0, -11:] = False
+            losses, encodings = [], []
+            for model, chunked in ((full, False), (blocked, True)):
+                captured = []
+                def keep_encoded(module, args):
+                    captured.append(args[0])
+                    args[0].retain_grad()
+                hook = model.head.register_forward_pre_hook(keep_encoded)
+                try:
+                    logits = model(batch, "real", chunked=chunked)
+                finally:
+                    hook.remove()
+                loss = F.cross_entropy(logits, torch.tensor([3]))
+                loss.backward()
+                valid = batch["candidate_mask"] & batch["site_mask"].any(dim=1)[:, None, None, None]
+                cotangent = torch.where(valid[..., None], captured[0].grad,
+                                         torch.zeros_like(captured[0].grad))
+                analytic = cotangent.double().sum(dim=(0, 1, 2, 3))
+                self.assert_tensors_close(model.output_norm.bias.grad.double(), analytic,
+                                          atol=2e-8, rtol=2e-5)
+                losses.append(loss.detach())
+                encodings.append(captured[0].detach())
+            self.assert_tensors_close(losses[0], losses[1], atol=3e-5, rtol=1e-4)
+            self.assert_tensors_close(encodings[0], encodings[1], atol=3e-5, rtol=1e-4)
+            for left, right in zip(full.parameters(), blocked.parameters()):
+                self.assert_tensors_close(left.grad, right.grad, atol=2e-6, rtol=2e-4)
+
+    def test_postpool_affine_cannot_resurrect_empty_or_padded_candidates(self):
+        for family in ("cnn", "attention"):
+            model = model_for(family)
+            with torch.no_grad():
+                model.output_norm.bias.fill_(7)
+            for length in (0, 1, 17):
+                batch = fixture(length=length)
+                batch["site_mask"].zero_()
+                for chunked in (False, True):
+                    encoded = model.encode_candidates(batch, chunked=chunked)
+                    self.assertTrue(torch.equal(encoded, torch.zeros_like(encoded)))
+            batch = fixture()
+            encoded = model.encode_candidates(batch)
+            self.assertTrue(torch.equal(encoded[~batch["candidate_mask"]],
+                                        torch.zeros_like(encoded[~batch["candidate_mask"]])))
+
     def test_checkpointing_does_not_change_logits_or_gradients(self):
         for family in ("cnn", "attention"):
             first = model_for(family)

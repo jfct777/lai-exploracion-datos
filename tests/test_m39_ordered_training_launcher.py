@@ -85,6 +85,8 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(receipt['resources']['memory_gib_total'], 16)
         self.assertFalse(receipt['gpu'])
         self.assertFalse(receipt['full_epoch'])
+        self.assertEqual(receipt['staging'], 'small_inputs_copy_exact_store_readonly_bind_no_store_copy')
+        self.assertEqual(receipt['store_container_path'], '/m39-ordered-store')
         self.assertEqual(receipt['inputs']['store_manifest']['sha256'], MODULE.sha256(self.store / 'manifest.json'))
         for relative in MODULE.SOURCES:
             copy = self.run / 'frozen-source' / relative
@@ -241,18 +243,30 @@ class OrchestrationTests(unittest.TestCase):
                   and source != 'bin/m39_launch_ordered_training.py'}
         self.assertEqual(recorded, staged)
 
-    def test_hard_local_limits_and_readonly_symlinks(self):
+    def test_hard_local_limits_and_exact_readonly_store_bind(self):
         config = (ROOT / MODULE.CONFIG).read_text()
         process = (ROOT / 'modules/39_ORDERED_TRAINING_PROFILE.nf').read_text()
         for literal in ('cpus 2', "memory '8 GB'", "time '20m'", 'maxForks 2'):
             self.assertIn(literal, process)
-        for literal in ("stageInMode = 'symlink'", 'docker.writableInputMounts = false',
+        for literal in ("stageInMode = 'copy'", 'docker.writableInputMounts = false',
                         'executor.cpus = 4', "executor.memory = '16 GB'", '--network none',
-                        '--pull never', '--memory 8g --memory-swap 8g'):
+                        '--pull never', '--memory 8g --memory-swap 8g',
+                        '--mount type=bind,src=${params.m39_store_dir},dst=/m39-ordered-store,readonly'):
             self.assertIn(literal, config)
+        self.assertIn('val store_dir', process)
+        self.assertNotIn('path store_dir', process)
+        self.assertIn("--store-dir '/m39-ordered-store'", process)
+        self.assertNotIn("--store-dir '${store_dir}'", process)
         self.assertIn('path("${case_id}")', process)
         self.assertIn("overwrite: false", process)
         self.assertNotIn('--score', process.lower())
+
+    def test_store_is_not_a_nextflow_path_input_or_copied_source(self):
+        workflow = (ROOT / MODULE.WORKFLOW).read_text()
+        self.assertIn('channel.value(store.toString())', workflow)
+        self.assertNotIn('channel.value(store),', workflow)
+        self.assertIn('store.toRealPath().toString()', workflow)
+        self.assertNotIn('ordered-store', MODULE.SOURCES)
 
     def test_all_staged_code_is_in_the_sealed_inventory(self):
         workflow = (ROOT / MODULE.WORKFLOW).read_text()
