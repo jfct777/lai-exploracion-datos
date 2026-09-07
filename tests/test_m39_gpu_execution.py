@@ -254,10 +254,12 @@ class TestGPUExecution(unittest.TestCase):
         text = (REPO / launch.CONFIG).read_text()
         for expected in ("machineType = 'g2-standard-8'", "accelerator = [request: 1, type: 'nvidia-l4']",
                          "time = '30m'", 'maxRetries = 0', 'maxForks = 1', "team: 'frank'",
-                         "containerOptions = '--user 0:0 --runtime=nvidia --gpus all'",
+                         "containerOptions = '--user 0:0'",
                          'installGpuDrivers = true', launch.OWN_RUNS):
             self.assertIn(expected, text)
         self.assertNotIn('gs://projects-usp/', text)
+        for duplicate_gpu_option in ('--gpus', '--runtime', '--device'):
+            self.assertNotIn(duplicate_gpu_option, text)
         self.assertEqual(launch.CONTROLLER_SECONDS, 3600)
         self.assertIn("System.getenv('M39_GPU_SERVICE_ACCOUNT')", text)
         self.assertIn('serviceAccountEmail', text)
@@ -296,8 +298,10 @@ class TestGPUExecution(unittest.TestCase):
             if account == SERVICE_ACCOUNT:
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("google.batch.serviceAccountEmail = '" + account + "'", result.stdout)
-                self.assertIn("process.containerOptions = '--user 0:0 --runtime=nvidia --gpus all'",
+                self.assertIn("process.containerOptions = '--user 0:0'",
                               result.stdout)
+                for duplicate_gpu_option in ('--gpus', '--runtime', '--device'):
+                    self.assertNotIn(duplicate_gpu_option, result.stdout)
             else:
                 self.assertNotEqual(result.returncode, 0)
                 # Nextflow wraps the validation exception as a config error.
