@@ -55,7 +55,7 @@ class OrderedThroughputTests(unittest.TestCase):
         self.assertTrue(all(c["arm"] == "real" for c in cfg["cases"]))
         self.assertEqual(len(P.SOURCE_FILES), len(set(P.SOURCE_FILES)))
         self.assertEqual(set(P.SOURCE_FILES), set(P.HISTORICAL_SOURCE_FILES) |
-                         {"m39_profile_ordered_throughput.py", "m39_throughput_sampling.py"})
+                         {"m39_profile_ordered_throughput.py", "m39_throughput_sampling.py", "m39_profile_device.py"})
         self.assertTrue(all((ROOT / "bin" / path).is_file() for path in P.SOURCE_FILES))
 
     def test_scope_hash_roster_and_unknown_fields_rejected(self):
@@ -71,6 +71,40 @@ class OrderedThroughputTests(unittest.TestCase):
         del cfg["scope"]
         with self.assertRaises(ValueError):
             self.changed_profile(cfg)
+
+    def test_gpu_profile_preserves_all_recipes_and_freezes_device_controls(self):
+        gpu = P.load_profile(ROOT / "conf" / "m39_ordered_throughput_gpu_profile.json")
+        self.assertEqual(gpu["cases"], self.cfg["cases"])
+        self.assertEqual(gpu["recipe"], self.cfg["recipe"])
+        self.assertEqual(gpu["device"], "cuda:0")
+        self.assertEqual(gpu["gpu_count"], 1)
+        self.assertEqual(gpu["max_workers"], 1)
+        for key in ("seed", "store_case", "store_manifest_sha256", "max_input_bytes", "core_sites"):
+            self.assertEqual(gpu[key], self.cfg[key])
+        for changed in ({"torch_version": "2.11.0+cu126"}, {"cuda_version": "13.0"},
+                        {"device": "cpu"}, {"gpu_count": 2}, {"max_workers": True},
+                        {"gradient_atol": 0.001}, {"logit_rtol": 0.01},
+                        {"max_device_bytes": 8 * 1024**3 + 1},
+                        {"sampling_manifest_sha256": "a" * 64}, {"model_sha256": "b" * 64},
+                        {"cpu_profile_reference_sha256": "c" * 64}):
+            cfg = copy.deepcopy(gpu)
+            cfg.update(changed)
+            with self.subTest(change=changed), self.assertRaises(ValueError):
+                self.changed_profile(cfg)
+
+    def test_gpu_transfer_is_a_separate_phase_in_the_same_e2e_estimator(self):
+        rows = self.records()
+        for row in rows:
+            row["transfer_seconds"] = 0.125
+            row["end_to_end_seconds"] += 0.125
+        result = P.summarize_steps(rows, policy="grouped", batch_size=2, sampling=self.sampling)
+        self.assertEqual(result["phase_seconds"]["transfer_seconds"], 2.0)
+        self.assertIn("CUDA", result["grouped_fullpass_estimate"]["scope"])
+        self.assertEqual(result["grouped_fullpass_estimate"]["seconds"],
+                         165 * 48 / 2 * (1 + 2 + 3 + 4 + 4 * 0.125))
+        del rows[0]["transfer_seconds"]
+        with self.assertRaisesRegex(ValueError, "inventory"):
+            P.summarize_steps(rows, policy="grouped", batch_size=2, sampling=self.sampling)
 
     def test_sampling_resource_and_optimizer_limits_are_closed(self):
         changes = ({"warmup_steps": 0}, {"warmup_steps": True}, {"sample_strata": 3},

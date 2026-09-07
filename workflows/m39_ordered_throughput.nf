@@ -46,6 +46,7 @@ workflow {
         error 'Use a new immutable output directory; resume is disabled'
     def repoDir = projectDir.resolve('..')
     def sources = ['m39_profile_ordered_throughput.py', 'm39_throughput_sampling.py',
+                   'm39_profile_device.py',
                    'm39_profile_ordered_training.py', 'm39_ordered_models.py', 'm39_ordered_batches.py',
                    'm39_ordered_context.py', 'm39_carrier_context.py', 'm34_prepare_panel_factors.py',
                    'm34_generate_mosaics.py', 'm33_safe_bridge_core.py']

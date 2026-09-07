@@ -265,7 +265,7 @@ class NextflowContractTests(unittest.TestCase):
 
     def test_staged_source_inventory_and_local_import_closure(self):
         workflow = (ROOT / MODULE.WORKFLOW).read_text()
-        self.assertEqual(len(MODULE.RUNTIME_SOURCES), 10)
+        self.assertEqual(len(MODULE.RUNTIME_SOURCES), 11)
         for name in MODULE.RUNTIME_SOURCES:
             self.assertIn(f"'{name}'", workflow)
             self.assertIn(f'bin/{name}', MODULE.SOURCES)
