@@ -194,8 +194,9 @@ class OrderedTrainingTests(unittest.TestCase):
         bad = copy.deepcopy(cfg); bad['model']['dropout'] = .1; path.write_text(json.dumps(bad))
         with self.assertRaisesRegex(ValueError, 'dropout'): T.load_config(path)
 
-    def test_synthetic_training_runs_all_arms_with_same_initialization_and_pair_stream(self):
+    def _assert_synthetic_training_all_arms(self, family):
         _, _, train, select, binding, path, cfg = self.setup_training()
+        cfg['model']['family'] = family
         receipts = []
         for arm in T.ARMS:
             cfg['arm'] = arm
@@ -211,9 +212,16 @@ class OrderedTrainingTests(unittest.TestCase):
                 key=lambda row:(row['SELECT']['brier'], row['SELECT']['log_loss'], row['step']))['step'])
             checkpoint = torch.load(output/'checkpoint.pt', weights_only=True)
             self.assertEqual(checkpoint['config']['arm'], arm)
+            self.assertEqual(checkpoint['config']['model']['family'], family)
             receipts.append(receipt)
         self.assertEqual(len({r['initial_state_sha256'] for r in receipts}), 1)
         self.assertEqual(len({r['training_pair_stream_sha256'] for r in receipts}), 1)
+
+    def test_synthetic_training_runs_all_arms_with_same_initialization_and_pair_stream(self):
+        self._assert_synthetic_training_all_arms('cnn')
+
+    def test_synthetic_attention_training_runs_all_arms_with_paired_initialization_and_stream(self):
+        self._assert_synthetic_training_all_arms('attention')
 
     def test_deadline_failure_cannot_emit_completed_receipt(self):
         _, _, train, select, binding, path, _ = self.setup_training()
