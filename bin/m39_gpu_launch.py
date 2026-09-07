@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -35,6 +36,9 @@ SOURCES = (PROFILE, CONFIG, WORKFLOW, 'modules/39_GPU_SERIAL_PROFILE.nf',
            'bin/m39_launch_ordered_throughput.py', *(f'bin/{name}' for name in RUNTIME))
 OWN_RUNS = 'gs://teams-usp/frank/lai-exploracion-datos/runs/'
 CONTROLLER_SECONDS = 3600
+AUTH_OVERRIDES = ('GOOGLE_APPLICATION_CREDENTIALS', 'DEVSHELL_CLIENT_PORT', 'NO_GCE_CHECK',
+                  'CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT', 'CLOUDSDK_AUTH_ACCESS_TOKEN',
+                  'CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE', 'CLOUDSDK_AUTH_ACCESS_TOKEN_FILE')
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -49,9 +53,48 @@ def validate_target(run_id: str, image: str) -> str:
     return OWN_RUNS + run_id
 
 
+def native_auth(path: Path, service_account: str, repo: Path) -> dict:
+    """Select native VM credentials without reading or moving a credential file."""
+    if not isinstance(service_account, str) or not re.fullmatch(
+            r'[a-z0-9][a-z0-9-]*@(?:developer\.gserviceaccount\.com|'
+            r'[a-z0-9][a-z0-9-]*\.iam\.gserviceaccount\.com)', service_account):
+        raise ValueError('Expected an explicit service-account email')
+    path = Path(path).absolute()
+    if any(part.is_symlink() for part in (path, *path.parents)):
+        raise ValueError('Native authentication directory cannot use symlinks')
+    directory, repository = path.resolve(strict=True), repo.resolve(strict=True)
+    if not directory.is_dir() or directory.is_relative_to(repository):
+        raise ValueError('Native authentication directory must be outside the repository')
+    metadata = directory.stat()
+    if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise ValueError('Native authentication directory must be owned privately with mode 0700')
+    if any(item.is_symlink() or item.name == 'application_default_credentials.json'
+           for item in directory.rglob('*')):
+        raise ValueError('Native authentication directory contains ADC or a symlink')
+    return {'mode': 'attached_vm_metadata', 'directory': str(directory),
+            'service_account': service_account, 'repository_root': str(repository)}
+
+
+def native_env_prefix(auth: dict) -> list[str]:
+    """Seal process-local identity; tmux servers need not inherit the caller's env."""
+    checked = native_auth(Path(auth['directory']), auth['service_account'], Path(auth['repository_root']))
+    if auth != checked:
+        raise ValueError('Native authentication declaration differs')
+    unset = [word for name in AUTH_OVERRIDES for word in ('-u', name)]
+    return ['env', *unset, f"CLOUDSDK_CONFIG={auth['directory']}",
+            f"CLOUDSDK_CORE_ACCOUNT={auth['service_account']}",
+            f"M39_GPU_SERVICE_ACCOUNT={auth['service_account']}"]
+
+
+def watcher_command(receipt: Path, auth: dict) -> list[str]:
+    watcher = receipt.parent / 'frozen-source/bin/m39_gpu_launch.py'
+    return [*native_env_prefix(auth), sys.executable, str(watcher), '--watch', str(receipt)]
+
+
 def prepare(args: argparse.Namespace, repo: Path | None = None) -> Path:
     """Freeze committed code and exact inputs locally, without starting cloud work."""
     repo = (repo or Path(__file__).resolve().parents[1]).resolve()
+    auth = native_auth(args.native_auth_dir, args.service_account, repo)
     run = _private_path(args.run_dir, repo / '.claude/runs', directory=True)
     cloud = validate_target(run.name, args.image)
     if any((run / name).exists() for name in ('frozen-source', 'gpu.launch.json', 'gpu.completion.json')):
@@ -105,7 +148,7 @@ def prepare(args: argparse.Namespace, repo: Path | None = None) -> Path:
     seal = {'schema_version': 'm39-gpu-source-seal-v1', 'source_commit': commit,
             'profile_sha256': profile_sha, 'source_sha256': source_hashes}
     write_json(run / 'source-seal.json', seal)
-    command = ['env', 'NXF_VER=26.04.6', 'NXF_OFFLINE=true', f'M39_GPU_RUN_ID={run.name}',
+    command = [*native_env_prefix(auth), 'NXF_VER=26.04.6', 'NXF_OFFLINE=true', f'M39_GPU_RUN_ID={run.name}',
                f'M39_GPU_IMAGE={args.image}', 'nextflow', '-C', str(frozen / CONFIG),
                '-log', str(run / 'gpu.nextflow.log'), 'run', str(frozen / WORKFLOW),
                '-work-dir', cloud + '/work', '-with-trace', str(run / 'gpu.trace.tsv'),
@@ -117,6 +160,7 @@ def prepare(args: argparse.Namespace, repo: Path | None = None) -> Path:
     receipt = {'schema_version': 'm39-gpu-launch-v1', 'source_commit': commit,
                'created_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                'run_id': run.name, 'image': args.image, 'argv': command, 'cloud_prefix': cloud,
+               'native_auth': auth,
                'source_sha256': {name: hashlib.sha256(blob).hexdigest() for name, blob in blobs.items()},
                'source_seal_sha256': sha256(run / 'source-seal.json'), 'case_ids': cases,
                'input_bytes': total_bytes + inputs['folds'].stat().st_size + inputs['parent_receipt'].stat().st_size,
@@ -154,19 +198,22 @@ def observed_job_ids(run: Path, run_id: str) -> dict[str, str | None]:
     return jobs
 
 
-def cancel_owned_jobs(run_id: str, run: Path | None = None) -> dict:
+def cancel_owned_jobs(run_id: str, run: Path | None = None, *, auth: dict | None = None) -> dict:
     """Cancel only unfinished jobs bearing both exact ownership labels."""
     validate_target(run_id, 'us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/check@sha256:' + '0' * 64)
     result = {'deleted_unfinished_jobs': [], 'errors': []}
     try:
+        if auth is None:
+            raise ValueError('Cancellation requires the sealed native identity')
+        command = [*native_env_prefix(auth), 'gcloud', f"--account={auth['service_account']}"]
         exact = observed_job_ids(run, run_id) if run is not None else {}
         if exact:
-            jobs = [json.loads(subprocess.check_output(['gcloud', 'batch', 'jobs', 'describe', name,
+            jobs = [json.loads(subprocess.check_output([*command, 'batch', 'jobs', 'describe', name,
                     '--project=uspbr-242713', '--location=us-central1', '--format=json'], timeout=20))
                     for name in exact]
             result['lookup'] = 'exact_native_id_from_sealed_run'
         else:
-            jobs = json.loads(subprocess.check_output(['gcloud', 'batch', 'jobs', 'list',
+            jobs = json.loads(subprocess.check_output([*command, 'batch', 'jobs', 'list',
                     '--project=uspbr-242713', '--location=us-central1',
                     f'--filter=labels.m39_run={run_id}', '--format=json'], timeout=25))
             result['lookup'] = 'label_fallback_native_id_unavailable'
@@ -182,7 +229,7 @@ def cancel_owned_jobs(run_id: str, run: Path | None = None) -> dict:
             name = job['name']
             if not re.fullmatch(r'projects/uspbr-242713/locations/us-central1/jobs/[a-z0-9-]+', name):
                 raise ValueError('Unexpected Batch resource path')
-            subprocess.run(['gcloud', 'batch', 'jobs', 'delete', name.rsplit('/', 1)[-1],
+            subprocess.run([*command, 'batch', 'jobs', 'delete', name.rsplit('/', 1)[-1],
                             '--project=uspbr-242713', '--location=us-central1', '--quiet'], check=True, timeout=30)
             result['deleted_unfinished_jobs'].append(name)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
@@ -195,6 +242,10 @@ def watch(path: Path) -> int:
     if receipt.get('schema_version') != 'm39-gpu-launch-v1' or path.name != 'gpu.launch.json':
         raise ValueError('Expected a GPU launch receipt')
     validate_target(receipt['run_id'], receipt['image'])
+    auth = receipt['native_auth']
+    prefix = native_env_prefix(auth)
+    if receipt['argv'][:len(prefix)] != prefix:
+        raise ValueError('Nextflow identity differs from the sealed native identity')
     run = path.parent
     for name, digest in receipt['source_sha256'].items():
         if sha256(run / 'frozen-source' / name) != digest:
@@ -225,7 +276,7 @@ def watch(path: Path) -> int:
             # Nextflow first receives SIGTERM and may cancel its own exact task.
             stop_process_group(process)
         if result['exit_code']:
-            result['cloud_cleanup'] = cancel_owned_jobs(receipt['run_id'], run)
+            result['cloud_cleanup'] = cancel_owned_jobs(receipt['run_id'], run, auth=auth)
         result['elapsed_seconds'] = time.monotonic() - start
         write_json(run / 'gpu.completion.json', result)
         for signum, handler in previous.items():
@@ -240,17 +291,21 @@ def main() -> None:
     for name in ('run-dir', 'store-dir', 'parent-receipt', 'folds'):
         parser.add_argument(f'--{name}', type=Path)
     parser.add_argument('--image')
+    parser.add_argument('--native-auth-dir', type=Path,
+                        help='Existing private directory outside the repository, without ADC')
+    parser.add_argument('--service-account', help='Verified service account attached to this VM')
     args = parser.parse_args()
     os.umask(0o077)
     if args.watch:
         raise SystemExit(watch(args.watch.resolve(strict=True)))
-    if any(getattr(args, name) is None for name in ('run_dir', 'store_dir', 'parent_receipt', 'folds', 'image')):
-        parser.error('run-dir, store-dir, parent-receipt, folds and image are required')
+    if any(getattr(args, name) is None for name in ('run_dir', 'store_dir', 'parent_receipt', 'folds',
+                                                  'image', 'native_auth_dir', 'service_account')):
+        parser.error('run-dir, store-dir, parent-receipt, folds, image, native-auth-dir and service-account are required')
     receipt = prepare(args)
     if not args.prepare_only:
-        watcher = receipt.parent / 'frozen-source/bin/m39_gpu_launch.py'
+        auth = json.loads(receipt.read_text())['native_auth']
         subprocess.run(['tmux', 'new-session', '-d', '-s', receipt.parent.name, '-c', str(receipt.parent),
-                        shlex.join([sys.executable, str(watcher), '--watch', str(receipt)])], check=True)
+                        shlex.join(watcher_command(receipt, auth))], check=True)
     print(json.dumps({'status': 'PREPARED_ONLY' if args.prepare_only else 'DETACHED_CONTROLLER_STARTED',
                       'receipt': str(receipt)}))
 
