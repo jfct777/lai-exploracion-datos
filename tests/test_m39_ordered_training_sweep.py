@@ -57,6 +57,21 @@ class SweepTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'already exists'):
             S.freeze_plan(self.base, self.resources, self.recipes[:1], 'controlled_followup', path.parent)
 
+    def test_technical_e2e_is_complete_but_cannot_select_scientific_parameters(self):
+        self.cfg.update(steps=4, evaluate_every_steps=4, evaluate_initial=True)
+        self.base.write_text(json.dumps(self.cfg))
+        path = S.freeze_plan(self.base, self.resources, self.recipes[:1],
+                             'technical_e2e', self.root/'technical')
+        plan = S.load_plan(path)
+        self.assertEqual(len(plan['groups'][0]['configs']), 4)
+        with self.assertRaisesRegex(ValueError, 'requires screening'):
+            S.selected_learning_rates({'stage': 'technical_e2e', 'groups': []})
+
+    def test_technical_e2e_cannot_hide_a_large_training_run(self):
+        with self.assertRaisesRegex(ValueError, 'tiny complete run'):
+            S.freeze_plan(self.base, self.resources, self.recipes[:1],
+                          'technical_e2e', self.root/'not-technical')
+
     def test_selection_minimizes_mean_absolute_error_not_largest_rare_gain(self):
         groups = []
         for family in ('cnn', 'attention'):

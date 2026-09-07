@@ -11,7 +11,8 @@ from m39_gpu_serial_profile import sha256
 SCHEMA = 'm39-ordered-gpu-training-plan-v1'
 SCOPE = 'exploratory_chr22_R0_development_anchors_only'
 ARMS = ('common', 'pooled', 'real', 'sham')
-STAGE_ARMS = {'exploratory_screen': ('common', 'real'), 'controlled_followup': ARMS}
+STAGE_ARMS = {'exploratory_screen': ('common', 'real'), 'controlled_followup': ARMS,
+              'technical_e2e': ARMS}
 DEVELOPMENT_FIELDS = frozenset(('alt', 'anchor_indices', 'baseline', 'chrom', 'coords',
     'full_baseline', 'locus_id', 'pos', 'ref', 'sample_key_sha256', 'select_indices',
     'source_indices', 'state_names', 'train_indices', 'truth_state'))
@@ -31,7 +32,7 @@ def load_plan(path: Path) -> dict:
     require(set(plan) == {'schema_version', 'scope', 'stage', 'resources', 'inputs', 'groups'},
             'training plan fields differ')
     require(plan['schema_version'] == SCHEMA and plan['scope'] == SCOPE, 'training plan scope differs')
-    require(plan['stage'] in STAGE_ARMS, 'explicit screen or controlled followup stage required')
+    require(plan['stage'] in STAGE_ARMS, 'explicit technical, screen or followup stage required')
     arms = STAGE_ARMS[plan['stage']]
     require(set(plan['inputs']) == {'train_manifest_sha256', 'select_manifest_sha256', 'development_sha256'}
             and all(digest(x) for x in plan['inputs'].values()), 'input seals differ')
@@ -73,6 +74,11 @@ def load_plan(path: Path) -> dict:
                     'config input binding differs')
             require(type(cfg.get('max_runtime_seconds')) is int
                     and 0 < cfg['max_runtime_seconds'] < resources['task_seconds'], 'invalid arm timeout')
+            if plan['stage'] == 'technical_e2e':
+                require(type(cfg.get('steps')) is int and 1 <= cfg['steps'] <= 8
+                        and cfg.get('evaluate_initial') is True
+                        and cfg.get('evaluate_every_steps') == cfg['steps'],
+                        'technical end-to-end check requires a tiny complete run with both evaluations')
             comparable = {key: value for key, value in cfg.items() if key not in ('case_id', 'arm')}
             require(reference is None or comparable == reference, 'paired arms have different budgets or models')
             reference = comparable

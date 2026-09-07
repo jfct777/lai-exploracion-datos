@@ -17,7 +17,7 @@ import numpy as np
 
 from m33_safe_bridge_core import write_exclusive_json
 from m39_anchor_screen import metrics, sha256
-from m39_ordered_gpu_manifest import ARMS, SCHEMA, SCOPE, load_plan, require
+from m39_ordered_gpu_manifest import ARMS, SCHEMA, SCOPE, STAGE_ARMS, load_plan, require
 from m39_ordered_training import load_config
 from m39_ordered_training_data import stratified_metrics
 
@@ -27,14 +27,14 @@ def freeze_plan(base_path: Path, resources: dict, recipes: list[dict], stage: st
     """Freeze explicitly supplied values; no automatic parameter or anchor search."""
     base = load_config(base_path)
     require(base['device'] == 'cuda:0', 'scientific plan requires the measured GPU runtime')
-    require(stage in ('exploratory_screen', 'controlled_followup'), 'unknown stage')
+    require(stage in STAGE_ARMS, 'unknown stage')
     require(not outdir.exists() and not outdir.is_symlink(), 'plan output already exists')
     require(isinstance(recipes, list) and len(recipes) > 0, 'empty recipe set')
     for recipe in recipes:
         require(set(recipe) == {'id', 'family', 'learning_rate', 'seed', 'pair_seed'},
                 'recipe fields differ')
         require(recipe['family'] in ('cnn', 'attention'), 'unknown model family')
-    arms = ('common', 'real') if stage == 'exploratory_screen' else ARMS
+    arms = STAGE_ARMS[stage]
     outdir.mkdir(parents=True, mode=0o700, exist_ok=False)
     groups = []
     for recipe in recipes:
@@ -164,7 +164,8 @@ def audit_results(plan_path: Path, outputs: Path, outdir: Path | None = None) ->
     result = {'schema_version': 'm39-ordered-development-comparison-v1',
               'stage': plan['stage'], 'plan_sha256': sha256(plan_path),
               'primary_group_hashes': primary_hashes, 'groups': groups, 'cases': rows,
-              'scope': {'exploratory_SELECT_reused_for_selection': True,
+              'scope': {'exploratory_SELECT_reused_for_selection': plan['stage'] != 'technical_e2e',
+                        'technical_e2e_only': plan['stage'] == 'technical_e2e',
                         'SCORE_opened': False, 'dense_LAI_or_border_F1': False,
                         'negative_family_conclusion_allowed': False,
                         'SHAM_exact_exchangeability_test': False}}
