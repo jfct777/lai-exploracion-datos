@@ -175,12 +175,15 @@ def prepare(args: argparse.Namespace, repo: Path | None = None) -> Path:
     return run / 'gpu.launch.json'
 
 
-def observed_job_ids(run: Path, run_id: str) -> dict[str, str | None]:
+def observed_job_ids(run: Path, run_id: str, *, process_name: str = 'M39_GPU_SERIAL_PROFILE',
+                     max_jobs: int = 1) -> dict[str, str | None]:
     """Recover exact native IDs before considering a potentially slow inventory."""
+    if not re.fullmatch(r'M39_[A-Z_]+', process_name) or type(max_jobs) is not int or not 1 <= max_jobs <= 32:
+        raise ValueError('Invalid sealed Batch process identity or job ceiling')
     jobs = {}
     log = run / 'gpu.nextflow.log'
     if log.is_file():
-        pattern = re.compile(r'\[GOOGLE BATCH\] Process `M39_GPU_SERIAL_PROFILE[^`]*` submitted > '
+        pattern = re.compile(r'\[GOOGLE BATCH\] Process `' + re.escape(process_name) + r'[^`]*` submitted > '
                              r'job=([a-z0-9-]+); uid=([a-z0-9-]+); work-dir=(gs://[^\s]+)')
         for match in pattern.finditer(log.read_text(errors='replace')):
             if not match[3].startswith(OWN_RUNS + run_id + '/work/'):
@@ -193,12 +196,13 @@ def observed_job_ids(run: Path, run_id: str) -> dict[str, str | None]:
                 name = row.get('native_id', '')
                 if re.fullmatch(r'[a-z0-9-]+', name) and name != '-':
                     jobs.setdefault(name, None)
-    if len(jobs) > 1:
-        raise ValueError('Expected one Batch job, found several native IDs')
+    if len(jobs) > max_jobs:
+        raise ValueError('Expected bounded Batch jobs, found excess native IDs')
     return jobs
 
 
-def cancel_owned_jobs(run_id: str, run: Path | None = None, *, auth: dict | None = None) -> dict:
+def cancel_owned_jobs(run_id: str, run: Path | None = None, *, auth: dict | None = None,
+                      process_name: str = 'M39_GPU_SERIAL_PROFILE', max_jobs: int = 1) -> dict:
     """Cancel only unfinished jobs bearing both exact ownership labels."""
     validate_target(run_id, 'us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/check@sha256:' + '0' * 64)
     result = {'deleted_unfinished_jobs': [], 'errors': []}
@@ -206,11 +210,16 @@ def cancel_owned_jobs(run_id: str, run: Path | None = None, *, auth: dict | None
         if auth is None:
             raise ValueError('Cancellation requires the sealed native identity')
         command = [*native_env_prefix(auth), 'gcloud', f"--account={auth['service_account']}"]
-        exact = observed_job_ids(run, run_id) if run is not None else {}
+        exact = observed_job_ids(run, run_id, process_name=process_name, max_jobs=max_jobs) if run is not None else {}
         if exact:
-            jobs = [json.loads(subprocess.check_output([*command, 'batch', 'jobs', 'describe', name,
-                    '--project=uspbr-242713', '--location=us-central1', '--format=json'], timeout=20))
-                    for name in exact]
+            jobs = []
+            for name in exact:
+                try:
+                    jobs.append(json.loads(subprocess.check_output([*command, 'batch', 'jobs', 'describe', name,
+                        '--project=uspbr-242713', '--location=us-central1', '--format=json'], timeout=20)))
+                except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                    # A disappeared task must not prevent cleanup of another live worker.
+                    result['errors'].append({'job': name, 'lookup_failure': type(exc).__name__})
             result['lookup'] = 'exact_native_id_from_sealed_run'
         else:
             jobs = json.loads(subprocess.check_output([*command, 'batch', 'jobs', 'list',
@@ -229,9 +238,13 @@ def cancel_owned_jobs(run_id: str, run: Path | None = None, *, auth: dict | None
             name = job['name']
             if not re.fullmatch(r'projects/uspbr-242713/locations/us-central1/jobs/[a-z0-9-]+', name):
                 raise ValueError('Unexpected Batch resource path')
-            subprocess.run([*command, 'batch', 'jobs', 'delete', name.rsplit('/', 1)[-1],
-                            '--project=uspbr-242713', '--location=us-central1', '--quiet'], check=True, timeout=30)
-            result['deleted_unfinished_jobs'].append(name)
+            try:
+                subprocess.run([*command, 'batch', 'jobs', 'delete', name.rsplit('/', 1)[-1],
+                                '--project=uspbr-242713', '--location=us-central1', '--quiet'], check=True, timeout=30)
+                result['deleted_unfinished_jobs'].append(name)
+            except (OSError, subprocess.SubprocessError) as exc:
+                # Preserve the failure but keep cancelling other authenticated workers.
+                result['errors'].append({'job': name, 'delete_failure': type(exc).__name__})
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         result['errors'].append(type(exc).__name__)
     return result
@@ -252,6 +265,18 @@ def watch(path: Path) -> int:
             raise ValueError('Frozen source changed before detached launch')
     if sha256(run / 'source-seal.json') != receipt['source_seal_sha256']:
         raise ValueError('Source seal changed before detached launch')
+    for name, digest in receipt.get('frozen_artifact_sha256', {}).items():
+        artifact = run / name
+        if (not artifact.resolve().is_relative_to(run.resolve()) or artifact.is_symlink()
+                or sha256(artifact) != digest):
+            raise ValueError('Frozen run artifact changed before detached launch')
+    controller_seconds = receipt.get('resources', {}).get('controller_timeout_seconds', CONTROLLER_SECONDS)
+    max_jobs = receipt.get('resources', {}).get('max_jobs', 1)
+    process_name = receipt.get('process_name', 'M39_GPU_SERIAL_PROFILE')
+    if type(controller_seconds) is not int or not 1 <= controller_seconds <= 24 * 3600:
+        raise ValueError('Invalid sealed controller timeout')
+    if not re.fullmatch(r'M39_[A-Z_]+', process_name) or type(max_jobs) is not int or not 1 <= max_jobs <= 32:
+        raise ValueError('Invalid sealed Batch process identity or job ceiling')
     start = time.monotonic()
     result = {'schema_version': 'm39-gpu-controller-completion-v1', 'run_id': receipt['run_id'],
               'status': 'FAILED', 'exit_code': 1, 'launch_sha256': sha256(path)}
@@ -265,7 +290,7 @@ def watch(path: Path) -> int:
         with (run / 'gpu.controller.log').open('x') as log:
             process = subprocess.Popen(receipt['argv'], cwd=run, stdout=log, stderr=subprocess.STDOUT,
                                        start_new_session=True)
-            result['exit_code'] = process.wait(timeout=CONTROLLER_SECONDS)
+            result['exit_code'] = process.wait(timeout=controller_seconds)
             result['status'] = 'NEXTFLOW_COMPLETED_NEEDS_PRIMARY_POST' if result['exit_code'] == 0 else 'FAILED'
     except (OSError, subprocess.SubprocessError) as exc:
         result.update(failure_type=type(exc).__name__, exit_code=124 if isinstance(exc, subprocess.TimeoutExpired) else 1)
@@ -276,7 +301,8 @@ def watch(path: Path) -> int:
             # Nextflow first receives SIGTERM and may cancel its own exact task.
             stop_process_group(process)
         if result['exit_code']:
-            result['cloud_cleanup'] = cancel_owned_jobs(receipt['run_id'], run, auth=auth)
+            result['cloud_cleanup'] = cancel_owned_jobs(receipt['run_id'], run, auth=auth,
+                                                       process_name=process_name, max_jobs=max_jobs)
         result['elapsed_seconds'] = time.monotonic() - start
         write_json(run / 'gpu.completion.json', result)
         for signum, handler in previous.items():

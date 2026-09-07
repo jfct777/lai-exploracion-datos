@@ -139,3 +139,57 @@ def apply_reference_link_sham(batch: dict, store: OrderedContextStore, pairs,
         dose[row] = torch.from_numpy(values)
     changed["reference_dosage"] = dose
     return changed
+
+
+def sham_dose_changes(store: OrderedContextStore, anchors: np.ndarray,
+                      permutation: np.ndarray) -> dict:
+    """Describe actual changes; repeated attached slots are not independent REF people."""
+    a = store.arrays
+    counts = {name: np.zeros(3, dtype=np.int64) for name in
+              ('global_observed', 'global_changed', 'attached_observed', 'attached_changed')}
+    for anchor in anchors:
+        old = a['ref_dosage'][anchor]
+        new = old[permutation[anchor]]
+        observed = a['ref_observed'][anchor].astype(bool)
+        for ancestry in range(3):
+            mask = observed & (a['reference_ancestry'] == ancestry)
+            counts['global_observed'][ancestry] += mask.sum()
+            counts['global_changed'][ancestry] += (mask & (new != old)).sum()
+        valid = a['candidate_mask'][:, anchor].astype(bool)
+        indices = np.where(valid, a['candidate_ref_index'][:, anchor], 0)
+        called = valid & observed[indices]
+        changed = called & (new[indices] != old[indices])
+        counts['attached_observed'] += called.sum(axis=(0, 1, 3))
+        counts['attached_changed'] += changed.sum(axis=(0, 1, 3))
+    return {'ancestry_order': ['AFR', 'EUR', 'NAM'], 'anchors': len(anchors),
+            'global_unit': 'one_reference_person_per_locus',
+            'attached_unit': 'query_by_locus_by_homolog_by_ancestry_by_candidate_occurrence',
+            **{name: value.tolist() for name, value in counts.items()},
+            'global_changed_fraction': [int(c)/int(n) if n else None for c,n in
+                                       zip(counts['global_changed'], counts['global_observed'])],
+            'attached_changed_fraction': [int(c)/int(n) if n else None for c,n in
+                                         zip(counts['attached_changed'], counts['attached_observed'])],
+            'exact_exchangeability_established': False}
+
+
+def stratified_metrics(probabilities: np.ndarray, truth: np.ndarray,
+                       carrier: np.ndarray, observed: np.ndarray) -> dict:
+    """Prespecified diagnostics only; these strata never choose a recipe or checkpoint."""
+    require(carrier.shape == truth.shape == observed.shape and carrier.dtype.kind == 'b'
+            and observed.dtype.kind == 'b' and not np.any(carrier & ~observed),
+            'invalid carrier/observed strata')
+    masks = {'rare_carrier_observed': carrier, 'noncarrier_observed': observed & ~carrier,
+             'missing_rare_call': ~observed,
+             'truth_contains_NAM': np.isin(truth, [2, 4, 5]),
+             'truth_without_NAM': np.isin(truth, [0, 1, 3])}
+    masks.update({f'truth_{name}': truth == i for i, name in enumerate(STATE_NAMES)})
+    result = {}
+    for name, mask in masks.items():
+        selected = (metrics(probabilities[mask][None], truth[mask][None]) if mask.any() else None)
+        result[name] = {'cells': int(mask.sum()),
+            'people_with_cells': int(np.any(mask, axis=1).sum()),
+            'anchors_with_cells': int(np.any(mask, axis=0).sum()),
+            'metrics': {key: selected[key] for key in ('brier', 'log_loss', 'dosage_mae', 'accuracy')}
+                       if selected is not None else None,
+            'weighting': 'equal_cells_within_stratum_not_independent_observations'}
+    return result

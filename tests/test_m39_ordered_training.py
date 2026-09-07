@@ -153,6 +153,40 @@ class OrderedTrainingTests(unittest.TestCase):
                 group = a['reference_ancestry'] == ancestry
                 self.assertEqual(a['ref_dosage'][anchor, row[group]].sum(), a['ref_dosage'][anchor, group].sum())
 
+    def test_sham_diagnostic_counts_actual_changes_and_attached_occurrences(self):
+        store = self.store()
+        anchors = np.arange(2, dtype=np.int64)
+        mapping = D.reference_link_permutation(store, 17)
+        report = D.sham_dose_changes(store, anchors, mapping)
+        self.assertEqual(sum(report['global_observed']), int(store.arrays['ref_observed'].sum()))
+        a = store.arrays
+        expected = sum(bool(a['candidate_mask'][q,j,h,anc,k]) and
+                       bool(a['ref_observed'][j,a['candidate_ref_index'][q,j,h,anc,k]])
+                       for q,j,h,anc,k in np.ndindex(a['candidate_mask'].shape))
+        self.assertEqual(sum(report['attached_observed']), expected)
+        self.assertLess(expected, int(a['candidate_mask'].sum()))  # Fixture retains missing rare calls.
+        self.assertTrue(all(c <= n for c,n in zip(report['global_changed'], report['global_observed'])))
+        self.assertTrue(all(c <= n for c,n in zip(report['attached_changed'], report['attached_observed'])))
+        identity = np.tile(np.arange(mapping.shape[1]), (mapping.shape[0],1))
+        unchanged = D.sham_dose_changes(store, anchors, identity)
+        self.assertEqual(unchanged['global_changed'], [0,0,0])
+        self.assertEqual(unchanged['attached_changed'], [0,0,0])
+
+    def test_stratified_diagnostics_separate_missing_noncarrier_and_NAM(self):
+        p = np.full((2,2,6), 1/6, dtype=np.float32)
+        truth = np.asarray([[0,2],[4,5]], dtype=np.uint8)
+        observed = np.asarray([[True,True],[False,True]])
+        carrier = np.asarray([[True,False],[False,True]])
+        result = D.stratified_metrics(p, truth, carrier, observed)
+        self.assertEqual(result['rare_carrier_observed']['cells'], 2)
+        self.assertEqual(result['noncarrier_observed']['cells'], 1)
+        self.assertEqual(result['missing_rare_call']['cells'], 1)
+        self.assertEqual(result['truth_contains_NAM']['cells'], 3)
+        self.assertIsNone(result['truth_AE']['metrics'])
+        self.assertAlmostEqual(result['rare_carrier_observed']['metrics']['brier'], 5/6)
+        with self.assertRaisesRegex(ValueError, 'strata'):
+            D.stratified_metrics(p, truth, np.ones((2,2), dtype=bool), observed)
+
     def test_sham_consistent_between_queries_and_homologs_and_does_not_mutate(self):
         store = self.store()
         pairs = [(0, 0), (1, 0), (0, 1)]
@@ -193,6 +227,38 @@ class OrderedTrainingTests(unittest.TestCase):
             with self.assertRaises(ValueError): T.load_config(path)
         bad = copy.deepcopy(cfg); bad['model']['dropout'] = .1; path.write_text(json.dumps(bad))
         with self.assertRaisesRegex(ValueError, 'dropout'): T.load_config(path)
+        for key, value in (('train_probe_people', True), ('train_probe_people', -1),
+                           ('evaluate_initial', 1)):
+            bad = copy.deepcopy(cfg); bad[key] = value; path.write_text(json.dumps(bad))
+            with self.assertRaises(ValueError): T.load_config(path)
+
+    def test_exposure_distinguishes_anchor_coverage_from_complete_pair_passes(self):
+        visits = np.asarray([[1, 1, 1], [0, 0, 0]], dtype=np.int64)
+        value = T.exposure_metrics(visits)
+        self.assertEqual(value['distinct_anchors'], 3)
+        self.assertEqual(value['complete_passes_over_declared_pairs'], 0)
+        self.assertEqual(value['unique_pair_fraction'], .5)
+        value = T.exposure_metrics(visits + 1)
+        self.assertEqual(value['complete_passes_over_declared_pairs'], 1)
+        self.assertEqual(value['equivalent_passes_over_declared_pairs'], 1.5)
+
+    def test_initial_metrics_train_probe_and_exposure_are_auditable(self):
+        _, _, train, select, binding, path, cfg = self.setup_training()
+        cfg.update(evaluate_initial=True, train_probe_people=1)
+        path.write_text(json.dumps(cfg))
+        receipt = T.run_case(train, select, binding, path, self.root/'probed')
+        self.assertEqual([row['step'] for row in receipt['curve']], [0, 1, 2])
+        self.assertIsNone(receipt['curve'][0]['train_cross_entropy_window'])
+        self.assertIsNotNone(receipt['curve'][0]['TRAIN_probe'])
+        self.assertEqual(receipt['curve'][0]['TRAIN_exposure']['observations'], 0)
+        self.assertEqual(receipt['TRAIN_exposure']['complete_passes_over_declared_pairs'], 1)
+        self.assertEqual(receipt['TRAIN_exposure']['available_pairs'], 2)
+        self.assertEqual(receipt['TRAIN_probe_people'], [0])
+        self.assertAlmostEqual(receipt['evaluation_seconds'],
+                               receipt['SELECT_seconds'] + receipt['TRAIN_probe_seconds'])
+        self.assertEqual(receipt['selected_step'], min(receipt['curve'],
+            key=lambda row: (row['SELECT']['brier'], row['SELECT']['log_loss'], row['step']))['step'])
+        self.assertFalse(receipt['budget_diagnostics']['negative_family_conclusion_allowed'])
 
     def _assert_synthetic_training_all_arms(self, family):
         _, _, train, select, binding, path, cfg = self.setup_training()
