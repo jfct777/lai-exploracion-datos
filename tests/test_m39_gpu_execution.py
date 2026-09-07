@@ -254,6 +254,7 @@ class TestGPUExecution(unittest.TestCase):
         text = (REPO / launch.CONFIG).read_text()
         for expected in ("machineType = 'g2-standard-8'", "accelerator = [request: 1, type: 'nvidia-l4']",
                          "time = '30m'", 'maxRetries = 0', 'maxForks = 1', "team: 'frank'",
+                         "containerOptions = '--user 0:0 --runtime=nvidia --gpus all'",
                          'installGpuDrivers = true', launch.OWN_RUNS):
             self.assertIn(expected, text)
         self.assertNotIn('gs://projects-usp/', text)
@@ -295,6 +296,8 @@ class TestGPUExecution(unittest.TestCase):
             if account == SERVICE_ACCOUNT:
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("google.batch.serviceAccountEmail = '" + account + "'", result.stdout)
+                self.assertIn("process.containerOptions = '--user 0:0 --runtime=nvidia --gpus all'",
+                              result.stdout)
             else:
                 self.assertNotEqual(result.returncode, 0)
                 # Nextflow wraps the validation exception as a config error.
