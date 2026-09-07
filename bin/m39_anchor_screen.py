@@ -157,7 +157,15 @@ def batches(people: np.ndarray, loci: int, person_batch: int, locus_batch: int,
 
 
 def metrics(probabilities: np.ndarray, labels: np.ndarray) -> dict:
-    p = probabilities.astype(np.float64)
+    """Score identical values identically before and after NPZ serialization.
+
+    Advanced label indexing can produce column-contiguous arrays, whereas our
+    deterministic writer stores row-contiguous arrays. Canonicalize both layouts
+    before reductions so floating-point summation order does not depend on I/O.
+    The probability copy also keeps the normalization below from changing inputs.
+    """
+    p = np.array(probabilities, dtype=np.float64, order='C', copy=True)
+    labels = np.ascontiguousarray(labels)
     require(p.shape == (*labels.shape, 6) and np.isfinite(p).all() and (p >= 0).all(),
             'nonfinite or incompatible probabilities')
     require(np.allclose(p.sum(-1), 1, atol=5e-5, rtol=0), 'prediction simplex differs')

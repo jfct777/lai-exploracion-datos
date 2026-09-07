@@ -12,6 +12,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bin'))
 import m39_anchor_screen as screen
+from m33_safe_bridge_core import write_deterministic_npz
 
 
 def development_fixture() -> tuple[dict, dict]:
@@ -181,6 +182,53 @@ class AnchorScreenTest(unittest.TestCase):
                         np.asarray([[[-1, 2, 0, 0, 0, 0]]])):
             with self.assertRaises(ValueError):
                 screen.metrics(invalid, np.zeros((1, 1), dtype=int))
+
+    def test_metrics_are_exactly_independent_of_memory_layout(self):
+        # A one-person fixture cannot exercise this: its label array can be
+        # both C and F contiguous. Use the actual development dimensions, but
+        # entirely synthetic probabilities and labels (no genomic records).
+        rng = np.random.default_rng(20260907)
+        p = rng.random((64, 660, 6), dtype=np.float32)
+        p /= p.sum(-1, keepdims=True)
+        truth = rng.integers(0, 6, size=(64, 660), dtype=np.uint8)
+        original_p, original_truth = p.copy(), truth.copy()
+        p_storage = np.empty((64, 1320, 6), dtype=p.dtype)
+        truth_storage = np.empty((64, 1320), dtype=truth.dtype)
+        p_storage[:, ::2], truth_storage[:, ::2] = p, truth
+        probabilities = (p, np.asfortranarray(p), p_storage[:, ::2])
+        labels = (truth, np.asfortranarray(truth), truth_storage[:, ::2],
+                  truth[:, np.arange(660)])
+        expected = screen.metrics(p, truth)
+        for p_view in probabilities:
+            for truth_view in labels:
+                with self.subTest(p_strides=p_view.strides, truth_strides=truth_view.strides):
+                    self.assertEqual(screen.metrics(p_view, truth_view), expected)
+        np.testing.assert_array_equal(p, original_p)
+        np.testing.assert_array_equal(truth, original_truth)
+
+    def test_metrics_remain_exact_after_canonical_npz_roundtrip(self):
+        rng = np.random.default_rng(15840)
+        p = rng.random((64, 660, 6), dtype=np.float32)
+        p /= p.sum(-1, keepdims=True)
+        truth = rng.integers(0, 6, size=(64, 660), dtype=np.uint8)
+        # This is the exact SELECT operation that produced column-contiguous
+        # truth before the writer stored it row-contiguously.
+        p, truth = p[48:].copy(), truth[48:][:, np.arange(660)]
+        self.assertTrue(truth.flags.f_contiguous)
+        self.assertFalse(truth.flags.c_contiguous)
+        expected = screen.metrics(p, truth)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'select.predictions.npz'
+            write_deterministic_npz(path, {'probabilities': p, 'truth_state': truth})
+            with np.load(path, allow_pickle=False) as z:
+                self.assertTrue(z['truth_state'].flags.c_contiguous)
+                np.testing.assert_array_equal(z['truth_state'], truth)
+                np.testing.assert_array_equal(z['probabilities'], p)
+                self.assertEqual(screen.metrics(z['probabilities'], z['truth_state']), expected)
+                corrupted = z['probabilities'].copy()
+        # Exact agreement must still reject an actual probability change.
+        corrupted[0, 0] = np.roll(corrupted[0, 0], 1)
+        self.assertNotEqual(screen.metrics(corrupted, truth), expected)
 
 
 if __name__ == '__main__':
