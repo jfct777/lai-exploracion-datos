@@ -312,6 +312,83 @@ class TestOrderedGPUExecution(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('nextflow'), 'Nextflow unavailable')
     def test_nextflow_stub_queues_two_complete_configurations(self):
+        result = self._run_nextflow_stub()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for i in range(2):
+            directory = self.root / f'outputs/training-candidate-{i}'
+            self.assertTrue((directory / 'STUB_ONLY.txt').is_file())
+            receipt = json.loads((directory / 'group.completion.json').read_text())
+            self.assertEqual(receipt['status'], 'STUB_ONLY_NOT_TRAINING')
+        rows = (self.root / 'trace.tsv').read_text().splitlines()
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(all('COMPLETED' in row for row in rows[1:]))
+
+    @unittest.skipUnless(shutil.which('nextflow'), 'Nextflow unavailable')
+    def test_nextflow_aborts_on_transported_failure_and_preserves_work_receipt(self):
+        result = self._run_nextflow_stub(fail_receipt=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Scientific group', result.stdout + result.stderr)
+        self.assertIn('preserved work:', result.stdout + result.stderr)
+        # Publication is asynchronous: the work directory, not publishDir, is the
+        # authoritative fallback when the scientific receipt aborts the workflow.
+        receipts = list((self.root / 'work').glob('*/*/training-*/group.completion.json'))
+        self.assertTrue(receipts)
+        self.assertTrue(all(json.loads(path.read_text())['status'] == 'FAILED' for path in receipts))
+
+    def test_completion_gate_rejects_unbound_receipts_and_stub_as_real(self):
+        jar = Path.home() / '.nextflow/framework/26.04.6/nextflow-26.04.6-one.jar'
+        if not jar.is_file() or not shutil.which('java'):
+            self.skipTest('Installed Nextflow Groovy runtime unavailable')
+        # Exercise the production Groovy function, not a Python reimplementation.
+        function = (REPO / launch.WORKFLOW).read_text().split('include {', 1)[0]
+        function = function.replace('nextflow.enable.dsl = 2', '')
+        script = self.root / 'receipt-gate.groovy'
+        script.write_text(function + r'''
+def error(message) { throw new IllegalArgumentException(message.toString()) }
+class ReceiptFile { String text; boolean present = true; boolean exists() { present } }
+class ResultDirectory {
+    String name = 'training-candidate-0'
+    ReceiptFile payload
+    def resolve(String name) { payload }
+}
+def check = { receipt, stage, stub = false, present = true ->
+    def result = new ResultDirectory(payload: new ReceiptFile(
+        text: groovy.json.JsonOutput.toJson(receipt), present: present))
+    requireCompletedGroup(result, [groups: [[id: 'candidate-0']], stage: stage],
+        'a' * 40, 'b' * 64, 'c' * 64, stub)
+}
+def base = [schema_version: 'm39-ordered-gpu-group-completion-v1',
+    status: 'COMPLETED_DECLARED_PAIRED_ARMS_NEEDS_SCIENTIFIC_POST', exit_code: 0,
+    group_id: 'candidate-0', source_commit: 'a' * 40, plan_sha256: 'b' * 64,
+    source_seal_sha256: 'c' * 64, SCORE_opened: false]
+for (stage in ['exploratory_screen', 'controlled_followup', 'technical_e2e']) {
+    def arms = stage == 'exploratory_screen' ? ['common', 'real'] : ['common', 'pooled', 'real', 'sham']
+    def receipt = base + [stage: stage, completed_arms: arms,
+        case_receipt_sha256: arms.collectEntries { [(it): 'd' * 64] }]
+    assert check(receipt, stage) != null
+    for (override in [[status: 'FAILED'], [exit_code: 1], [SCORE_opened: true],
+            [group_id: 'other'], [source_commit: 'e' * 40], [plan_sha256: 'f' * 64],
+            [source_seal_sha256: 'f' * 64], [stage: 'different'], [completed_arms: ['common']],
+            [case_receipt_sha256: [:]]]) {
+        boolean rejected = false
+        try { check(receipt + override, stage) } catch (IllegalArgumentException e) { rejected = true }
+        assert rejected: override
+    }
+    boolean missing = false
+    try { check(receipt, stage, false, false) } catch (IllegalArgumentException e) { missing = true }
+    assert missing
+}
+def stubReceipt = [status: 'STUB_ONLY_NOT_TRAINING', group_id: 'candidate-0', SCORE_opened: false]
+assert check(stubReceipt, 'technical_e2e', true) != null
+boolean stubRejected = false
+try { check(stubReceipt, 'technical_e2e', false) } catch (IllegalArgumentException e) { stubRejected = true }
+assert stubRejected
+''')
+        result = subprocess.run(['java', '-cp', str(jar), 'groovy.ui.GroovyMain', str(script)],
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def _run_nextflow_stub(self, fail_receipt=False):
         config = self.root / 'stub.config'
         config.write_text("process { executor='local'; cpus=1; memory='128 MB'; maxForks=2 }; "
             "docker.enabled=false; params { m39_gpu_run_id='m39-gpu-training-test'; "
@@ -323,21 +400,28 @@ class TestOrderedGPUExecution(unittest.TestCase):
         seal = self.root / 'seal.json'
         seal.write_text(json.dumps({'source_commit': '1' * 40, 'profile_sha256': manifest.sha256(self.path),
             'source_sha256': {name: manifest.sha256(REPO / 'bin' / name) for name in launch.RUNTIME}}))
+        workflow_path = REPO / launch.WORKFLOW
+        if fail_receipt:
+            isolated = self.root / 'failure-pipeline'
+            for name in (launch.WORKFLOW, 'modules/39_ORDERED_GPU_TRAINING.nf'):
+                target = isolated / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                contents = (REPO / name).read_text()
+                if name.startswith('modules/'):
+                    contents = contents.replace('"status":"STUB_ONLY_NOT_TRAINING"',
+                                                '"status":"FAILED","exit_code":1')
+                target.write_text(contents)
+            (isolated / 'bin').symlink_to(REPO / 'bin', target_is_directory=True)
+            workflow_path = isolated / launch.WORKFLOW
         command = ['nextflow', '-C', str(config), '-log', str(self.root / 'nf.log'),
-            'run', str(REPO / launch.WORKFLOW), '-stub-run', '-work-dir', str(self.root / 'work'),
+            'run', str(workflow_path), '-stub-run', '-work-dir', str(self.root / 'work'),
             '-with-trace', str(self.root / 'trace.tsv')]
         for key, value in {'train_store': train, 'select_store': select, 'development': development,
                 'training_plan': self.path, 'source_seal': seal, 'source_commit': '1' * 40,
                 'plan_sha256': manifest.sha256(self.path), 'output_dir': self.root / 'outputs'}.items():
             command.extend(('--m39_' + key, str(value)))
-        result = subprocess.run(command, cwd=self.root, capture_output=True, text=True, timeout=75,
+        return subprocess.run(command, cwd=self.root, capture_output=True, text=True, timeout=75,
             env={**os.environ, 'NXF_VER': '26.04.6', 'NXF_OFFLINE': 'true'})
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        for i in range(2):
-            self.assertTrue((self.root / f'outputs/training-candidate-{i}/STUB_ONLY.txt').is_file())
-        rows = (self.root / 'trace.tsv').read_text().splitlines()
-        self.assertEqual(len(rows), 3)
-        self.assertTrue(all('COMPLETED' in row for row in rows[1:]))
 
 
 if __name__ == '__main__':

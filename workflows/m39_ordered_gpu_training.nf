@@ -1,5 +1,29 @@
 nextflow.enable.dsl = 2
 
+def requireCompletedGroup(resultDir, plan, sourceCommit, planHash, sealHash, stubRun) {
+    def receiptPath = resultDir.resolve('group.completion.json')
+    if (!receiptPath.exists()) error "Missing group completion receipt; preserved work: ${resultDir}"
+    def receipt = new groovy.json.JsonSlurper().parseText(receiptPath.text)
+    def groupId = resultDir.name.toString().replaceFirst(/^training-/, '')
+    def group = plan.groups.find { it.id == groupId }
+    if (!group || receipt.group_id != groupId)
+        error "Group receipt identifier differs; preserved work: ${resultDir}"
+    if (stubRun && receipt.status == 'STUB_ONLY_NOT_TRAINING' && receipt.SCORE_opened == false)
+        return resultDir
+    if (receipt.status != 'COMPLETED_DECLARED_PAIRED_ARMS_NEEDS_SCIENTIFIC_POST' || receipt.exit_code != 0)
+        error "Scientific group ${groupId} failed (${receipt.status}); preserved work: ${resultDir}"
+    def expectedArms = plan.stage == 'exploratory_screen' ? ['common', 'real'] :
+        plan.stage in ['controlled_followup', 'technical_e2e'] ? ['common', 'pooled', 'real', 'sham'] : []
+    if (receipt.schema_version != 'm39-ordered-gpu-group-completion-v1' ||
+        receipt.stage != plan.stage || receipt.source_commit != sourceCommit ||
+        receipt.plan_sha256 != planHash || receipt.source_seal_sha256 != sealHash ||
+        !expectedArms || receipt.SCORE_opened != false || receipt.completed_arms != expectedArms ||
+        receipt.case_receipt_sha256?.keySet() != expectedArms.toSet() ||
+        !receipt.case_receipt_sha256.values().every { it ==~ /[0-9a-f]{64}/ })
+        error "Incomplete or unbound scientific group ${groupId}; preserved work: ${resultDir}"
+    return resultDir
+}
+
 include { M39_ORDERED_GPU_TRAINING } from '../modules/39_ORDERED_GPU_TRAINING'
 
 workflow {
@@ -22,6 +46,7 @@ workflow {
     if (plan.resources.max_workers != params.m39_max_workers || plan.resources.task_seconds != params.m39_task_seconds)
         error 'Worker limits differ from frozen plan'
     def seal = file(params.m39_source_seal, checkIfExists: true)
+    def sealHash = java.security.MessageDigest.getInstance('SHA-256').digest(seal.bytes).encodeHex().toString()
     def binding = new groovy.json.JsonSlurper().parseText(seal.text)
     if (binding.source_commit != params.m39_source_commit || binding.profile_sha256 != digest)
         error 'Source binding differs'
@@ -43,4 +68,9 @@ workflow {
         channel.value(file(params.m39_select_store, checkIfExists: true)),
         channel.value(file(params.m39_development, checkIfExists: true)),
         channel.value(seal), channel.value(sources))
+    // Stage-out to work has completed here; publishDir copies are asynchronous.
+    // Fail immediately on a recorded scientific failure without another GPU task.
+    M39_ORDERED_GPU_TRAINING.out.results.map { resultDir ->
+        requireCompletedGroup(resultDir, plan, params.m39_source_commit, digest, sealHash, workflow.stubRun)
+    }.subscribe { resultDir -> log.info "Group receipt accepted: ${resultDir.name}" }
 }

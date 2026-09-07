@@ -29,5 +29,6 @@ process M39_ORDERED_GPU_TRAINING {
     """
     mkdir 'training-${group_id}'
     printf '%s\\n' 'STUB_ONLY_NOT_TRAINING' > 'training-${group_id}/STUB_ONLY.txt'
+    printf '%s\\n' '{"status":"STUB_ONLY_NOT_TRAINING","group_id":"${group_id}","SCORE_opened":false}' > 'training-${group_id}/group.completion.json'
     """
 }
