@@ -1,0 +1,38 @@
+{
+  "schema_version": "m39-ordered-throughput-profile-v1",
+  "scope": "technical_throughput_synthetic_labels_inner_TRAIN_only",
+  "parent_receipt_sha256": "fe8fed594e473055e5561570b7c768f7df77452fef8862941709e3b876d9e2b9",
+  "store_case": "people_48/radius_1cm",
+  "store_manifest_sha256": "37a44560fa2d7f612a270ee2a96bde1ae563d69f859a3e5e095b47ca456da7be",
+  "folds_sha256": "0691a0ce3d92f2a556e01808ddd7a19fc96fbdc06ef392fc7c1b8e653c75aa55",
+  "fold": 0,
+  "seed": 20260907,
+  "device": "cpu",
+  "warmup_steps": 1,
+  "sample_strata": 4,
+  "anchors_per_stratum": 4,
+  "queries_per_anchor": 2,
+  "learning_rate": 0.001,
+  "weight_decay": 0,
+  "torch_threads": 2,
+  "max_input_bytes": 67108864,
+  "max_rss_kib": 6710886,
+  "max_seconds": 900,
+  "core_sites": 256,
+  "recipe": {
+    "width": 32,
+    "depth": 2,
+    "kernels": [3, 7],
+    "dilations": [1, 2],
+    "heads": 4,
+    "attention_radius_tokens": 4
+  },
+  "cases": [
+    {"id": "cnn-small-grouped-b1-real", "family": "cnn", "policy": "grouped", "batch_size": 1, "arm": "real"},
+    {"id": "cnn-small-grouped-b2-real", "family": "cnn", "policy": "grouped", "batch_size": 2, "arm": "real"},
+    {"id": "cnn-small-random-b2-real", "family": "cnn", "policy": "random", "batch_size": 2, "arm": "real"},
+    {"id": "attention-small-grouped-b1-real", "family": "attention", "policy": "grouped", "batch_size": 1, "arm": "real"},
+    {"id": "attention-small-grouped-b2-real", "family": "attention", "policy": "grouped", "batch_size": 2, "arm": "real"},
+    {"id": "attention-small-random-b2-real", "family": "attention", "policy": "random", "batch_size": 2, "arm": "real"}
+  ]
+}
