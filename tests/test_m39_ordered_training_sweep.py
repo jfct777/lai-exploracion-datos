@@ -2,6 +2,7 @@
 from dataclasses import asdict
 import copy
 import json
+import math
 from pathlib import Path
 import sys
 import tempfile
@@ -15,6 +16,75 @@ import m39_ordered_training_sweep as S
 from m39_ordered_training import SCHEMA
 import m39_ordered_training as T
 import test_m39_ordered_training as fixtures
+
+
+class MetricRecomputationTests(unittest.TestCase):
+    def setUp(self):
+        self.expected = {'brier': .3, 'log_loss': .4, 'dosage_mae': [.1, .2, .3],
+            'brier_per_person': [.2, .4], 'log_loss_per_person': [.4828666117533973, .3],
+            'accuracy': .5, 'log_loss_floor': 1e-12, 'log_loss_floor_fraction': 0.,
+            'weighting': 'equal_people_then_equal_anchors', 'cells': 2048,
+            'SCORE_opened': False, 'empty': None}
+
+    def test_one_ulp_cross_runtime_error_is_recorded_without_mutating_receipt(self):
+        expected = copy.deepcopy(self.expected)
+        actual = copy.deepcopy(expected)
+        actual['log_loss_per_person'][0] = math.nextafter(expected['log_loss_per_person'][0], math.inf)
+        differences = S.verify_recomputed_metrics(actual, expected)
+        self.assertEqual(expected, self.expected)
+        self.assertEqual(len(differences), 1)
+        self.assertEqual(differences[0]['absolute_difference'], 5.551115123125783e-17)
+        self.assertEqual(differences[0]['field'], 'metrics.log_loss_per_person[0]')
+
+    def test_all_derived_errors_use_absolute_not_relative_tolerance(self):
+        for field in S.RECOMPUTED_FLOAT_FIELDS:
+            with self.subTest(field=field):
+                actual = copy.deepcopy(self.expected)
+                if isinstance(actual[field], list):
+                    actual[field][0] += 1e-9
+                else:
+                    actual[field] += 1e-9
+                with self.assertRaisesRegex(ValueError, 'recomputed metric differs'):
+                    S.verify_recomputed_metrics(actual, self.expected)
+        with self.assertRaises(ValueError):
+            S.verify_recomputed_metrics({'log_loss': 1e6 + 1e-9}, {'log_loss': 1e6})
+
+    def test_nonfinite_values_fail_even_when_both_sides_match(self):
+        for value in (math.nan, math.inf, -math.inf):
+            for field in ('brier', 'accuracy'):
+                with self.subTest(field=field, value=value), self.assertRaisesRegex(ValueError, 'non-finite'):
+                    S.verify_recomputed_metrics({field: value}, {field: value})
+
+    def test_metadata_accuracy_floor_and_unknown_fields_remain_exact(self):
+        for field in ('accuracy', 'log_loss_floor', 'log_loss_floor_fraction'):
+            actual = copy.deepcopy(self.expected)
+            actual[field] = math.nextafter(actual[field], math.inf)
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'recomputed metric differs'):
+                S.verify_recomputed_metrics(actual, self.expected)
+        for field, value in (('weighting', 'changed'), ('cells', 2049), ('SCORE_opened', True)):
+            actual = {**self.expected, field: value}
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                S.verify_recomputed_metrics(actual, self.expected)
+        with self.assertRaises(ValueError):
+            S.verify_recomputed_metrics({'unknown': .1 + 1e-14}, {'unknown': .1})
+
+    def test_schema_types_keys_and_lengths_are_not_coerced(self):
+        invalid = [dict(self.expected, cells=2048.), dict(self.expected, SCORE_opened=0),
+                   dict(self.expected, extra=0), dict(self.expected, dosage_mae=[.1, .2]),
+                   dict(self.expected, dosage_mae=(.1, .2, .3))]
+        for actual in invalid:
+            with self.subTest(actual=actual), self.assertRaises(ValueError):
+                S.verify_recomputed_metrics(actual, self.expected)
+
+    def test_nested_strata_allow_error_roundoff_but_not_cell_changes(self):
+        expected = {'carriers': {'cells': 17, 'metrics': {'brier': .3, 'accuracy': .5}},
+                    'missing': {'cells': 0, 'metrics': None}}
+        actual = copy.deepcopy(expected)
+        actual['carriers']['metrics']['brier'] = math.nextafter(.3, math.inf)
+        self.assertEqual(len(S.verify_recomputed_metrics(actual, expected)), 1)
+        actual['carriers']['cells'] += 1
+        with self.assertRaises(ValueError):
+            S.verify_recomputed_metrics(actual, expected)
 
 
 class SweepTests(unittest.TestCase):
@@ -118,6 +188,27 @@ class SweepTests(unittest.TestCase):
                 self.assertEqual(len(summary['cases']), 2)
                 self.assertEqual(len(summary['groups'][0]['control_minus_REAL']['common']['dosage_mae']), 3)
                 self.assertTrue((self.root/'audit/cases.csv').is_file())
+                self.assertEqual(summary['metric_recomputation']['nonzero_differences'], [])
+                original_metrics = S.metrics
+                def rounded_metrics(*args):
+                    result = original_metrics(*args)
+                    result['log_loss_per_person'][0] = math.nextafter(
+                        result['log_loss_per_person'][0], math.inf)
+                    return result
+                with patch.object(S, 'metrics', side_effect=rounded_metrics):
+                    rounded = S.audit_results(plan_path, output.parent)
+                self.assertEqual(rounded['cases'], summary['cases'])
+                self.assertEqual(rounded['groups'], summary['groups'])
+                self.assertEqual(len(rounded['metric_recomputation']['nonzero_differences']), 2)
+                original_verify = S._verified_case
+                def altered_axes(*args):
+                    receipt, arrays, differences = original_verify(*args)
+                    if receipt['config']['arm'] == 'real':
+                        arrays['truth_state'].flat[0] = (arrays['truth_state'].flat[0] + 1) % 6
+                    return receipt, arrays, differences
+                with patch.object(S, '_verified_case', side_effect=altered_axes):
+                    with self.assertRaisesRegex(ValueError, 'paired prediction axes differ'):
+                        S.audit_results(plan_path, output.parent)
                 curve = output/'real/curve-step-0000000.json'
                 curve.chmod(0o600)
                 curve.write_text('{}')

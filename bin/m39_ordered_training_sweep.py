@@ -11,6 +11,7 @@ import argparse
 import copy
 import csv
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,49 @@ from m39_anchor_screen import metrics, sha256
 from m39_ordered_gpu_manifest import ARMS, SCHEMA, SCOPE, STAGE_ARMS, load_plan, require
 from m39_ordered_training import load_config
 from m39_ordered_training_data import stratified_metrics
+
+
+# This is a cross-runtime serialization check, not a model-selection margin.
+# Frozen NPZ/checkpoint/config hashes, discrete metrics and all metadata remain
+# exact. The floor is below any reported scientific effect and matches the
+# pre-existing independent primary reader's absolute float64 check.
+METRIC_RECOMPUTATION_ATOL = 1e-12
+RECOMPUTED_FLOAT_FIELDS = frozenset({
+    'brier', 'log_loss', 'dosage_mae', 'brier_per_person', 'log_loss_per_person'})
+
+
+def verify_recomputed_metrics(actual, expected, path: str = 'metrics') -> list[dict]:
+    """Check finite same-schema metrics, recording only bounded float roundoff.
+
+    No receipt value is replaced or rounded. Only named derived error measures
+    admit an absolute 1e-12 difference (relative tolerance is zero). Integers,
+    booleans, nulls, lengths, keys, accuracy, floor and weighting remain exact.
+    """
+    differences = []
+
+    def visit(left, right, where, floating_error=False):
+        require(type(left) is type(right), f'{where}: metric value types differ')
+        if isinstance(left, dict):
+            require(left.keys() == right.keys(), f'{where}: metric fields differ')
+            for key in left:
+                visit(left[key], right[key], f'{where}.{key}', key in RECOMPUTED_FLOAT_FIELDS)
+        elif isinstance(left, list):
+            require(len(left) == len(right), f'{where}: metric array length differs')
+            for i, (a, b) in enumerate(zip(left, right)):
+                visit(a, b, f'{where}[{i}]', floating_error)
+        elif isinstance(left, float):
+            require(math.isfinite(left) and math.isfinite(right), f'{where}: non-finite metric')
+            delta = abs(left - right)
+            require(delta <= (METRIC_RECOMPUTATION_ATOL if floating_error else 0.),
+                    f'{where}: recomputed metric differs')
+            if delta:
+                differences.append({'field': where, 'receipt': right,
+                                    'recomputed': left, 'absolute_difference': delta})
+        else:
+            require(left == right, f'{where}: exact metric metadata differs')
+
+    visit(actual, expected, path)
+    return differences
 
 
 def freeze_plan(base_path: Path, resources: dict, recipes: list[dict], stage: str,
@@ -64,7 +108,7 @@ def freeze_plan(base_path: Path, resources: dict, recipes: list[dict], stage: st
     return path
 
 
-def _verified_case(path: Path, config_path: Path, receipt_sha: str) -> tuple[dict, dict]:
+def _verified_case(path: Path, config_path: Path, receipt_sha: str) -> tuple[dict, dict, list]:
     receipt_path = path / 'training.receipt.json'
     require(sha256(receipt_path) == receipt_sha, 'worker/primary receipt hash differs')
     receipt = json.loads(receipt_path.read_text())
@@ -85,19 +129,18 @@ def _verified_case(path: Path, config_path: Path, receipt_sha: str) -> tuple[dic
                                 'locus_id', 'sample_key_sha256', 'query_carrier', 'query_observed'},
                 'prediction axes differ')
         arrays = {name: z[name].copy() for name in z.files}
-    require(metrics(arrays['probabilities'], arrays['truth_state']) == receipt['selected_SELECT_metrics'],
-            'primary predictions do not reproduce selected metrics')
-    require(stratified_metrics(arrays['probabilities'], arrays['truth_state'],
-            arrays['query_carrier'], arrays['query_observed']) ==
-            receipt['selected_SELECT_stratified_descriptive_only']['model'],
-            'primary predictions do not reproduce descriptive strata')
+    differences = verify_recomputed_metrics(
+        metrics(arrays['probabilities'], arrays['truth_state']), receipt['selected_SELECT_metrics'])
+    differences.extend(verify_recomputed_metrics(stratified_metrics(
+        arrays['probabilities'], arrays['truth_state'], arrays['query_carrier'], arrays['query_observed']),
+        receipt['selected_SELECT_stratified_descriptive_only']['model'], 'descriptive_strata'))
     require(arrays['anchor_indices'].tolist() == receipt['anchor_indices'], 'receipt/prediction anchors differ')
     keys = [(row['SELECT']['brier'], row['SELECT']['log_loss'], row['step']) for row in receipt['curve']]
     require(min(keys)[2] == receipt['selected_step'], 'checkpoint selection is not declared SELECT minimum')
     for row in receipt['curve']:
         primary = json.loads((path / f"curve-step-{row['step']:07d}.json").read_text())
         require(primary == row, 'primary curve checkpoint differs')
-    return receipt, arrays
+    return receipt, arrays, differences
 
 
 def audit_results(plan_path: Path, outputs: Path, outdir: Path | None = None) -> dict:
@@ -105,7 +148,7 @@ def audit_results(plan_path: Path, outputs: Path, outdir: Path | None = None) ->
     plan = load_plan(plan_path)
     if outdir is not None:
         require(not outdir.exists() and not outdir.is_symlink(), 'comparison output already exists')
-    groups, rows, primary_hashes = [], [], {}
+    groups, rows, primary_hashes, numeric_differences = [], [], {}, []
     for group in plan['groups']:
         # Match the Nextflow publishDir contract exactly; do not infer alternate
         # folders from whichever stale run happens to exist beside this one.
@@ -120,8 +163,9 @@ def audit_results(plan_path: Path, outputs: Path, outdir: Path | None = None) ->
         for spec in group['configs']:
             cfg_path = plan_path.parent / spec['file']
             cfg = load_config(cfg_path)
-            receipt, arrays = _verified_case(group_path / cfg['arm'], cfg_path,
-                                             done['case_receipt_sha256'][cfg['arm']])
+            receipt, arrays, differences = _verified_case(group_path / cfg['arm'], cfg_path,
+                                                          done['case_receipt_sha256'][cfg['arm']])
+            numeric_differences.extend({'case_id': cfg['case_id'], **row} for row in differences)
             paired = {key: receipt[key] for key in ('initial_state_sha256', 'training_pair_stream_sha256',
                 'anchor_indices', 'training_observations', 'TRAIN_exposure', 'batch_policy')}
             require(paired_reference is None or paired_reference == paired, 'paired training exposure differs')
@@ -164,6 +208,11 @@ def audit_results(plan_path: Path, outputs: Path, outdir: Path | None = None) ->
     result = {'schema_version': 'm39-ordered-development-comparison-v1',
               'stage': plan['stage'], 'plan_sha256': sha256(plan_path),
               'primary_group_hashes': primary_hashes, 'groups': groups, 'cases': rows,
+              'metric_recomputation': {'policy': 'finite_float64_absolute_error_only_v1',
+                  'atol': METRIC_RECOMPUTATION_ATOL, 'rtol': 0.,
+                  'derived_float_fields': sorted(RECOMPUTED_FLOAT_FIELDS),
+                  'metadata_axes_hashes_selection_and_discrete_values': 'exact',
+                  'receipt_values_modified': False, 'nonzero_differences': numeric_differences},
               'scope': {'exploratory_SELECT_reused_for_selection': plan['stage'] != 'technical_e2e',
                         'technical_e2e_only': plan['stage'] == 'technical_e2e',
                         'SCORE_opened': False, 'dense_LAI_or_border_F1': False,
