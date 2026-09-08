@@ -10,9 +10,11 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
+from dataclasses import dataclass
 import json
 import math
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -30,6 +32,24 @@ from m39_ordered_training_data import stratified_metrics
 METRIC_RECOMPUTATION_ATOL = 1e-12
 RECOMPUTED_FLOAT_FIELDS = frozenset({
     'brier', 'log_loss', 'dosage_mae', 'brier_per_person', 'log_loss_per_person'})
+
+
+@dataclass(frozen=True)
+class SweepProtocol:
+    """Names and config validation for a paired experiment; auditing stays shared."""
+
+    config_loader: Callable[[Path], dict] | None = None
+    focal_arm: str = 'real'
+    common_arm: str = 'common'
+    screen_stage: str = 'exploratory_screen'
+    followup_stage: str = 'controlled_followup'
+    technical_stage: str = 'technical_e2e'
+    comparison_schema: str = 'm39-ordered-development-comparison-v1'
+    initial_checkpoint_eligible: bool = True
+    preserve_followup_geometry: bool = False
+
+    def read_config(self, path: Path) -> dict:
+        return (self.config_loader or load_config)(path)
 
 
 def verify_recomputed_metrics(actual, expected, path: str = 'metrics') -> list[dict]:
@@ -67,9 +87,10 @@ def verify_recomputed_metrics(actual, expected, path: str = 'metrics') -> list[d
 
 
 def freeze_plan(base_path: Path, resources: dict, recipes: list[dict], stage: str,
-                outdir: Path) -> Path:
+                outdir: Path, *, protocol: SweepProtocol | None = None) -> Path:
     """Freeze explicitly supplied values; no automatic parameter or anchor search."""
-    base = load_config(base_path)
+    protocol = protocol or SweepProtocol()
+    base = protocol.read_config(base_path)
     require(base['device'] == 'cuda:0', 'scientific plan requires the measured GPU runtime')
     require(stage in STAGE_ARMS, 'unknown stage')
     require(not outdir.exists() and not outdir.is_symlink(), 'plan output already exists')
@@ -91,7 +112,7 @@ def freeze_plan(base_path: Path, resources: dict, recipes: list[dict], stage: st
             cfg['model']['family'] = recipe['family']
             path = outdir / f"{recipe['id']}-{arm}.json"
             write_exclusive_json(path, cfg)
-            load_config(path)
+            protocol.read_config(path)
             specs.append({'file': path.name, 'sha256': sha256(path)})
         groups.append({'id': recipe['id'], 'configs': specs})
     plan = {'schema_version': SCHEMA, 'scope': SCOPE, 'stage': stage,
@@ -108,11 +129,13 @@ def freeze_plan(base_path: Path, resources: dict, recipes: list[dict], stage: st
     return path
 
 
-def _verified_case(path: Path, config_path: Path, receipt_sha: str) -> tuple[dict, dict, list]:
+def _verified_case(path: Path, config_path: Path, receipt_sha: str, *,
+                   protocol: SweepProtocol | None = None) -> tuple[dict, dict, list]:
+    protocol = protocol or SweepProtocol()
     receipt_path = path / 'training.receipt.json'
     require(sha256(receipt_path) == receipt_sha, 'worker/primary receipt hash differs')
     receipt = json.loads(receipt_path.read_text())
-    cfg = load_config(config_path)
+    cfg = protocol.read_config(config_path)
     require(receipt['config'] == cfg and receipt['sources']['config_sha256'] == sha256(config_path)
             and receipt['decision'] == 'COMPLETED_EXPLORATORY_DEVELOPMENT_CASE'
             and receipt['scope']['SCORE_opened'] is False, 'case receipt scope differs')
@@ -135,17 +158,57 @@ def _verified_case(path: Path, config_path: Path, receipt_sha: str) -> tuple[dic
         arrays['probabilities'], arrays['truth_state'], arrays['query_carrier'], arrays['query_observed']),
         receipt['selected_SELECT_stratified_descriptive_only']['model'], 'descriptive_strata'))
     require(arrays['anchor_indices'].tolist() == receipt['anchor_indices'], 'receipt/prediction anchors differ')
-    keys = [(row['SELECT']['brier'], row['SELECT']['log_loss'], row['step']) for row in receipt['curve']]
+    keys = [(row['SELECT']['brier'], row['SELECT']['log_loss'], row['step'])
+            for row in receipt['curve'] if protocol.initial_checkpoint_eligible or row['step'] > 0]
+    require(bool(keys), 'no eligible checkpoint in the declared curve')
     require(min(keys)[2] == receipt['selected_step'], 'checkpoint selection is not declared SELECT minimum')
+    selected_rows = [row for row in receipt['curve'] if row['step'] == receipt['selected_step']]
+    require(len(selected_rows) == 1 and selected_rows[0]['SELECT'] == receipt['selected_SELECT_metrics'],
+            'selected curve metrics differ from selected receipt metrics')
     for row in receipt['curve']:
+        if not protocol.initial_checkpoint_eligible:
+            require(row.get('checkpoint_eligible') is (row['step'] > 0),
+                    'checkpoint eligibility differs from the declared protocol')
         primary = json.loads((path / f"curve-step-{row['step']:07d}.json").read_text())
         require(primary == row, 'primary curve checkpoint differs')
     return receipt, arrays, differences
 
 
-def audit_results(plan_path: Path, outputs: Path, outdir: Path | None = None) -> dict:
+def verify_complete_pass_schedule(receipt: dict, cfg: dict) -> None:
+    """Check actual pair exposure and completed-pass evaluation, including remainders."""
+    available = receipt['TRAIN_exposure']['available_pairs']
+    anchors = len(receipt['anchor_indices'])
+    require(type(available) is int and available > 0 and anchors > 0 and available % anchors == 0,
+            'invalid declared training-pair universe')
+    people = available // anchors
+    steps_per_pass = ((people + cfg['batch_size'] - 1) // cfg['batch_size']) * anchors
+    require(cfg['evaluate_every_steps'] == steps_per_pass
+            and cfg['steps'] % steps_per_pass == 0, 'scientific checkpoints must close complete passes')
+    expected_steps = ([0] if cfg.get('evaluate_initial', False) else []) + list(
+        range(steps_per_pass, cfg['steps'] + 1, steps_per_pass))
+    require([row['step'] for row in receipt['curve']] == expected_steps,
+            'scientific checkpoint schedule differs')
+    for row in receipt['curve']:
+        passes = row['step'] // steps_per_pass
+        exposure = row['TRAIN_exposure']
+        require(exposure['available_pairs'] == available
+                and exposure['minimum_visits_per_pair'] == exposure['maximum_visits_per_pair'] == passes
+                and exposure['complete_passes_over_declared_pairs'] == passes
+                and exposure['observations'] == available * passes
+                and row['train_observations_cumulative'] == available * passes,
+                'scientific checkpoint did not complete its declared pair passes')
+    require(receipt['TRAIN_exposure'] == receipt['curve'][-1]['TRAIN_exposure']
+            and receipt['training_observations'] == available * (cfg['steps'] // steps_per_pass),
+            'final scientific exposure differs')
+
+
+def audit_results(plan_path: Path, outputs: Path, outdir: Path | None = None, *,
+                  protocol: SweepProtocol | None = None) -> dict:
     """Reopen all declared cases and same-axis controls before producing a comparison."""
     plan = load_plan(plan_path)
+    # Keep legacy call signatures for downstream diagnostic hooks and tests.
+    options = {'protocol': protocol} if protocol is not None else {}
+    protocol = protocol or SweepProtocol()
     if outdir is not None:
         require(not outdir.exists() and not outdir.is_symlink(), 'comparison output already exists')
     groups, rows, primary_hashes, numeric_differences = [], [], {}, []
@@ -162,9 +225,11 @@ def audit_results(plan_path: Path, outputs: Path, outdir: Path | None = None) ->
         cases, reference_arrays, paired_reference = {}, None, None
         for spec in group['configs']:
             cfg_path = plan_path.parent / spec['file']
-            cfg = load_config(cfg_path)
+            cfg = protocol.read_config(cfg_path)
             receipt, arrays, differences = _verified_case(group_path / cfg['arm'], cfg_path,
-                                                          done['case_receipt_sha256'][cfg['arm']])
+                                                          done['case_receipt_sha256'][cfg['arm']], **options)
+            if protocol.preserve_followup_geometry and plan['stage'] != protocol.technical_stage:
+                verify_complete_pass_schedule(receipt, cfg)
             numeric_differences.extend({'case_id': cfg['case_id'], **row} for row in differences)
             paired = {key: receipt[key] for key in ('initial_state_sha256', 'training_pair_stream_sha256',
                 'anchor_indices', 'training_observations', 'TRAIN_exposure', 'batch_policy')}
@@ -187,25 +252,27 @@ def audit_results(plan_path: Path, outputs: Path, outdir: Path | None = None) ->
                 'complete_passes': receipt['TRAIN_exposure']['complete_passes_over_declared_pairs'],
                 'budget_end_selected': receipt['budget_diagnostics']['best_checkpoint_at_budget_end']})
         require(done['completed_arms'] == list(cases), 'worker arm inventory differs')
-        real = cases['real']['selected_SELECT_metrics']
+        focal = cases[protocol.focal_arm]['selected_SELECT_metrics']
+        focal_label, common_label = protocol.focal_arm.upper(), protocol.common_arm.upper()
         improvements = {arm: {metric: (np.asarray(receipt['selected_SELECT_metrics'][metric])
-                                      - np.asarray(real[metric])).tolist()
+                                      - np.asarray(focal[metric])).tolist()
                               for metric in ('brier', 'log_loss', 'dosage_mae')}
-                        for arm, receipt in cases.items() if arm != 'real'}
+                        for arm, receipt in cases.items() if arm != protocol.focal_arm}
         for name in ('Fminus_SELECT', 'Ffull_SELECT'):
-            improvements[name] = {metric: (np.asarray(cases['real'][name][metric])
-                                           - np.asarray(real[metric])).tolist()
+            improvements[name] = {metric: (np.asarray(cases[protocol.focal_arm][name][metric])
+                                           - np.asarray(focal[metric])).tolist()
                                   for metric in ('brier', 'log_loss', 'dosage_mae')}
         groups.append({'id': group['id'], 'family': cfg['model']['family'],
                        'learning_rate': cfg['learning_rate'], 'seed': cfg['seed'],
-                       'REAL_metrics': real, 'COMMON_metrics': cases['common']['selected_SELECT_metrics'],
+                       f'{focal_label}_metrics': focal,
+                       f'{common_label}_metrics': cases[protocol.common_arm]['selected_SELECT_metrics'],
                        'descriptive_strata': {arm: receipt['selected_SELECT_stratified_descriptive_only']
                                               for arm, receipt in cases.items()},
                        'sham_TRAIN_dose_changes': cases.get('sham', {}).get('sham_TRAIN_dose_changes'),
-                       'control_minus_REAL': improvements,
-                       'positive_improvement_means': 'lower_error_for_REAL',
+                       f'control_minus_{focal_label}': improvements,
+                       'positive_improvement_means': f'lower_error_for_{focal_label}',
                        'paired_exposure': paired_reference})
-    result = {'schema_version': 'm39-ordered-development-comparison-v1',
+    result = {'schema_version': protocol.comparison_schema,
               'stage': plan['stage'], 'plan_sha256': sha256(plan_path),
               'primary_group_hashes': primary_hashes, 'groups': groups, 'cases': rows,
               'metric_recomputation': {'policy': 'finite_float64_absolute_error_only_v1',
@@ -213,8 +280,8 @@ def audit_results(plan_path: Path, outputs: Path, outdir: Path | None = None) ->
                   'derived_float_fields': sorted(RECOMPUTED_FLOAT_FIELDS),
                   'metadata_axes_hashes_selection_and_discrete_values': 'exact',
                   'receipt_values_modified': False, 'nonzero_differences': numeric_differences},
-              'scope': {'exploratory_SELECT_reused_for_selection': plan['stage'] != 'technical_e2e',
-                        'technical_e2e_only': plan['stage'] == 'technical_e2e',
+              'scope': {'exploratory_SELECT_reused_for_selection': plan['stage'] != protocol.technical_stage,
+                        'technical_e2e_only': plan['stage'] == protocol.technical_stage,
                         'SCORE_opened': False, 'dense_LAI_or_border_F1': False,
                         'negative_family_conclusion_allowed': False,
                         'SHAM_exact_exchangeability_test': False}}
@@ -227,45 +294,68 @@ def audit_results(plan_path: Path, outputs: Path, outdir: Path | None = None) ->
     return result
 
 
-def selected_learning_rates(summary: dict) -> dict:
+def selected_learning_rates(summary: dict, *, protocol: SweepProtocol | None = None) -> dict:
     """Keep both families; choose LR by mean COMMON/REAL error, never rare improvement."""
-    require(summary['stage'] == 'exploratory_screen', 'LR selection requires screening outputs')
+    protocol = protocol or SweepProtocol()
+    require(summary['stage'] == protocol.screen_stage, 'LR selection requires screening outputs')
+    focal_label, common_label = protocol.focal_arm.upper(), protocol.common_arm.upper()
     chosen = {}
     for family in ('cnn', 'attention'):
         groups = [group for group in summary['groups'] if group['family'] == family]
         require(len(groups) >= 2 and len({group['learning_rate'] for group in groups}) == len(groups),
                 'incomplete or duplicated learning-rate comparison')
         def objective(group, metric):
-            return (group['REAL_metrics'][metric] + group['COMMON_metrics'][metric]) / 2
+            values = [group[f'{label}_metrics'][metric] for label in (focal_label, common_label)]
+            require(all(type(value) in (int, float) and math.isfinite(value) and value >= 0
+                        for value in values), 'invalid learning-rate selection metric')
+            return sum(values) / 2
+        require(all(type(group['learning_rate']) in (int, float)
+                    and math.isfinite(group['learning_rate']) and group['learning_rate'] > 0
+                    for group in groups), 'invalid learning rate')
         winner = min(groups, key=lambda group: (objective(group, 'brier'),
             objective(group, 'log_loss'), group['learning_rate']))
         chosen[family] = {'learning_rate': winner['learning_rate'], 'source_group': winner['id'],
-                          'selection_metric': 'minimum_mean_COMMON_REAL_SELECT_Brier_then_mean_log_loss_then_lower_LR',
-                          'mean_COMMON_REAL_brier': objective(winner, 'brier'),
+                          'selection_metric': f'minimum_mean_{common_label}_{focal_label}_SELECT_Brier_then_mean_log_loss_then_lower_LR',
+                          f'mean_{common_label}_{focal_label}_brier': objective(winner, 'brier'),
                           'does_not_establish_incremental_rare_value': True}
     return chosen
 
 
 def freeze_followup(base_path: Path, resources: dict, screen_plan: Path,
-                    screen_outputs: Path, seeds: list[int], outdir: Path) -> Path:
+                    screen_outputs: Path, seeds: list[int], outdir: Path, *,
+                    protocol: SweepProtocol | None = None) -> Path:
     """Audit screening primaries, retain both families and freeze fresh paired replicas."""
     require(len(seeds) >= 2 and len(set(seeds)) == len(seeds)
             and all(type(seed) is int and 0 <= seed < 2**63 - 100 for seed in seeds),
             'at least two distinct valid followup seeds are required')
-    summary = audit_results(screen_plan, screen_outputs)
+    options = {'protocol': protocol} if protocol is not None else {}
+    protocol = protocol or SweepProtocol()
+    summary = audit_results(screen_plan, screen_outputs, **options)
     require(not set(seeds) & {row['seed'] for row in summary['groups']},
             'followup seeds must differ from screening')
-    chosen = selected_learning_rates(summary)
+    chosen = selected_learning_rates(summary, **options)
+    if protocol.preserve_followup_geometry:
+        base = protocol.read_config(base_path)
+        plan = load_plan(screen_plan)
+        for group in plan['groups']:
+            screen = protocol.read_config(screen_plan.parent / group['configs'][0]['file'])
+            for key in ('train_manifest_sha256', 'select_manifest_sha256', 'development_sha256',
+                        'anchor_count', 'anchor_seed', 'batch_size', 'multichannel'):
+                require(base[key] == screen[key], f'followup changes paired geometry/input: {key}')
+            model = {key: value for key, value in base['model'].items() if key != 'family'}
+            previous = {key: value for key, value in screen['model'].items() if key != 'family'}
+            require(model == previous, 'followup changes encoder geometry/capacity')
     recipes = [dict(id=f'{family}-seed{seed}', family=family,
                     learning_rate=chosen[family]['learning_rate'], seed=seed, pair_seed=seed + 100)
                for family in ('cnn', 'attention') for seed in seeds]
-    path = freeze_plan(base_path, resources, recipes, 'controlled_followup', outdir)
+    path = freeze_plan(base_path, resources, recipes, protocol.followup_stage, outdir, **options)
     write_exclusive_json(outdir / 'screen-primary-audit.json', summary)
     write_exclusive_json(outdir / 'selection.receipt.json', {
         'selected_learning_rates': chosen, 'screen_plan_sha256': sha256(screen_plan),
         'screen_primary_audit_sha256': sha256(outdir / 'screen-primary-audit.json'),
         'followup_plan_sha256': sha256(path), 'SCORE_opened': False,
-        'selection_generalizes_across_radii': 'unproven_fixed_budget_transfer',
+        'selection_generalizes_across_radii': ('not_claimed_same_geometry_required'
+            if protocol.preserve_followup_geometry else 'unproven_fixed_budget_transfer'),
         'no_family_eliminated': True, 'followup_is_confirmatory': False})
     return path
 

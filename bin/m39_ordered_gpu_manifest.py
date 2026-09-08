@@ -12,7 +12,19 @@ SCHEMA = 'm39-ordered-gpu-training-plan-v1'
 SCOPE = 'exploratory_chr22_R0_development_anchors_only'
 ARMS = ('common', 'pooled', 'real', 'sham')
 STAGE_ARMS = {'exploratory_screen': ('common', 'real'), 'controlled_followup': ARMS,
-              'technical_e2e': ARMS}
+              'technical_e2e': ARMS,
+              'multichannel_screen': ('none', 'both'),
+              'multichannel_followup': ('none', 'summary', 'detail', 'both', 'sham'),
+              'multichannel_technical': ('none', 'summary', 'detail', 'both', 'sham')}
+MULTICHANNEL_CONFIG_SCHEMA = 'm39-ordered-multichannel-training-v1'
+
+
+def training_entrypoint(stage: str) -> str:
+    """Bind the trainer to the declared experiment, never to a filename guess."""
+    if stage not in STAGE_ARMS:
+        raise ValueError('unknown training stage')
+    return ('m39_ordered_multichannel_training.py' if stage.startswith('multichannel_')
+            else 'm39_ordered_training.py')
 DEVELOPMENT_FIELDS = frozenset(('alt', 'anchor_indices', 'baseline', 'chrom', 'coords',
     'full_baseline', 'locus_id', 'pos', 'ref', 'sample_key_sha256', 'select_indices',
     'source_indices', 'state_names', 'train_indices', 'truth_state'))
@@ -64,7 +76,9 @@ def load_plan(path: Path) -> dict:
             require(config_path.is_file() and not config_path.is_symlink()
                     and sha256(config_path) == spec['sha256'], 'config hash differs')
             cfg = json.loads(config_path.read_text())
-            require(cfg.get('schema_version') == 'm39-ordered-anchor-training-v1'
+            expected_schema = (MULTICHANNEL_CONFIG_SCHEMA if plan['stage'].startswith('multichannel_')
+                               else 'm39-ordered-anchor-training-v1')
+            require(cfg.get('schema_version') == expected_schema
                     and cfg.get('scope') == SCOPE and cfg.get('device') == 'cuda:0'
                     and cfg.get('arm') == arm and cfg.get('paired_budget_id') == group['id'],
                     'config scope/device/paired arm differs')
@@ -74,8 +88,9 @@ def load_plan(path: Path) -> dict:
                     'config input binding differs')
             require(type(cfg.get('max_runtime_seconds')) is int
                     and 0 < cfg['max_runtime_seconds'] < resources['task_seconds'], 'invalid arm timeout')
-            if plan['stage'] == 'technical_e2e':
-                require(type(cfg.get('steps')) is int and 1 <= cfg['steps'] <= 8
+            if plan['stage'] in ('technical_e2e', 'multichannel_technical'):
+                technical_steps = 128 if plan['stage'] == 'multichannel_technical' else 8
+                require(type(cfg.get('steps')) is int and 1 <= cfg['steps'] <= technical_steps
                         and cfg.get('evaluate_initial') is True
                         and cfg.get('evaluate_every_steps') == cfg['steps'],
                         'technical end-to-end check requires a tiny complete run with both evaluations')

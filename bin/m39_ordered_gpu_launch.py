@@ -21,7 +21,9 @@ RUNTIME = ('m39_ordered_training.py', 'm39_ordered_training_data.py', 'm39_order
     'm39_ordered_batches.py', 'm39_ordered_context.py', 'm39_profile_device.py',
     'm39_anchor_screen.py', 'm39_carrier_models.py', 'm33_safe_bridge_core.py',
     'm34_prepare_panel_factors.py', 'm34_generate_mosaics.py', 'm39_carrier_context.py',
-    'm39_ordered_gpu_manifest.py', 'm39_ordered_gpu_worker.py', 'm39_gpu_serial_profile.py')
+    'm39_ordered_gpu_manifest.py', 'm39_ordered_gpu_worker.py', 'm39_gpu_serial_profile.py',
+    'm39_ordered_multichannel.py', 'm39_ordered_multichannel_data.py',
+    'm39_ordered_multichannel_training.py')
 SOURCES = (CONFIG, WORKFLOW, 'modules/39_ORDERED_GPU_TRAINING.nf',
     'bin/m39_ordered_gpu_launch.py', 'bin/m39_gpu_launch.py',
     'bin/m39_launch_ordered_training.py', 'bin/m39_launch_ordered_throughput.py',

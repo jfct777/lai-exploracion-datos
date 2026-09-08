@@ -12,8 +12,13 @@ def requireCompletedGroup(resultDir, plan, sourceCommit, planHash, sealHash, stu
         return resultDir
     if (receipt.status != 'COMPLETED_DECLARED_PAIRED_ARMS_NEEDS_SCIENTIFIC_POST' || receipt.exit_code != 0)
         error "Scientific group ${groupId} failed (${receipt.status}); preserved work: ${resultDir}"
-    def expectedArms = plan.stage == 'exploratory_screen' ? ['common', 'real'] :
-        plan.stage in ['controlled_followup', 'technical_e2e'] ? ['common', 'pooled', 'real', 'sham'] : []
+    def stageArms = [exploratory_screen: ['common', 'real'],
+        controlled_followup: ['common', 'pooled', 'real', 'sham'],
+        technical_e2e: ['common', 'pooled', 'real', 'sham'],
+        multichannel_screen: ['none', 'both'],
+        multichannel_followup: ['none', 'summary', 'detail', 'both', 'sham'],
+        multichannel_technical: ['none', 'summary', 'detail', 'both', 'sham']]
+    def expectedArms = stageArms[plan.stage] ?: []
     if (receipt.schema_version != 'm39-ordered-gpu-group-completion-v1' ||
         receipt.stage != plan.stage || receipt.source_commit != sourceCommit ||
         receipt.plan_sha256 != planHash || receipt.source_seal_sha256 != sealHash ||

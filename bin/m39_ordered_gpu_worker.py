@@ -12,7 +12,7 @@ import sys
 import time
 
 from m39_gpu_serial_profile import sha256, stop_group, verify_seal
-from m39_ordered_gpu_manifest import load_plan, require
+from m39_ordered_gpu_manifest import load_plan, require, training_entrypoint
 
 
 def run(args: argparse.Namespace) -> int:
@@ -42,7 +42,7 @@ def run(args: argparse.Namespace) -> int:
             remaining = plan['resources']['task_seconds'] - (time.monotonic() - started)
             require(remaining > 0, 'group wall-time budget exhausted')
             output = args.outdir / cfg['arm']
-            command = [sys.executable, str(Path(__file__).with_name('m39_ordered_training.py'))]
+            command = [sys.executable, str(Path(__file__).with_name(training_entrypoint(plan['stage'])))]
             for key, value in (('train-store', args.train_store), ('select-store', args.select_store),
                                ('development', args.development), ('config', config_path), ('outdir', output)):
                 command.extend(('--' + key, str(value)))

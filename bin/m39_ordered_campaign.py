@@ -25,7 +25,12 @@ from m39_ordered_gpu_launch import SOURCES, prepare
 from m39_ordered_gpu_manifest import load_plan, require
 
 SCHEMA = 'm39-ordered-gpu-campaign-v1'
-CAMPAIGN_SOURCES = (*SOURCES, 'bin/m39_ordered_campaign.py', 'bin/m39_ordered_training_sweep.py')
+CAMPAIGN_SOURCES = (*SOURCES, 'bin/m39_ordered_campaign.py', 'bin/m39_ordered_training_sweep.py',
+                    'bin/m39_ordered_multichannel_sweep.py')
+
+
+def multichannel_campaign(cfg: dict) -> bool:
+    return cfg.get('schema_version') == 'm39-multichannel-gpu-campaign-v1'
 
 
 def private_path(value: str, repository: Path, *, exists: bool = True) -> Path:
@@ -43,7 +48,9 @@ def load_campaign(path: Path) -> dict:
     required = {'schema_version', 'repository', 'run_dir', 'source_commit', 'source_sha256',
                 'input_sha256', 'native_auth_dir', 'service_account', 'gpu_image', 'cpu_image',
                 'wall_timeout_seconds', 'costs', 'screen', 'followup'}
-    require(set(cfg) == required and cfg['schema_version'] == SCHEMA, 'campaign schema differs')
+    require(set(cfg) == required and cfg['schema_version'] in
+            (SCHEMA, 'm39-multichannel-gpu-campaign-v1'), 'campaign schema differs')
+    multichannel = multichannel_campaign(cfg)
     repo = Path(cfg['repository']).resolve(strict=True)
     private_path(str(path), repo)
     run = private_path(cfg['run_dir'], repo)
@@ -74,17 +81,20 @@ def load_campaign(path: Path) -> dict:
         require(sha256(private_path(value, repo)) == digest, 'frozen campaign input changed')
     require(re.fullmatch(r'us-central1-docker\.pkg\.dev/uspbr-242713/dnabr-lai/[a-z0-9-]+@sha256:[a-f0-9]{64}',
                          cfg['cpu_image']) is not None, 'CPU image must be a project-owned digest')
-    require(type(cfg['wall_timeout_seconds']) is int and 60 <= cfg['wall_timeout_seconds'] <= 39600,
-            'campaign deadline must not exceed eleven hours')
+    require(type(cfg['wall_timeout_seconds']) is int
+            and 60 <= cfg['wall_timeout_seconds'] <= (46800 if multichannel else 39600),
+            'campaign deadline exceeds its declared experiment ceiling')
     costs = cfg['costs']
     require(set(costs) == {'max_usd', 'worker_hourly_usd', 'worker_count_ceiling', 'reserve_usd',
                           'screen_forecast_usd', 'followup_forecast_usd'},
             'cost fields differ')
     require(all(type(costs[key]) in (int, float) and costs[key] > 0 for key in costs)
-            and costs['max_usd'] <= 20 and costs['worker_count_ceiling'] == 2, 'invalid campaign cost ceilings')
+            and costs['max_usd'] <= (25 if multichannel else 20)
+            and costs['worker_count_ceiling'] == 2, 'invalid campaign cost ceilings')
     maximum = cfg['wall_timeout_seconds'] / 3600 * costs['worker_hourly_usd'] * costs['worker_count_ceiling']
     require(maximum + costs['reserve_usd'] <= costs['max_usd'], 'wall-time ceiling exceeds frozen cost envelope')
-    require(load_plan(Path(cfg['screen']['plan']))['stage'] == 'exploratory_screen', 'screen plan stage differs')
+    expected = 'multichannel_screen' if multichannel else 'exploratory_screen'
+    require(load_plan(Path(cfg['screen']['plan']))['stage'] == expected, 'screen plan stage differs')
     native_auth(Path(cfg['native_auth_dir']), cfg['service_account'], repo)
     return cfg
 
@@ -208,11 +218,14 @@ class Campaign:
         command = ['docker', 'run', '--rm', '--cidfile', str(cidfile), '--network', 'none',
             '--cpus', '2', '--memory', '4g', '--user', f'{os.getuid()}:{os.getgid()}',
             '--env', 'PYTHONDONTWRITEBYTECODE=1', '--env', 'PYTHONPATH=/code',
+            '--env', 'TORCHINDUCTOR_CACHE_DIR=/tmp/m39-torch-cache',
             '--env', 'OMP_NUM_THREADS=2', '--env', 'OPENBLAS_NUM_THREADS=2']
         for target, source in {'/code': self.repo / 'bin', **mounts}.items():
             command.extend(('--mount', f'type=bind,src={source},dst={target},readonly'))
+        sweep = ('m39_ordered_multichannel_sweep.py' if multichannel_campaign(self.cfg)
+                 else 'm39_ordered_training_sweep.py')
         command.extend(('--mount', f'type=bind,src={root},dst=/output', self.cfg['cpu_image'],
-                        'python3', '/code/m39_ordered_training_sweep.py', *arguments,
+                        'python3', '/code/' + sweep, *arguments,
                         '--outdir', '/output/result'))
         self.execute(command, root / 'controller.log', timeout=900, cidfile=cidfile)
         return root / 'result'
@@ -272,7 +285,8 @@ class Campaign:
                 {'/base/config.json': Path(followup['base_config']),
                  '/resources/resources.json': Path(followup['resources_file']),
                  '/plan': plan_a.parent, '/primary': outputs_a}) / 'plan.json'
-            require(load_plan(plan_b)['stage'] == 'controlled_followup', 'followup plan stage differs')
+            expected = 'multichannel_followup' if multichannel_campaign(self.cfg) else 'controlled_followup'
+            require(load_plan(plan_b)['stage'] == expected, 'followup plan stage differs')
             # Audit/preparation time is charged conservatively before creating Stage B.
             budget = self.budget_allows_followup()
             require(budget['allowed'], 'followup estimate crossed cost ceiling during preparation')
