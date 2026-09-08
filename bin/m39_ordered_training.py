@@ -40,6 +40,12 @@ SOURCE_FILES = ("m39_ordered_training.py", "m39_ordered_training_data.py", "m39_
 
 def load_config(path: Path) -> dict:
     cfg = json.loads(path.read_text())
+    return validate_config(cfg)
+
+
+def validate_config(cfg: dict, *, schema: str = SCHEMA, arms=ARMS,
+                    extra_required=frozenset()) -> dict:
+    """Shared run contract; alternate representations declare their own schema."""
     required = {"schema_version", "case_id", "scope", "arm", "model", "seed", "pair_seed",
                 "anchor_seed", "sham_seed", "anchor_count", "steps", "evaluate_every_steps",
                 "batch_size", "learning_rate", "weight_decay", "gradient_clip_norm",
@@ -47,13 +53,14 @@ def load_config(path: Path) -> dict:
                 "max_runtime_seconds", "train_manifest_sha256", "select_manifest_sha256",
                 "development_sha256", "selection_metric", "paired_budget_id"}
     optional = {"train_probe_people", "evaluate_initial"}
-    require(required <= set(cfg) <= required | optional and cfg["schema_version"] == SCHEMA,
+    required |= set(extra_required)
+    require(required <= set(cfg) <= required | optional and cfg["schema_version"] == schema,
             "training config fields differ")
     require(type(cfg.get("train_probe_people", 0)) is int and cfg.get("train_probe_people", 0) >= 0,
             "invalid TRAIN probe size")
     require(type(cfg.get("evaluate_initial", False)) is bool, "invalid initial evaluation flag")
     require(cfg["scope"] == "exploratory_chr22_R0_development_anchors_only"
-            and cfg["arm"] in ARMS and cfg["selection_metric"] == "brier", "training scope/arm differs")
+            and cfg["arm"] in arms and cfg["selection_metric"] == "brier", "training scope/arm differs")
     for key in ("case_id", "paired_budget_id"):
         value = cfg[key]
         require(isinstance(value, str) and value and len(value) <= 160
@@ -94,7 +101,43 @@ def _batch(store, pairs, cfg, runtime, permutation):
     return runtime.transfer(batch)
 
 
-def predict(model, store, anchors, cfg, runtime, permutation, *, started, people=None):
+class OrderedTrainingBackend:
+    """Representation hooks; the historical optimizer, schedule and math stay shared."""
+
+    schema = SCHEMA
+    source_files = SOURCE_FILES
+    persist_intermediate_best = False
+
+    def load_config(self, path):
+        return load_config(path)
+
+    def prepare(self, train, select, data, cfg):
+        pass
+
+    def make_model(self, cfg):
+        return OrderedLAIModel(OrderedModelConfig(**cfg["model"]))
+
+    def make_batch(self, store, pairs, cfg, runtime, permutation):
+        return _batch(store, pairs, cfg, runtime, permutation)
+
+    def probabilities(self, model, batch, cfg):
+        arm = "real" if cfg["arm"] == "sham" else cfg["arm"]
+        logits = model(batch, arm=arm, chunked=True)
+        require(bool(torch.isfinite(logits).all()), "nonfinite evaluation logits")
+        return logits.softmax(-1)
+
+    def loss(self, model, batch, truth, cfg):
+        arm = "real" if cfg["arm"] == "sham" else cfg["arm"]
+        return F.cross_entropy(model(batch, arm=arm, chunked=True), truth)
+
+    def diagnostics(self, model, cfg):
+        return {}
+
+    def checkpoint_eligible(self, step):
+        return True
+
+
+def predict(model, store, anchors, cfg, runtime, permutation, *, started, people=None, backend=None):
     """Evaluate declared anchors; an explicit TRAIN probe may subset people, SELECT never does."""
     people = np.arange(store.shape[0], dtype=np.int64) if people is None else np.asarray(people)
     require(people.ndim == 1 and people.dtype.kind in "iu" and len(people) > 0
@@ -103,17 +146,15 @@ def predict(model, store, anchors, cfg, runtime, permutation, *, started, people
             "invalid evaluation people")
     probabilities = np.empty((len(people), len(anchors), 6), dtype=np.float32)
     model.eval()
-    arm = "real" if cfg["arm"] == "sham" else cfg["arm"]
+    backend = backend or OrderedTrainingBackend()
     # Group by anchor to avoid padding unrelated window lengths at inference.
     with torch.inference_mode():
         for column, anchor in enumerate(anchors):
             for begin in range(0, len(people), cfg["batch_size"]):
                 queries = people[begin:begin + cfg["batch_size"]]
                 pairs = [(int(query), int(anchor)) for query in queries]
-                batch = _batch(store, pairs, cfg, runtime, permutation)
-                logits = model(batch, arm=arm, chunked=True)
-                require(bool(torch.isfinite(logits).all()), "nonfinite evaluation logits")
-                probabilities[begin:begin + len(pairs), column] = logits.softmax(-1).cpu().numpy()
+                batch = backend.make_batch(store, pairs, cfg, runtime, permutation)
+                probabilities[begin:begin + len(pairs), column] = backend.probabilities(model, batch, cfg).cpu().numpy()
                 _limits(cfg, runtime, started)
     return probabilities
 
@@ -135,15 +176,17 @@ def exposure_metrics(visits: np.ndarray) -> dict:
 
 
 def run_case(train_path: Path, select_path: Path, development_path: Path,
-             config_path: Path, outdir: Path) -> dict:
+             config_path: Path, outdir: Path, *, backend=None) -> dict:
     started = time.monotonic()
     require(not outdir.exists() and not outdir.is_symlink(), "training output already exists")
-    cfg = load_config(config_path)
+    backend = backend or OrderedTrainingBackend()
+    cfg = backend.load_config(config_path)
     config_hash = sha256(config_path)
-    code_hashes = {name: sha256(Path(__file__).with_name(name)) for name in SOURCE_FILES}
+    code_hashes = {name: sha256(Path(__file__).with_name(name)) for name in backend.source_files}
     train = OrderedContextStore.open(train_path, expected_manifest_sha256=cfg["train_manifest_sha256"])
     select = OrderedContextStore.open(select_path, expected_manifest_sha256=cfg["select_manifest_sha256"])
     data = bind_development(development_path, cfg["development_sha256"], train, select)
+    backend.prepare(train, select, data, cfg)
     anchors = fixed_anchor_subset(cfg["anchor_count"], train.shape[1], cfg["anchor_seed"])
     probe_count = cfg.get("train_probe_people", 0)
     require(probe_count <= train.shape[0], "TRAIN probe exceeds role size")
@@ -160,7 +203,7 @@ def run_case(train_path: Path, select_path: Path, development_path: Path,
     runtime = DeviceRuntime(cfg["device"], cfg["max_device_bytes"])
     device_info = runtime.configure()
     # CPU initialization makes paired arms start from identical parameter bytes.
-    model = OrderedLAIModel(OrderedModelConfig(**cfg["model"]))
+    model = backend.make_model(cfg)
     initial = hashlib.sha256()
     for name, value in model.state_dict().items():
         initial.update(name.encode())
@@ -173,6 +216,9 @@ def run_case(train_path: Path, select_path: Path, development_path: Path,
               "train_manifest_sha256": cfg["train_manifest_sha256"],
               "select_manifest_sha256": cfg["select_manifest_sha256"],
               "development_sha256": cfg["development_sha256"]}
+    model_diagnostics = backend.diagnostics(model, cfg)
+    if model_diagnostics:
+        source["representation"] = model_diagnostics
     write_exclusive_json(outdir / "started.json", {"config": cfg, "sources": source,
                          "anchor_indices": anchors.tolist(), "initial_state_sha256": initial.hexdigest()})
     permutation_hash = None
@@ -197,14 +243,14 @@ def run_case(train_path: Path, select_path: Path, development_path: Path,
     def evaluate_checkpoint(step, online_loss, gradient_norm):
         nonlocal eval_seconds, select_seconds, probe_seconds, best_key, best
         tick = runtime.tick()
-        p = predict(model, select, anchors, cfg, runtime, permutation, started=started)
+        p = predict(model, select, anchors, cfg, runtime, permutation, started=started, backend=backend)
         evaluated = metrics(p, selected_labels)
         select_seconds += runtime.elapsed(tick)
         probe_metrics = None
         if probe_people is not None:
             tick = runtime.tick()
             probe = predict(model, train, anchors, cfg, runtime, permutation,
-                            started=started, people=probe_people)
+                            started=started, people=probe_people, backend=backend)
             probe_metrics = metrics(probe, labels[probe_people][:, anchors])
             probe_seconds += runtime.elapsed(tick)
         eval_seconds = select_seconds + probe_seconds
@@ -217,30 +263,40 @@ def run_case(train_path: Path, select_path: Path, development_path: Path,
                "evaluation_seconds_cumulative": eval_seconds,
                "SELECT_seconds_cumulative": select_seconds,
                "TRAIN_probe_seconds_cumulative": probe_seconds}
+        if backend.persist_intermediate_best:
+            row["checkpoint_eligible"] = backend.checkpoint_eligible(step)
         curve.append(row)
         write_exclusive_json(outdir / f"curve-step-{step:07d}.json", row)
         key = (evaluated["brier"], evaluated["log_loss"], step)
-        if best_key is None or key < best_key:
+        if backend.checkpoint_eligible(step) and (best_key is None or key < best_key):
             best_key = key
             best = {"state_dict": {k: v.detach().cpu().clone() for k, v in model.state_dict().items()},
                     "step": step, "probabilities": p.copy(), "metrics": evaluated}
+            if backend.persist_intermediate_best:
+                # Immutable recovery points survive a later budget failure; they
+                # are not a completion receipt or a license to compare unequal runs.
+                with (outdir / f"checkpoint-step-{step:07d}.pt").open("xb") as stream:
+                    torch.save({"state_dict": best["state_dict"], "config": cfg,
+                                "selected_step": step, "sources": source,
+                                "anchor_indices": anchors.tolist()}, stream)
+                write_deterministic_npz(outdir / f"select-step-{step:07d}.npz",
+                                        {"probabilities": p, "anchor_indices": anchors,
+                                         "sample_key_sha256": data["select"]["sample_key_sha256"]})
         print(json.dumps({"case": cfg["case_id"], "arm": cfg["arm"], "step": step,
                           "SELECT_brier": evaluated["brier"],
                           "complete_passes": int(visits.min())}), flush=True)
 
     if cfg.get("evaluate_initial", False):
         evaluate_checkpoint(0, None, None)
-    arm = "real" if cfg["arm"] == "sham" else cfg["arm"]
     generator = paired_batches(train.shape[0], anchors, cfg["batch_size"], cfg["steps"], cfg["pair_seed"])
     for step, pairs in enumerate(generator, 1):
         model.train()
         tick = runtime.tick()
-        batch = _batch(train, pairs, cfg, runtime, permutation)
+        batch = backend.make_batch(train, pairs, cfg, runtime, permutation)
         truth = torch.as_tensor([int(labels[q, j]) for q, j in pairs], dtype=torch.long,
                                 device=runtime.device)
         optimizer.zero_grad(set_to_none=True)
-        logits = model(batch, arm=arm, chunked=True)
-        loss = F.cross_entropy(logits, truth)
+        loss = backend.loss(model, batch, truth, cfg)
         require(bool(torch.isfinite(loss)), "nonfinite training loss")
         loss.backward()
         norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["gradient_clip_norm"], error_if_nonfinite=True)
@@ -282,7 +338,7 @@ def run_case(train_path: Path, select_path: Path, development_path: Path,
     with np.load(predictions, allow_pickle=False) as z:
         require(metrics(z["probabilities"], z["truth_state"]) == best["metrics"],
                 "saved prediction metrics differ")
-    receipt = {"schema_version": SCHEMA, "decision": "COMPLETED_EXPLORATORY_DEVELOPMENT_CASE",
+    receipt = {"schema_version": backend.schema, "decision": "COMPLETED_EXPLORATORY_DEVELOPMENT_CASE",
                "config": cfg, "sources": source, "initial_state_sha256": initial.hexdigest(),
                "training_pair_stream_sha256": pair_digest.hexdigest(), "selected_step": best["step"],
                "batch_policy": "interleave_shuffled_anchors_one_same_anchor_minibatch_per_round_remainders_retained",
