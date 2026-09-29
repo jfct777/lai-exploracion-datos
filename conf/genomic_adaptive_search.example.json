@@ -1,0 +1,55 @@
+{
+  "schema": "genomic-adaptive-search/1",
+  "campaign_id": "REPLACE_WITH_FROZEN_CAMPAIGN_ID",
+  "scope": "DEVELOPMENT",
+  "max_recipes": 24,
+  "startup_trials": 12,
+  "sampler_seed": 20260928,
+  "training_seeds": [],
+  "pruning": "none",
+  "search_space": {
+    "radius_cm": [0.05, 0.2, 1.0],
+    "width": [32, 64],
+    "learning_rate": {"low": 0.0001, "high": 0.001, "log": true}
+  },
+  "provenance": {
+    "dataset_sha256": "REQUIRED",
+    "split_manifest_sha256": "REQUIRED",
+    "feature_contract_sha256": "REQUIRED",
+    "trainer_code_sha256": "REQUIRED",
+    "container_digest": "sha256:REQUIRED",
+    "development_only_audit_sha256": "REQUIRED"
+  },
+  "objectives": {
+    "structure": {
+      "families": ["structure_family_A", "structure_family_B"],
+      "primary_metric": "macro_mse",
+      "secondary_metrics": ["macro_mae"],
+      "evaluation_unit": "component_macro",
+      "fixed_config": {"network_spec": "REQUIRED", "optimizer": "REQUIRED", "batch_size": "REQUIRED"},
+      "checkpoint_step": null,
+      "arm_input_sha256": {"NONE": "REQUIRED", "RARE": "REQUIRED"},
+      "range_rationale": "Proposed exploratory range: radii 0.05/0.2/1 cM and widths 32/64; not an optimum. Freeze actual context coverage, support and a material change from the earlier incomplete-context CORA study before using this plan.",
+      "folds": [
+        {"id": "dev0", "fit_groups_sha256": "REQUIRED", "development_groups_sha256": "REQUIRED", "query_sha256": "REQUIRED", "truth_sha256": "REQUIRED", "n_evaluated": null},
+        {"id": "dev1", "fit_groups_sha256": "REQUIRED", "development_groups_sha256": "REQUIRED", "query_sha256": "REQUIRED", "truth_sha256": "REQUIRED", "n_evaluated": null},
+        {"id": "dev2", "fit_groups_sha256": "REQUIRED", "development_groups_sha256": "REQUIRED", "query_sha256": "REQUIRED", "truth_sha256": "REQUIRED", "n_evaluated": null}
+      ]
+    },
+    "lai": {
+      "families": ["lai_family_A", "lai_family_B"],
+      "primary_metric": "one_minus_boundary_f1_0p2cm",
+      "secondary_metrics": ["log_loss", "brier", "mae_AFR", "mae_EUR", "mae_NAM"],
+      "evaluation_unit": "donor_macro",
+      "fixed_config": {"network_spec": "REQUIRED", "optimizer": "REQUIRED", "batch_size": "REQUIRED"},
+      "checkpoint_step": null,
+      "arm_input_sha256": {"NONE": "REQUIRED", "RARE": "REQUIRED"},
+      "range_rationale": "Proposed exploratory range, not a validated optimum: distinguish context radius from prediction query grid and scoring tolerance; authenticate DNABR rare alleles and parental support, equal references, and donor-disjoint development before use.",
+      "folds": [
+        {"id": "dev0", "fit_groups_sha256": "REQUIRED", "development_groups_sha256": "REQUIRED", "query_sha256": "REQUIRED", "truth_sha256": "REQUIRED", "n_evaluated": null},
+        {"id": "dev1", "fit_groups_sha256": "REQUIRED", "development_groups_sha256": "REQUIRED", "query_sha256": "REQUIRED", "truth_sha256": "REQUIRED", "n_evaluated": null},
+        {"id": "dev2", "fit_groups_sha256": "REQUIRED", "development_groups_sha256": "REQUIRED", "query_sha256": "REQUIRED", "truth_sha256": "REQUIRED", "n_evaluated": null}
+      ]
+    }
+  }
+}

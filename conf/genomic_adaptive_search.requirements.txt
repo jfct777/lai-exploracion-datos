@@ -1,0 +1,2 @@
+# Controller-only environment; training dependencies are a separate contract.
+optuna==4.9.0

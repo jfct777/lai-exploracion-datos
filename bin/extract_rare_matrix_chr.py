@@ -54,6 +54,9 @@ def _emitted_sample_order(vcf, samples_file):
                           capture_output=True, text=True)
     if proc.returncode != 0:
         _fail(f"bcftools view -h -S fallo al resolver el orden de muestras: {proc.stderr.strip()}")
+    if any(line.startswith("##dnabr_rare_contract=") for line in proc.stdout.splitlines()):
+        _fail("M23 histórico cuenta ALT; no admite el nuevo contrato M02.1 minor_v1. "
+              "Se requiere un extractor que consuma explícitamente RARE_ALLELE/RD.")
     header = [ln for ln in proc.stdout.splitlines() if ln.startswith("#CHROM")]
     if not header:
         _fail("no se encontro la linea #CHROM en el header subseteado")

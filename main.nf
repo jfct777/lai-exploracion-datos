@@ -6,6 +6,7 @@ include { SMOKE_TEST } from './modules/00_smoke_test'
 include { PREPROCESS_NORM_LEFTALIGN } from './modules/01_preprocess_norm_leftalign'
 include { PREPROCESS_FILTER_SNV_BIALLELIC_PASS } from './modules/02_preprocess_filter_snv_biallelic_pass'
 include { LAI_RARE_BIALELIC_ONLY } from './modules/lai_rare_bialelic_only'
+include { VALIDATED_RARE_INPUT; discoverLaiRareVcfs; rareUnsupportedConsumers; validateRareGenotypeOptions } from './modules/02_1_VALIDATE_RARE_CONSUMERS'
 include { QC_BCFTOOLS_STATS } from './modules/03_qc_bcftools_stats'
 include { QC_PLINK_MAKE_PGEN } from './modules/04_qc_plink_make_pgen'
 include { QC_PLINK_MISSING_HET } from './modules/05_qc_plink_missing_het'
@@ -21,6 +22,8 @@ include { ANALYZE_INDIVIDUAL_SNP_DISTANCE_MODES } from './modules/13_INDIVIDUAL_
 include { AGGREGATE_INDIVIDUAL_SNP_DISTANCE_MODES } from './modules/13_INDIVIDUAL_SNP_DISTANCE_MODES'
 include { ANALYZE_RARE_ALLELE_SHARING } from './modules/14_RARE_ALLELE_SHARING_PAINTER'
 include { AGGREGATE_RARE_ALLELE_SHARING } from './modules/14_RARE_ALLELE_SHARING_PAINTER'
+include { RENDER_RARE_SEGMENTS; MEASURE_RARE_SEGMENT_SENSITIVITY; PLOT_RARE_SEGMENT_SENSITIVITY; SUMMARIZE_RARE_SEGMENT_KINSHIP } from './modules/14_SEGMENT_FOLLOWUP'
+include { PRESENT_RARE_SEGMENT_CANDIDATE } from './modules/14_SEGMENT_PRESENTATION'
 include { IBD_COMMUNITY_ENHANCED; IBD_ENHANCED_REPLOT } from './modules/16_5_IBD_COMMUNITY_ENHANCED'
 include { ANALYZE_RARE_IN_LAI } from './modules/17_RARE_VARIANTS_IN_LAI_TRACTS'
 include { AGGREGATE_RARE_IN_LAI } from './modules/17_RARE_VARIANTS_IN_LAI_TRACTS'
@@ -35,8 +38,145 @@ include {
     WRITE_ALLELE_ORIENTATION_AUDIT_RUN_PROVENANCE
 } from './modules/24_RARE_ALLELE_ORIENTATION_AUDIT'
 include { RARE_ALLELE_ORIENTATION_INVENTORY } from './subworkflows/24_RARE_ALLELE_ORIENTATION_INVENTORY'
+include { M165_CHR22_SWEEP as RUN_M165_CHR22_PLAN } from './subworkflows/16_5_CHR22_SWEEP'
+include { RENDER_M165_SWEEP_FIGURES } from './modules/16_5_SWEEP_FIGURES'
+include { RENDER_M165_SPECTRAL_FIGURES } from './modules/16_5_SPECTRAL_FIGURES'
+include { SUMMARIZE_M165_METADATA; SUMMARIZE_M165_GRAPH_KINSHIP } from './modules/16_5_METADATA_DIAGNOSTICS'
+include { PRESENT_M165_METADATA } from './modules/16_5_METADATA_PRESENTATION'
 
 // ---------------------------------------------------------------------------
+// Replay saved M14 segments without triggering M01–M02.1 or the old plot detector.
+def followupInput(value, String name) {
+    if (!value) throw new IllegalArgumentException("Set --${name}")
+    return file(value, checkIfExists: true)
+}
+
+// Compare saved M14 graphs without reopening VCFs or changing their segments.
+workflow M165_CHR22_SWEEP {
+    if (!params.m165_chr22_sweep_results_dir)
+        error 'Set m165_chr22_sweep_results_dir to a new output directory'
+    def settingsKeys = ['configurations', 'expected_samples', 'resolutions',
+                        'n_seeds', 'seed', 'min_community_size', 'consensus_resolution']
+    def settings = settingsKeys.collectEntries { key ->
+        [(key): params["m165_chr22_sweep_${key}"]]
+    }
+    RUN_M165_CHR22_PLAN(
+        followupInput(params.m165_chr22_sweep_pair_summary, 'm165_chr22_sweep_pair_summary'),
+        followupInput(params.m165_chr22_sweep_configuration_summary, 'm165_chr22_sweep_configuration_summary'),
+        followupInput(params.m165_chr22_sweep_sample_ids, 'm165_chr22_sweep_sample_ids'),
+        settings)
+}
+
+// Replot the complete saved sweep; never enter M14 detection or M16.5 fitting.
+workflow M165_SWEEP_FIGURES {
+    if (!params.m165_figures_output_dir)
+        error 'Set --m165_figures_output_dir to a new output directory'
+    def results = followupInput(params.m165_figures_results_dir, 'm165_figures_results_dir')
+    if (!results.isDirectory()) error '--m165_figures_results_dir must be a directory'
+    if (file(params.m165_figures_output_dir).exists())
+        error '--m165_figures_output_dir must not already exist'
+    RENDER_M165_SWEEP_FIGURES(results,
+        file("${projectDir}/bin/m165_sweep_figures.py", checkIfExists: true))
+}
+
+// Same saved partitions, only the original spectral/UMAP presentation path.
+workflow M165_SPECTRAL_FIGURES {
+    if (!params.m165_spectral_output_dir)
+        error 'Set --m165_spectral_output_dir to a new output directory'
+    if (file(params.m165_spectral_output_dir).exists())
+        error '--m165_spectral_output_dir must not already exist'
+    def results = followupInput(params.m165_spectral_results_dir, 'm165_spectral_results_dir')
+    if (!results.isDirectory()) error '--m165_spectral_results_dir must be a directory'
+    def keys = ['prefix', 'dpi', 'seed', 'n_spectral', 'n_neighbors', 'min_dist',
+                'resolution', 'resolutions', 'combined_pdf', 'config_ids', 'expected_samples', 'width_inches', 'height_inches',
+                'inline_metadata_legend', 'legend_wrap_chars']
+    def settings = keys.collectEntries { key -> [(key): params["m165_spectral_${key}"]] }
+    def metadata = params.m165_spectral_metadata_file ?
+        followupInput(params.m165_spectral_metadata_file, 'm165_spectral_metadata_file') : []
+    def coordinates = params.m165_spectral_coordinates_source_dir ?
+        followupInput(params.m165_spectral_coordinates_source_dir, 'm165_spectral_coordinates_source_dir') : []
+    if (coordinates && !params.m165_spectral_coordinates_source_manifest_sha256)
+        error 'Saved coordinates require their authenticated manifest SHA256'
+    if (!coordinates && params.m165_spectral_coordinates_source_manifest_sha256)
+        error 'Coordinate manifest SHA256 requires a saved-coordinate directory'
+    def scripts = ['m165_spectral_figures.py', 'm165_sweep_figures.py', 'ibd_community_enhanced.py']
+        .collect { file("${projectDir}/bin/${it}", checkIfExists: true) }
+    RENDER_M165_SPECTRAL_FIGURES(results, scripts, metadata, coordinates, settings)
+    if (params.m165_spectral_summarize_metadata) {
+        if (!metadata) error 'Descriptive metadata summaries require the metadata file'
+        def metadataScripts = ['m165_metadata_summary.py', 'm165_sweep_figures.py']
+            .collect { file("${projectDir}/bin/${it}", checkIfExists: true) }
+        SUMMARIZE_M165_METADATA(results, metadata, metadataScripts, params.m165_spectral_metadata_summary_settings)
+    }
+    if (params.m165_spectral_pcrelate_file) {
+        if (!params.m165_spectral_pcrelate_sha256) error 'PC-Relate source requires an expected SHA256'
+        def kinship = followupInput(params.m165_spectral_pcrelate_file, 'm165_spectral_pcrelate_file')
+        def kinshipScripts = ['m165_graph_kinship.py', 'm165_sweep_figures.py']
+            .collect { file("${projectDir}/bin/${it}", checkIfExists: true) }
+        SUMMARIZE_M165_GRAPH_KINSHIP(results, kinship, kinshipScripts,
+            params.m165_spectral_pcrelate_sha256, params.m165_spectral_kinship_threshold)
+    }
+}
+
+workflow M165_METADATA_PRESENTATION {
+    if (!params.m165_metadata_presentation_output_dir)
+        error 'Set --m165_metadata_presentation_output_dir to a new output directory'
+    if (file(params.m165_metadata_presentation_output_dir).exists())
+        error '--m165_metadata_presentation_output_dir must not already exist'
+    PRESENT_M165_METADATA(
+        followupInput(params.m165_metadata_presentation_figures_dir, 'm165_metadata_presentation_figures_dir'),
+        followupInput(params.m165_metadata_presentation_metadata_dir, 'm165_metadata_presentation_metadata_dir'),
+        followupInput(params.m165_metadata_presentation_kinship_dir, 'm165_metadata_presentation_kinship_dir'),
+        ['m165_metadata_presentation.py', 'm165_sweep_figures.py']
+            .collect { file("${projectDir}/bin/${it}", checkIfExists: true) })
+}
+
+workflow M14_SEGMENT_PRESENTATION {
+    if (!params.m14_followup_results_dir) error 'Set m14_followup_results_dir to a new directory'
+    PRESENT_RARE_SEGMENT_CANDIDATE(channel.value(tuple(
+        followupInput(params.m14_presentation_chains, 'm14_presentation_chains'),
+        followupInput(params.m14_followup_configuration_summary, 'm14_followup_configuration_summary'),
+        followupInput(params.m14_presentation_kinship_summary, 'm14_presentation_kinship_summary'),
+        followupInput(params.m14_followup_sample_ids, 'm14_followup_sample_ids'),
+        file("${projectDir}/bin/rare_segment_presentation.py", checkIfExists: true))))
+}
+
+workflow M14_SEGMENT_FOLLOWUP {
+    if (!params.m14_followup_results_dir)
+        error 'Set m14_followup_results_dir to a new output directory'
+    def chrom = params.m14_followup_chromosome.toString()
+    if (!(chrom ==~ /[0-9XYMT]+/)) error 'Invalid followup chromosome'
+    def segments = followupInput(params.m14_followup_segments, 'm14_followup_segments')
+    def keep = followupInput(params.m14_followup_sample_ids, 'm14_followup_sample_ids')
+    if (params.m14_followup_views) {
+        RENDER_RARE_SEGMENTS(channel.value(tuple(chrom, segments, keep,
+            file("${projectDir}/bin/rare_segment_plots.py", checkIfExists: true))))
+    }
+    if (params.m14_followup_sensitivity) {
+        def vcf = followupInput(params.m14_followup_rare_vcf, 'm14_followup_rare_vcf')
+        def summary = followupInput(params.m14_followup_anchor_summary, 'm14_followup_anchor_summary')
+        def scripts = ['rare_segment_sensitivity.py', 'rare_allele_sharing_painter.py',
+                       'rare_allele_orientation.py'].collect { file("${projectDir}/bin/${it}", checkIfExists: true) }
+        def measured = MEASURE_RARE_SEGMENT_SENSITIVITY(channel.value(tuple(chrom, vcf, keep, segments, summary, scripts)))
+        PLOT_RARE_SEGMENT_SENSITIVITY(measured.analysis.map { c, result ->
+            tuple(c, result, ['rare_segment_sensitivity_plots.py', 'rare_segment_plots.py']
+                .collect { file("${projectDir}/bin/${it}", checkIfExists: true) })
+        })
+    }
+}
+
+// Helper: discover normalized VCFs from outdir/01_norm/
+workflow M14_SEGMENT_RELATEDNESS {
+    if (!params.m14_followup_results_dir)
+        error 'Set m14_followup_results_dir to a new output directory'
+    SUMMARIZE_RARE_SEGMENT_KINSHIP(channel.value(tuple(
+        followupInput(params.m14_followup_configuration_summary, 'm14_followup_configuration_summary'),
+        followupInput(params.m14_followup_pair_configuration_summary, 'm14_followup_pair_configuration_summary'),
+        followupInput(params.m14_followup_pcrelate, 'm14_followup_pcrelate'),
+        followupInput(params.m14_followup_sample_ids, 'm14_followup_sample_ids'),
+        file("${projectDir}/bin/rare_segment_kinship_summary.py", checkIfExists: true))))
+}
+
 // Helper: discover normalized VCFs from outdir/01_norm/
 // ---------------------------------------------------------------------------
 def discoverNormVcfs(String outdir) {
@@ -154,24 +294,6 @@ def discoverPlinkQcTsvs(String outdir) {
             if( !m.matches() ) throw new IllegalArgumentException("Cannot extract chr from ${tsv.getName()}")
             def chr = m[0][1]
             tuple(chr, tsv)
-        }
-}
-
-// ---------------------------------------------------------------------------
-// Helper: discover rare-only VCFs from lai_rare outdir
-// ---------------------------------------------------------------------------
-def discoverLaiRareVcfs(String inputDir, String globPattern) {
-    def reRare = ~/dnabr\.hg38\.2723\.chr(\d+|X|Y|MT)\.rare\.vcf\.gz$/
-    return channel
-        .fromPath("${inputDir}/${globPattern}")
-        .filter { p -> p.getName() ==~ reRare }
-        .map { vcf_gz ->
-            def m = (vcf_gz.getName() =~ reRare)
-            if( !m.matches() ) throw new IllegalArgumentException("Cannot extract chr from ${vcf_gz.getName()}")
-            def chr = m[0][1]
-            def tbi = vcf_gz.resolveSibling("${vcf_gz.getName()}.tbi")
-            if( !tbi.exists() ) throw new IllegalStateException("Missing .tbi for rare VCF: ${vcf_gz}")
-            tuple(chr, vcf_gz, tbi)
         }
 }
 
@@ -364,23 +486,12 @@ workflow {
     if( do_distance_modes && params.distance_mode_distance_units != 'bp' ) {
         throw new IllegalStateException("Per-individual distance modes currently support only bp distances (distance_mode_distance_units='bp').")
     }
-    if( do_distance_modes && do_lai_rare && params.lai_rare_keep_format && !params.lai_rare_keep_format.split(',').collect { it.trim() }.contains('GT') ) {
-        throw new IllegalStateException("Per-individual distance modes require FORMAT/GT in lai_rare outputs. Set lai_rare_keep_format to include GT.")
-    }
+    validateRareGenotypeOptions(params)
     if( do_painting && params.painting_input_format != 'vcf_rare' ) {
         throw new IllegalStateException("Rare allele sharing painting currently supports only upstream rare VCFs (painting_input_format='vcf_rare').")
     }
     if( do_rare_in_lai && params.rare_in_lai_input_format != 'vcf_rare' ) {
         throw new IllegalStateException("Rare-in-LAI-tracts currently supports only upstream rare VCFs (rare_in_lai_input_format='vcf_rare').")
-    }
-    if( do_rare_in_lai && do_lai_rare && params.lai_rare_keep_format && !params.lai_rare_keep_format.split(',').collect { it.trim() }.contains('GT') ) {
-        throw new IllegalStateException("Rare-in-LAI-tracts requires FORMAT/GT in lai_rare outputs. Set lai_rare_keep_format to include GT.")
-    }
-    if( do_painting && do_lai_rare && params.lai_rare_keep_format && !params.lai_rare_keep_format.split(',').collect { it.trim() }.contains('GT') ) {
-        throw new IllegalStateException("Rare allele sharing painting requires FORMAT/GT in lai_rare outputs. Set lai_rare_keep_format to include GT.")
-    }
-    if( (do_allele_orientation_audit || do_allele_orientation_inventory) && do_lai_rare && params.lai_rare_keep_format && !params.lai_rare_keep_format.split(',').collect { it.trim() }.contains('GT') ) {
-        throw new IllegalStateException("Allele-orientation stages require FORMAT/GT in lai_rare outputs. Set lai_rare_keep_format to include GT.")
     }
 
     def any_downstream = params.run_downstream && (
@@ -436,7 +547,7 @@ workflow {
     def ch_norm_vcfs
     if( do_norm ) {
         def (_ch_norm, _ch_norm_logs) = PREPROCESS_NORM_LEFTALIGN(
-            ch_vcfs.combine(ch_ref)
+            ch_vcfs.combine(ch_ref), file("${projectDir}/bin/mark_original_alleles.py")
         )
         ch_norm_vcfs = _ch_norm
     } else if( do_filter ) {
@@ -487,7 +598,8 @@ workflow {
             boolean keep_sex_chr = params.lai_rare_exclude_sex_chr ? !(chr in ["X","Y","MT"]) : true
             return chr_matches && keep_sex_chr
         }
-        def lai_rare_out = LAI_RARE_BIALELIC_ONLY(ch_lai_input)
+        def rare_sample_selection = params.lai_rare_keep_samples_file ? file(params.lai_rare_keep_samples_file, checkIfExists: true) : []
+        def lai_rare_out = LAI_RARE_BIALELIC_ONLY(ch_lai_input, rare_sample_selection, file("${projectDir}/bin/select_rare_minor.py"))
         ch_lai_rare_vcfs = lai_rare_out.rare_vcfs
     } else if( do_rare_tracts || do_distance_modes || do_rare_in_lai || do_rare_on_lai || do_presence_channel || do_feature_build || do_allele_orientation_audit || do_allele_orientation_inventory || (do_painting && !params.painting_aggregate_only) ) {
         // Discovery path: lai_rare no se genera live, se descubre del dir configurado.
@@ -524,6 +636,11 @@ workflow {
     } else {
         ch_lai_rare_vcfs = channel.empty()
     }
+
+    // Prevent ALT-only consumers from accepting the new minor-allele contract.
+    ch_lai_rare_vcfs = VALIDATED_RARE_INPUT(ch_lai_rare_vcfs, rareUnsupportedConsumers(params),
+        do_painting && !params.painting_aggregate_only ? params.painting_carrier_allele_mode : '',
+        file("${projectDir}/bin/validate_rare_contract.py")).vcfs
 
     // -----------------------------------------------------------------------
     // 03  QC_BCFTOOLS_STATS

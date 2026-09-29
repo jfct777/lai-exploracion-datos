@@ -26,9 +26,9 @@ M16.  Two complementary views of population substructure:
   * **Discrete communities** via the Leiden algorithm (``leidenalg``)
     scanned across several resolution parameters; multiple random seeds
     per resolution are summarised into a consensus co-assignment matrix.
-  * **Soft ancestry-like memberships** via Symmetric NMF (Wang et al.
-    2011): ``S ~= H H^T`` with ``H >= 0`` giving overlap-aware mixtures
-    that behave like ADMIXTURE proportions when rows are normalised.
+  * **Soft graph memberships** via Symmetric NMF (Wang et al. 2011):
+    ``S ~= H H^T`` with ``H >= 0``. Row normalisation does not identify
+    ancestry proportions or make these loadings equivalent to ADMIXTURE.
 
 Pipeline stages (dispatched by ``--mode``):
 
@@ -412,11 +412,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Drop pair edges whose total_shared_bp falls below "
                         "this threshold.")
     p.add_argument("--min-max-segment-bp", type=int, default=0,
-                   help="Drop pairs whose LONGEST single IBD segment is "
-                        "below this threshold (0 = disabled).  Biologically "
-                        "robust kinship filter: expected length of a real "
-                        "IBD segment from a common ancestor within the last "
-                        "~10 generations is >= 1 Mb (~ 1 cM).  Using this "
+                   help="Drop pairs whose LONGEST recorded sharing segment is "
+                        "below this physical-bp threshold (0 = disabled). "
+                        "This is not a genetic-distance or kinship cutoff. Using this "
                         "flag forces streaming of the segments TSV even "
                         "when the edge-weight-transform would not require "
                         "it.")
@@ -500,10 +498,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "sampling across regions/UFs is unbalanced.")
     # Bio-detector thresholds (sprint 3)
     p.add_argument("--kinship-segment-mb", type=float, default=10.0,
-                   help="max_segment_bp threshold (in Mb) for pair-level "
-                        "kinship candidates.  ≥1 Mb ~ 1 cM → common "
-                        "ancestor <10 generations (Browning 2012).  10 Mb "
-                        "is a conservative default for close kin.")
+                   help="max_segment_bp threshold (physical Mb) for the "
+                        "legacy pair-level candidate screen. Unphased sharing "
+                        "length alone does not establish IBD, kinship or generations.")
     p.add_argument("--kinship-max-size", type=int, default=15,
                    help="Community size cap for family-like candidate "
                         "communities.  Communities above this cap are "
@@ -683,6 +680,8 @@ def load_individuals(path: Path) -> list[str]:
     df = pd.read_csv(path, sep="\t", dtype={"sample_id": str})
     if "sample_id" not in df.columns:
         _fail(f"{path}: expected a 'sample_id' column")
+    if df["sample_id"].isna().any() or df["sample_id"].str.strip().eq("").any():
+        _fail(f"{path}: sample_id column contains missing or empty values")
     samples = df["sample_id"].astype(str).tolist()
     if len(samples) != len(set(samples)):
         _fail(f"{path}: sample_id column contains duplicates")
@@ -690,37 +689,86 @@ def load_individuals(path: Path) -> list[str]:
     return samples
 
 
-def load_pair_summary(path: Path) -> pd.DataFrame:
-    """Carga el resumen por pares y valida sus columnas principales."""
-    df = pd.read_csv(path, sep="\t", dtype={"sample_a": str, "sample_b": str})
-    expected = {"sample_a", "sample_b", "n_segments", "total_shared_bp",
-                "mean_jaccard"}
+def _validate_pair_rows(df: pd.DataFrame, context: str) -> pd.DataFrame:
+    """Canonicalise unordered endpoints; fail rather than sum duplicate edges.
+
+    Validation precedes thresholding, so an invalid row cannot disappear
+    silently behind a graph filter. Diagnostics never print sample IDs.
+    """
+    for column in ("sample_a", "sample_b"):
+        if column not in df or df[column].isna().any():
+            raise ValueError(f"{context}: missing pair endpoint")
+        if df[column].astype(str).str.strip().eq("").any():
+            raise ValueError(f"{context}: empty pair endpoint")
+    out = df.copy()
+    a = out["sample_a"].astype(str).to_numpy()
+    b = out["sample_b"].astype(str).to_numpy()
+    if np.any(a == b):
+        raise ValueError(f"{context}: self-pairs are not allowed")
+    out["sample_a"] = np.where(a < b, a, b)
+    out["sample_b"] = np.where(a < b, b, a)
+    if out.duplicated(["sample_a", "sample_b"]).any():
+        raise ValueError(f"{context}: duplicate unordered pairs (including reversed rows)")
+    for column in ("n_segments", "total_shared_bp", "n_shared_variants_total",
+                   "max_segment_bp", "mean_jaccard", "weight"):
+        if column not in out:
+            continue
+        values = pd.to_numeric(out[column], errors="raise").to_numpy(dtype=np.float64)
+        # An adapter may explicitly mark unavailable Jaccard as NA for
+        # weight modes that do not use it. Never fabricate a similarity.
+        checked = values[~np.isnan(values)] if column == "mean_jaccard" else values
+        if not np.isfinite(checked).all() or np.any(checked < 0):
+            raise ValueError(f"{context}: {column} must be finite and nonnegative")
+        if column not in ("mean_jaccard", "weight") and np.any(values != np.floor(values)):
+            raise ValueError(f"{context}: {column} must contain integers")
+    return out
+
+
+def load_pair_summary(path: Path, *, include_jaccard: bool = True) -> pd.DataFrame:
+    """Load pair statistics; leave unused Jaccard as NA, not fabricated similarity."""
+    df = pd.read_csv(path, sep="\t", dtype={"sample_a": str, "sample_b": str},
+                     usecols=None if include_jaccard else lambda c: c != "mean_jaccard")
+    expected = {"sample_a", "sample_b", "n_segments", "total_shared_bp"}
+    if include_jaccard:
+        expected.add("mean_jaccard")
     missing = expected - set(df.columns)
     if missing:
         _fail(f"{path}: missing columns {missing}")
+    if not include_jaccard:
+        df["mean_jaccard"] = np.nan
+    df = _validate_pair_rows(df, "pair summary")
     LOG.info("Loaded %d pair-summary rows from %s", len(df), path.name)
     return df
 
 
-def load_segments_aggregated(path: Path, chunk_rows: int) -> pd.DataFrame:
+def load_segments_aggregated(path: Path, chunk_rows: int, *,
+                             include_jaccard: bool = True) -> pd.DataFrame:
     """Stream ``all_pairwise_segments.tsv.gz`` in chunks and aggregate by
     pair to avoid materialising every segment row in RAM.
 
     Returns a DataFrame with columns (sample_a, sample_b, n_segments,
     total_shared_bp, n_shared_variants_total, mean_jaccard,
     max_segment_bp).  ``max_segment_bp`` is the length of the longest
-    single IBD-sharing segment for that pair, useful as a kinship proxy
-    that is robust to liberal M14 filtering (the longest segment length
-    approximately tracks the age of the most recent common ancestor).
+    single recorded sharing segment for that pair. These physical lengths
+    do not by themselves certify IBD, kinship or ancestor age.
+    With ``include_jaccard=False``, do not read or aggregate segment Jaccard;
+    retain ``mean_jaccard`` as NA for output-schema compatibility. The default
+    preserves the direct loader API; graph drivers select by weight transform.
     """
     LOG.info("Streaming segments from %s (chunk=%d rows)", path.name, chunk_rows)
     agg: dict[tuple[str, str], dict[str, float]] = defaultdict(
         lambda: {"n": 0, "bp": 0, "nsv": 0, "jsum": 0.0, "maxbp": 0}
     )
     dtype = {"sample_a": str, "sample_b": str, "length_bp": np.int64,
-             "n_shared_variants": np.int64, "jaccard": np.float32}
+             "n_shared_variants": np.int64}
     usecols = ["sample_a", "sample_b", "length_bp",
-               "n_shared_variants", "jaccard"]
+               "n_shared_variants"]
+    aggregations = dict(n=("length_bp", "size"), bp=("length_bp", "sum"),
+                        maxbp=("length_bp", "max"), nsv=("n_shared_variants", "sum"))
+    if include_jaccard:
+        dtype["jaccard"] = np.float32
+        usecols.append("jaccard")
+        aggregations["jsum"] = ("jaccard", "sum")
     t0 = time.time()
     total_rows = 0
     for chunk in pd.read_csv(path, sep="\t", compression="infer",
@@ -731,20 +779,17 @@ def load_segments_aggregated(path: Path, chunk_rows: int) -> pd.DataFrame:
         # in Python but on *chunked* aggregates so the key space is bounded
         # by the unique pair count, not by the segment count.
         g = chunk.groupby(["sample_a", "sample_b"], sort=False)
-        summary = g.agg(
-            n=("length_bp", "size"),
-            bp=("length_bp", "sum"),
-            maxbp=("length_bp", "max"),
-            nsv=("n_shared_variants", "sum"),
-            jsum=("jaccard", "sum"),
-        ).reset_index()
+        if include_jaccard and not np.isfinite(chunk["jaccard"].to_numpy()).all():
+            raise ValueError("Segment Jaccard must be finite when requested")
+        summary = g.agg(**aggregations).reset_index()
         for row in summary.itertuples(index=False):
             key = (row.sample_a, row.sample_b)
             slot = agg[key]
             slot["n"] += int(row.n)
             slot["bp"] += int(row.bp)
             slot["nsv"] += int(row.nsv)
-            slot["jsum"] += float(row.jsum)
+            if include_jaccard:
+                slot["jsum"] += float(row.jsum)
             m = int(row.maxbp)
             if m > slot["maxbp"]:
                 slot["maxbp"] = m
@@ -764,7 +809,8 @@ def load_segments_aggregated(path: Path, chunk_rows: int) -> pd.DataFrame:
         "n_segments": [agg[k]["n"] for k in keys],
         "total_shared_bp": [agg[k]["bp"] for k in keys],
         "n_shared_variants_total": [agg[k]["nsv"] for k in keys],
-        "mean_jaccard": [agg[k]["jsum"] / agg[k]["n"] for k in keys],
+        "mean_jaccard": ([agg[k]["jsum"] / agg[k]["n"] for k in keys]
+                         if include_jaccard else np.nan),
         "max_segment_bp": [agg[k]["maxbp"] for k in keys],
     })
     LOG.info("Aggregated %d segment rows into %d unique pairs in %.1fs "
@@ -794,6 +840,8 @@ def _compute_edge_weight(df: pd.DataFrame, transform: str) -> np.ndarray:
                   "build-graph when streaming from segments).")
         w = df[col].to_numpy(dtype=np.float64)
     elif transform == "mean_jaccard_weighted":
+        if not np.isfinite(df["mean_jaccard"].to_numpy(dtype=np.float64)).all():
+            raise ValueError("mean_jaccard_weighted requires finite observed mean_jaccard")
         w = (df["mean_jaccard"].to_numpy(dtype=np.float64)
              * df["n_segments"].to_numpy(dtype=np.float64))
     else:  # pragma: no cover — argparse enforces choices
@@ -814,14 +862,25 @@ def aggregate_pair_weights(pair_df: pd.DataFrame,
 
     If ``min_max_segment_bp > 0`` and the source DataFrame carries a
     ``max_segment_bp`` column (produced by the segments streaming
-    aggregator), pairs whose longest single IBD segment is below the
-    threshold are dropped *before* weight computation.  This is the
-    biologically most robust filter against background-ancestry noise:
-    a real IBD segment from a common ancestor <= ~10 generations back
-    has expected length >= 1 Mb (~ 1 cM), while noise stacks of many
-    short segments can inflate ``total_shared_bp`` without any single
-    segment being long.
+    aggregator), pairs whose longest recorded sharing segment is below
+    the threshold are dropped *before* weight computation. This optional
+    physical-length criterion is ANDed with the accumulated-bp threshold;
+    it is not a conversion to cM or a validated filter for kinship/ancestry.
     """
+    pair_df = _validate_pair_rows(pair_df, "pair summary")
+    if segments_summary is not None:
+        segments_summary = _validate_pair_rows(segments_summary, "segment aggregate")
+        left = pair_df.set_index(["sample_a", "sample_b"]).sort_index()
+        right = segments_summary.set_index(["sample_a", "sample_b"]).sort_index()
+        if not left.index.equals(right.index):
+            raise ValueError("Pair summary and segment aggregate contain different pairs")
+        for column in ("n_segments", "total_shared_bp"):
+            if not np.array_equal(left[column].to_numpy(), right[column].to_numpy()):
+                raise ValueError(f"Pair summary and segment aggregate disagree: {column}")
+        if not np.allclose(left["mean_jaccard"].to_numpy(dtype=float),
+                           right["mean_jaccard"].to_numpy(dtype=float),
+                           rtol=1e-5, atol=1e-6, equal_nan=True):
+            raise ValueError("Pair summary and segment aggregate disagree: mean_jaccard")
     src = segments_summary if segments_summary is not None else pair_df
     n_input = len(src)
     if min_max_segment_bp > 0:
@@ -861,6 +920,9 @@ def build_sparse_matrix(pair_df: pd.DataFrame,
         S    : scipy.sparse.csr_matrix, shape (N, N), dtype float64
         kept : boolean mask over pair_df rows that were kept
     """
+    pair_df = _validate_pair_rows(pair_df, "graph edges")
+    if len(samples) != len(set(samples)):
+        raise ValueError("Canonical sample list contains duplicates")
     idx = {s: i for i, s in enumerate(samples)}
     n = len(samples)
     a_raw = pair_df["sample_a"].astype(str).to_numpy()
@@ -870,13 +932,14 @@ def build_sparse_matrix(pair_df: pd.DataFrame,
     keep = bp >= int(min_edge_bp)
     if min_weight is not None:
         keep &= w >= float(min_weight)
-    # Also drop pairs whose samples are not in the canonical list.
-    in_a = np.array([s in idx for s in a_raw])
-    in_b = np.array([s in idx for s in b_raw])
-    keep &= in_a & in_b
+    # Unknown endpoints are a cohort-contract error, not filtered isolates.
+    in_a = np.array([s in idx for s in a_raw], dtype=bool)
+    in_b = np.array([s in idx for s in b_raw], dtype=bool)
+    if not (in_a & in_b).all():
+        raise ValueError("Graph edges contain endpoints outside the canonical sample list")
     n_dropped = int((~keep).sum())
     if n_dropped:
-        LOG.info("Dropped %d pair rows (bp<%d or sample missing)",
+        LOG.info("Dropped %d pair rows by graph thresholds (minimum bp=%d)",
                  n_dropped, min_edge_bp)
 
     a_idx = np.fromiter((idx[s] for s in a_raw[keep]), dtype=np.int64,
@@ -1005,6 +1068,15 @@ def _relabel_small_communities(membership: np.ndarray,
 
 def _leiden_single(g: ig.Graph, resolution: float,
                     seed: int) -> tuple[np.ndarray, float]:
+    """Return membership and the weighted RB objective at this resolution.
+
+    ``VertexClustering.modularity`` is a different, unweighted gamma=1
+    descriptor in the supported igraph version; it must not rank restarts.
+    RB quality is comparable between seeds on the same graph and gamma,
+    not a criterion for choosing gamma or comparing different graphs.
+    """
+    if g.ecount() == 0:
+        return np.arange(g.vcount(), dtype=np.int64), 0.0
     part = la.find_partition(
         g,
         la.RBConfigurationVertexPartition,
@@ -1012,7 +1084,7 @@ def _leiden_single(g: ig.Graph, resolution: float,
         resolution_parameter=float(resolution),
         seed=int(seed),
     )
-    return np.asarray(part.membership, dtype=np.int64), float(part.modularity)
+    return np.asarray(part.membership, dtype=np.int64), float(part.quality())
 
 
 def run_leiden_multiresolution(g: ig.Graph,
@@ -1026,7 +1098,7 @@ def run_leiden_multiresolution(g: ig.Graph,
                                            dict[float, list[np.ndarray]]]:
     """Run Leiden at several resolutions with multiple seeds.
 
-    For each resolution we retain the partition with the highest modularity;
+    For each resolution we retain the highest weighted RB-quality partition;
     for the ``consensus_resolution`` we additionally accumulate a
     co-occurrence matrix ``C[i,j] = (# seeds where i,j in same cluster) /
     n_seeds`` which is exposed as a sparse matrix.  All per-seed
@@ -1045,7 +1117,20 @@ def run_leiden_multiresolution(g: ig.Graph,
                          arrays before the small-community filter, used
                          by ARI stability diagnostics.
     """
+    if n_seeds < 1 or min_community_size < 1:
+        raise ValueError("Leiden requires positive n_seeds and min_community_size")
+    if (not len(resolutions) or len(set(resolutions)) != len(resolutions)
+            or not all(np.isfinite(r) and r > 0 for r in resolutions)):
+        raise ValueError("Leiden resolutions must be unique, finite and positive")
+    if g.is_directed() or not g.is_simple():
+        raise ValueError("Leiden requires a simple undirected graph")
+    if g.ecount():
+        weights = np.asarray(g.es["weight"], dtype=np.float64)
+        if not np.isfinite(weights).all() or np.any(weights <= 0):
+            raise ValueError("Leiden edge weights must be finite and positive")
     n_nodes = g.vcount()
+    active = np.asarray(g.degree(), dtype=np.int64) > 0
+    n_active = int(active.sum())
     rng = np.random.default_rng(base_seed)
     seeds = rng.integers(low=1, high=2**31 - 1, size=n_seeds).tolist()
 
@@ -1076,50 +1161,77 @@ def run_leiden_multiresolution(g: ig.Graph,
 
     for res in resolutions:
         LOG.info("Leiden: resolution=%.3f  seeds=%d", res, n_seeds)
-        best_mod = -np.inf
+        best_quality = -np.inf
+        best_mod = float("nan")
         best_membership = None
+        best_row = None
         memberships_by_res[float(res)] = []
         for sd in seeds:
             t0 = time.time()
-            memb, mod = _leiden_single(g, res, sd)
+            memb, quality = _leiden_single(g, res, sd)
             dt = time.time() - t0
+            if not np.isfinite(quality):
+                raise ValueError("Leiden returned a non-finite RB quality")
+            # Keep the legacy descriptor separate and explicitly labelled.
+            # No modularity is defined when the graph has no edges.
+            mod = float(g.modularity(memb.tolist())) if g.ecount() else float("nan")
+            weighted_mod = (float(g.modularity(memb.tolist(), weights="weight",
+                                               resolution=1.0))
+                            if g.ecount() else float("nan"))
+            memb[~active] = NOISE_LABEL
             # Raw partition size before the noise filter — useful in the CSV.
-            n_raw = int(np.unique(memb).size)
+            n_raw = int(np.unique(memb[active]).size)
             mod_rows.append({
                 "resolution": float(res),
                 "seed": int(sd),
                 "modularity": float(mod),
+                "modularity_definition": "unweighted_gamma1_legacy_descriptor",
+                "weighted_modularity": weighted_mod,
+                "rb_quality": float(quality),
+                "selection_objective": "weighted_RB_quality_within_resolution",
+                "is_representative": False,
+                "status": "OK" if n_active else "NO_GRAPH_SUPPORT",
+                "n_active_nodes": n_active,
+                "n_isolated_nodes": n_nodes - n_active,
                 "n_communities_raw": n_raw,
                 "time_sec": round(dt, 3),
             })
             memberships_by_res[float(res)].append(memb.copy())
-            if mod > best_mod:
+            if best_membership is None or quality > best_quality:
+                best_quality = quality
                 best_mod = mod
                 best_membership = memb
+                best_row = len(mod_rows) - 1
             if (accumulate_consensus
                     and abs(res - consensus_resolution) < 1e-9):
                 if consensus_counts is not None:
                     # Broadcast equality — O(N^2) but only for N <= 5000.
-                    eq = memb[:, None] == memb[None, :]
+                    eq = ((memb[:, None] == memb[None, :])
+                          & active[:, None] & active[None, :])
                     np.add.at(consensus_counts, np.where(eq), 1)
                 else:
                     # Sparse path: fill one block per cluster.
                     labels = np.unique(memb)
                     for lbl in labels:
-                        idx = np.flatnonzero(memb == lbl)
-                        if idx.size < 2:
+                        if lbl == NOISE_LABEL:
                             continue
+                        idx = np.flatnonzero(memb == lbl)
                         rr, cc = np.meshgrid(idx, idx, indexing="ij")
-                        sparse_consensus[rr.ravel(), cc.ravel()] += 1.0
+                        # Sparse fancy indexing returns a sparse 1-by-M
+                        # object; scipy cannot add a nonzero scalar to it.
+                        rr, cc = rr.ravel(), cc.ravel()
+                        previous = sparse_consensus[rr, cc].toarray().ravel()
+                        sparse_consensus[rr, cc] = previous + 1.0
 
+        mod_rows[best_row]["is_representative"] = True
         # Apply the small-community filter on the best partition.
         filtered = _relabel_small_communities(best_membership,
                                                min_community_size)
         assignments[f"community_res_{res:g}"] = filtered
         n_comm = int((np.unique(filtered) != NOISE_LABEL).sum())
         n_noise = int((filtered == NOISE_LABEL).sum())
-        LOG.info("  best modularity=%.4f, communities=%d, noise=%d",
-                 best_mod, n_comm, n_noise)
+        LOG.info("  best RB quality=%.4f, descriptive modularity=%.4f, "
+                 "communities=%d, noise=%d", best_quality, best_mod, n_comm, n_noise)
         if abs(res - consensus_resolution) < 1e-9:
             best_membership_consensus = filtered
             best_mod_consensus = best_mod
@@ -1358,10 +1470,9 @@ def laplacian_normalize(S: sp.spmatrix) -> sp.csr_matrix:
     which empirically presented as the single dominant red component in
     the M16 STRUCTURE plot.
 
-    Normalising by D^{-1/2} converts S into a kernel whose eigen-
-    decomposition decouples modular structure from raw degree, i.e.
-    Sym-NMF now recovers real sub-population substructure rather than
-    sampling artefacts.
+    Normalising by D^{-1/2} rescales the adjacency by weighted degree.
+    It changes the factorisation target but does not guarantee removal of
+    sampling artefacts or recovery of biological population structure.
     """
     d = np.asarray(S.sum(axis=1)).ravel()
     # Guard against zero-degree nodes (isolated samples survive as-is).
@@ -1377,10 +1488,10 @@ def compute_ari_multi_seed(memberships_by_res: dict[float, list[np.ndarray]],
 
     ARI (Hubert & Arabie 1985) is the standard chance-corrected measure
     of partition agreement.  High median ARI across seeds at a given γ
-    means the partition is reproducible (biological signal); low ARI
-    means the algorithm is chasing stochastic noise.  We summarise
-    (min, q25, median, q75, max) so that a single γ can be selected as
-    "robust" — the γ that maximises both modularity AND ARI.
+    describes repeatability of the optimizer, not biological validation.
+    Nodes marked NOISE_LABEL in any raw partition (isolates) are excluded;
+    the common node denominator is reported. No graph support gives NaN,
+    not perfect stability of an all-noise partition.
     """
     rows: list[dict[str, Any]] = []
     if not _HAS_SKLEARN:
@@ -1389,11 +1500,20 @@ def compute_ari_multi_seed(memberships_by_res: dict[float, list[np.ndarray]],
     for res, memberships in memberships_by_res.items():
         if len(memberships) < 2:
             continue
+        supported = np.all(np.asarray(memberships) != NOISE_LABEL, axis=0)
+        n_supported = int(supported.sum())
+        if n_supported < 2:
+            rows.append({"resolution": float(res), "n_pairs": 0,
+                         "n_nodes": n_supported,
+                         **{f"{name}_ari": float("nan")
+                            for name in ("median", "q25", "q75", "min", "max")}})
+            continue
         ari_values: list[float] = []
         for i in range(len(memberships)):
             for j in range(i + 1, len(memberships)):
                 ari_values.append(
-                    float(adjusted_rand_score(memberships[i], memberships[j]))
+                    float(adjusted_rand_score(memberships[i][supported],
+                                             memberships[j][supported]))
                 )
         if not ari_values:
             continue
@@ -1401,6 +1521,7 @@ def compute_ari_multi_seed(memberships_by_res: dict[float, list[np.ndarray]],
         rows.append({
             "resolution": float(res),
             "n_pairs": int(arr.size),
+            "n_nodes": n_supported,
             "median_ari": float(np.median(arr)),
             "q25_ari": float(np.quantile(arr, 0.25)),
             "q75_ari": float(np.quantile(arr, 0.75)),
@@ -1500,8 +1621,13 @@ def compute_silhouette_per_community(
 
 
 def _symnmf_dominant_components(H: np.ndarray) -> np.ndarray:
-    """Assign each sample to its top-loading component (tie-break: lowest idx)."""
-    return np.argmax(H, axis=1).astype(np.int64)
+    """Top-loading component, with zero-mass rows explicitly unassigned."""
+    H = np.asarray(H, dtype=np.float64)
+    if H.ndim != 2 or H.shape[1] == 0 or not np.isfinite(H).all() or np.any(H < 0):
+        raise ValueError("NMF loadings must be a finite nonnegative N-by-K matrix")
+    labels = np.argmax(H, axis=1).astype(np.int64)
+    labels[H.sum(axis=1) == 0] = NOISE_LABEL
+    return labels
 
 
 def run_symnmf_cophenetic(
@@ -1521,7 +1647,7 @@ def run_symnmf_cophenetic(
     """Sym-NMF with cophenetic correlation for K selection.
 
     Pipeline:
-      1. Optionally Laplacian-normalise S (fixes degree bias, see
+      1. Optionally degree-normalise S (changes the target, see
          ``laplacian_normalize``).
       2. For each K, run ``n_inits`` NNDSVD-initialised Sym-NMF
          restarts with distinct seeds.
@@ -1533,9 +1659,11 @@ def run_symnmf_cophenetic(
       5. Keep the restart with the lowest reconstruction error as the
          representative H for that K.
 
-    K selection rule of thumb (Brunet 2004): pick the largest K whose
-    cophenetic correlation exceeds ~0.90 — that K captures the most
-    substructure without overfitting.
+    K recommendation follows ``_select_recommended_k`` (including an
+    explicit operational override), not maximisation of K. Stability is
+    diagnostic of this factorisation, not evidence of ancestry components.
+    Isolates are excluded from fitting and consensus and reinserted as
+    zero rows; n_supported/n_isolated make the diagnostic denominator explicit.
 
     Returns
     -------
@@ -1543,19 +1671,36 @@ def run_symnmf_cophenetic(
     err_df : per-K reconstruction-error curves (long format)
     coph_df : per-K cophenetic correlation + consensus diagnostics
     """
-    dense = S.toarray().astype(np.float64, copy=False)
+    S = S.tocsr().astype(np.float64, copy=False)
+    if S.shape[0] != S.shape[1] or not np.isfinite(S.data).all() or np.any(S.data < 0):
+        raise ValueError("Sym-NMF requires a square, finite nonnegative matrix")
+    difference = S - S.T
+    if difference.nnz and np.max(np.abs(difference.data)) > 1e-10:
+        raise ValueError("Sym-NMF requires a symmetric matrix")
+    if n_inits < 1 or max_iter < 1 or not np.isfinite(tol) or tol < 0:
+        raise ValueError("Sym-NMF requires positive restarts/iterations and finite nonnegative tol")
+    if not len(k_values) or any(int(k) != k or k < 1 for k in k_values):
+        raise ValueError("Sym-NMF K values must be positive integers")
+    active = np.asarray(S.sum(axis=1)).ravel() > 0
+    n_total = S.shape[0]
+    n = int(active.sum())
+    if n and any(k > n for k in k_values):
+        raise ValueError("Sym-NMF K cannot exceed the number of supported nodes")
+    # Isolates carry no information for assignment stability. Fit on support
+    # only, then reinsert exact zero rows in the original sample order.
+    supported_S = S[active][:, active]
+    dense = supported_S.toarray()
     if laplacian:
-        LOG.info("Sym-NMF: applying Laplacian normalisation "
-                 "D^{-1/2} S D^{-1/2} (fixes degree-bias artefact).")
-        dense = laplacian_normalize(S).toarray().astype(np.float64, copy=False)
-    scale = dense.max()
+        LOG.info("Sym-NMF: applying degree normalisation "
+                 "D^{-1/2} S D^{-1/2} on supported nodes.")
+        dense = laplacian_normalize(supported_S).toarray().astype(np.float64, copy=False)
+    scale = dense.max() if dense.size else 0.0
     if scale > 0:
         dense = dense / scale
     rng = np.random.default_rng(base_seed)
     H_by_k: dict[int, np.ndarray] = {}
     err_rows: list[dict[str, Any]] = []
     coph_rows: list[dict[str, Any]] = []
-    n = dense.shape[0]
     if init_mode == "nndsvd-fast" and n_inits > 1:
         LOG.warning(
             "run_symnmf_cophenetic: init_mode='nndsvd-fast' with "
@@ -1569,7 +1714,8 @@ def run_symnmf_cophenetic(
         k_int = int(k)
         LOG.info("Sym-NMF: k=%d  n_inits=%d  max_iter=%d  init=%s",
                  k_int, n_inits, max_iter, init_mode)
-        seeds = rng.integers(low=1, high=2**31 - 1, size=n_inits).tolist()
+        seeds = (rng.integers(low=1, high=2**31 - 1, size=n_inits).tolist()
+                 if n else [])
         # Consensus counter: how often do i,j land in the same top component.
         C = np.zeros((n, n), dtype=np.float64)
         best_err = np.inf
@@ -1579,11 +1725,15 @@ def run_symnmf_cophenetic(
             H, errs = symnmf(dense, k=k_int, max_iter=max_iter, tol=tol,
                               seed=int(s), init_mode=init_mode)
             final_err = errs[-1] if errs else float("nan")
+            if not np.isfinite(final_err):
+                raise ValueError("Sym-NMF returned a non-finite reconstruction error")
             rec_err_final.append(final_err)
             if final_err < best_err:
                 best_err = final_err
                 best_H = H
             dom = _symnmf_dominant_components(H)
+            if np.any(dom == NOISE_LABEL):
+                raise ValueError("Sym-NMF returned zero loadings for a supported node")
             # eq[i,j] = 1 iff dom[i]==dom[j]
             eq = (dom[:, None] == dom[None, :]).astype(np.float64)
             C += eq
@@ -1634,6 +1784,11 @@ def run_symnmf_cophenetic(
         coph_rows.append({
             "k": k_int,
             "n_inits": int(n_inits),
+            "n_inits_executed": len(seeds),
+            "n_samples": n_total,
+            "n_supported": n,
+            "n_isolated": n_total - n,
+            "status": "OK" if n else "NO_GRAPH_SUPPORT",
             "mean_reconstruction_error": err_mean,
             "min_reconstruction_error": err_min,
             "max_reconstruction_error": err_max,
@@ -1648,7 +1803,9 @@ def run_symnmf_cophenetic(
             best_H = np.zeros((n, k_int))
         row_sums = best_H.sum(axis=1, keepdims=True)
         row_sums[row_sums == 0] = 1.0
-        H_by_k[k_int] = best_H / row_sums
+        H_full = np.zeros((n_total, k_int), dtype=np.float64)
+        H_full[active] = best_H / row_sums
+        H_by_k[k_int] = H_full
         # Log all per-init error trajectories for diagnostic purposes.
         for i, e in enumerate(rec_err_final):
             err_rows.append({
@@ -1656,7 +1813,7 @@ def run_symnmf_cophenetic(
                 "init_idx": int(i),
                 "frobenius_error": float(e),
             })
-    err_df = pd.DataFrame(err_rows)
+    err_df = pd.DataFrame(err_rows, columns=["k", "init_idx", "frobenius_error"])
     coph_df = pd.DataFrame(coph_rows)
     if not coph_df.empty:
         coph_df = coph_df.sort_values("k").reset_index(drop=True)
@@ -1702,6 +1859,9 @@ def _select_recommended_k(coph_df: pd.DataFrame,
          cophenetic floor; if none, simply max cophenetic.
     """
     # 1. Operational override.
+    if ("n_supported" in coph_df
+            and not (coph_df["n_supported"] > 0).any()):
+        return pd.Series(False, index=coph_df.index)
     if operational_k and operational_k > 0:
         if int(operational_k) in coph_df["k"].astype(int).tolist():
             LOG.info("K-selection: operational override → K = %d.",
@@ -1714,6 +1874,10 @@ def _select_recommended_k(coph_df: pd.DataFrame,
     # Filter to Ks meeting the cophenetic floor.
     eligible = coph_df[coph_df["cophenetic_correlation"] >= cophenetic_floor]
     if eligible.empty:
+        finite = np.isfinite(coph_df["cophenetic_correlation"].to_numpy(dtype=float))
+        if not finite.any():
+            LOG.warning("K-selection: no finite cophenetic statistic; no data-driven recommendation")
+            return pd.Series(False, index=coph_df.index)
         # Nothing meets the floor — pick max-cophenetic as a graceful fallback.
         k_opt = int(coph_df.sort_values(
             "cophenetic_correlation", ascending=False).iloc[0]["k"])
@@ -2490,10 +2654,10 @@ def validate_intra_vs_inter(pair_df: pd.DataFrame,
     * **Median ratio** ``median_intra_bp / median_inter_bp`` — primary
       effect-size metric for the thesis (corrida_C γ=1 = 2.59).  Intuitive
       and unit-meaningful (kb of co-shared sequence).
-    * **Mann-Whitney U** + ``mann_whitney_p`` — significance under the
-      alternative ``intra > inter``.  At N=2619 with ~57k inter pairs the
-      p-value is ~0 for any non-degenerate effect, so it confirms
-      directionality but is not informative for ranking resolutions.
+    * **Mann-Whitney U** + ``mann_whitney_p`` — nominal statistic under
+      ``intra > inter``. Dyads share individuals and communities were
+      selected using the same graph: this p-value is not confirmatory
+      evidence and must not select a resolution.
     * **Cliff's δ** (Romano et al. 2006, ``cliff_delta``) — non-parametric
       effect size on [-1, 1], robust to the heavy-tailed sharing
       distribution.  Romano benchmarks: ``|δ| < 0.147`` small,
@@ -2569,8 +2733,9 @@ def validate_intra_vs_inter(pair_df: pd.DataFrame,
             delta = (2.0 * auc - 1.0) if np.isfinite(auc) else float("nan")
         med_intra = float(np.median(intra_bp)) if intra_bp.size else float("nan")
         med_inter = float(np.median(inter_bp)) if inter_bp.size else float("nan")
-        ratio = (med_intra / med_inter) if (med_inter and np.isfinite(med_inter)
-                                            and med_inter > 0) else float("inf")
+        ratio = (med_intra / med_inter
+                 if np.isfinite(med_intra) and np.isfinite(med_inter)
+                 and med_inter > 0 else float("nan"))
         out_rows.append({
             "resolution": float(res),
             "n_intra": int(intra_bp.size),
@@ -2807,7 +2972,7 @@ def plot_nmf_structure(H: np.ndarray, membership: np.ndarray,
     n, kk = H.shape
     if kk != k:
         LOG.warning("Sym-NMF H shape %s does not match k=%d", H.shape, k)
-    dom = np.argmax(H, axis=1)
+    dom = _symnmf_dominant_components(H)
     order = np.lexsort((dom, membership))
     H_ord = H[order]
     member_ord = membership[order]
@@ -2829,8 +2994,8 @@ def plot_nmf_structure(H: np.ndarray, membership: np.ndarray,
     ax_bar.set_ylim(0, 1.0)
     ax_bar.set_ylabel(f"Soft membership (K={k})")
     ax_bar.set_xticks([])
-    ax_bar.set_title("Sym-NMF soft memberships (samples ordered by Leiden "
-                     "community then dominant component)",
+    ax_bar.set_title("Sym-NMF soft memberships (ordered by Leiden community "
+                     "then component; blank bars = no assignment)",
                      loc="left", fontweight="bold", fontsize=11)
 
     # Community strip beneath the structure plot.
@@ -3157,6 +3322,91 @@ def plot_network_umap(S: sp.csr_matrix, membership: np.ndarray,
             )
 
 
+def _inline_community_metadata_labels(membership: np.ndarray,
+                                      metadata_values: np.ndarray,
+                                      wrap_chars: int = 56) -> dict[str, Any]:
+    """Full-cohort category counts, not majority annotations or inferred ancestry."""
+    from collections import Counter
+    import textwrap
+
+    labels = np.asarray(membership)
+    metadata = np.asarray(metadata_values, dtype=object)
+    if labels.ndim != 1 or metadata.ndim != 1 or len(labels) != len(metadata):
+        raise ValueError("Inline legend requires aligned full membership and metadata vectors")
+    if not np.issubdtype(labels.dtype, np.integer):
+        raise ValueError("Inline legend membership must contain integer labels")
+    if isinstance(wrap_chars, bool) or not isinstance(wrap_chars, int) or not 20 <= wrap_chars <= 120:
+        raise ValueError("legend_wrap_chars must be an integer from 20 to 120")
+    values = [None if pd.isna(value) or not str(value).strip() else str(value)
+              for value in metadata]
+    levels = sorted({value for value in values if value is not None})
+    abbreviate = bool(levels) and all(re.fullmatch(r"Brazil[A-RX]", value) for value in levels)
+    codes = {level: level[-1] if abbreviate else level for level in levels}
+    rows = {}
+    for community in np.unique(labels):
+        selected = [values[i] for i in np.flatnonzero(labels == community)]
+        counts = sorted(Counter(selected).items(), key=lambda item: (-item[1], item[0] or ""))
+        size = len(selected)
+        parts = [f"{codes[value] if value is not None else 'sin dato'}: {count}" for value, count in counts]
+        composition = textwrap.fill("[" + "; ".join(parts) + "]", width=wrap_chars,
+                                    initial_indent="  ", subsequent_indent="  ",
+                                    break_long_words=True, break_on_hyphens=False)
+        name = "Noise" if int(community) == NOISE_LABEL else f"C{int(community)}"
+        rows[int(community)] = dict(n=size, counts=counts, label=f"{name} (n={size})\n{composition}")
+    mapping = "; ".join(f"{code} = {level}" for level, code in codes.items()) if abbreviate else "Nombres completos de metadata"
+    header = "Community (size)\n" + textwrap.fill("fineSTRUCTURE: " + mapping, width=wrap_chars)
+    if any(value is None for value in values):
+        header += "\nsin dato = metadata ausente"
+    return dict(rows=rows, header=header, abbreviated=abbreviate, codes=codes)
+
+
+def _layout_inline_community_legend(fig: plt.Figure, axes: np.ndarray,
+                                    header: str, figure_title: str | None,
+                                    figure_note: str | None) -> None:
+    """Reserve central legend space; never change any scatter data or styling."""
+    import textwrap
+
+    left, right = axes[0]
+    community_legend, metadata_legend = left.get_legend(), right.get_legend()
+    community_legend.set_title(header, prop={"size": 8})
+    old_width, old_height = fig.get_size_inches()
+    panel_width = left.get_position().width * old_width
+    panel_height = left.get_position().height * old_height
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    community_box = community_legend.get_window_extent(renderer)
+    metadata_box = metadata_legend.get_window_extent(renderer)
+    center_width = max(4.0, community_box.width / fig.dpi + .3)
+    metadata_width = max(1.5, metadata_box.width / fig.dpi + .3)
+    gap, margin = .3, .35
+    width = 2 * panel_width + center_width + metadata_width + 3 * gap + 2 * margin
+    note = (figure_note + "\n" if figure_note else "") + (
+        "Cada conteo pertenece a su C/Noise; mezcla, no equivalencia.\n"
+        "Noise = no asignados Leiden; no equivale a metadata faltante.")
+    note = "\n".join(textwrap.fill(line, width=max(80, int(width * 14))) for line in note.splitlines())
+    bottom = .3 + .17 * len(note.splitlines())
+    top = .65 + (.23 * len(figure_title.splitlines()) if figure_title else 0)
+    content_height = max(panel_height + .55, community_box.height / fig.dpi + .2,
+                         metadata_box.height / fig.dpi + .2)
+    height = max(old_height, bottom + top + content_height)
+    fig.set_size_inches(width, height, forward=True)
+    panel_y = bottom + (content_height - panel_height) / 2
+    right_x = margin + panel_width + gap + center_width + gap
+    left.set_position([margin / width, panel_y / height, panel_width / width, panel_height / height])
+    right.set_position([right_x / width, panel_y / height, panel_width / width, panel_height / height])
+    anchor_y = (bottom + content_height / 2) / height
+    community_legend.set_bbox_to_anchor(((margin + panel_width + gap) / width, anchor_y),
+                                        transform=fig.transFigure)
+    metadata_legend.set_bbox_to_anchor(((right_x + panel_width + gap) / width, anchor_y),
+                                       transform=fig.transFigure)
+    for ax in (left, right):
+        ax.set_title(textwrap.fill(ax.get_title(loc="left"), width=max(30, int(panel_width * 10))),
+                     loc="left", fontsize=11, fontweight="bold")
+    if figure_title:
+        fig.suptitle(figure_title, fontsize=12, y=1 - .15 / height)
+    fig.text(.5, .15 / height, note, ha="center", va="bottom", fontsize=8)
+
+
 def _plot_network_static(*, coords: np.ndarray, sub_idx: np.ndarray,
                           sub_memb: np.ndarray, sub_wdeg: np.ndarray,
                           membership: np.ndarray, out_path: Path,
@@ -3167,7 +3417,11 @@ def _plot_network_static(*, coords: np.ndarray, sub_idx: np.ndarray,
                           export_pdf: bool, export_svg: bool,
                           label_min_size: int,
                           community_annotations: dict[int, str] | None,
-                          adjust_labels: bool) -> None:
+                          adjust_labels: bool,
+                          figure_title: str | None = None,
+                          figure_note: str | None = None,
+                          inline_metadata_legend: bool = False,
+                          legend_wrap_chars: int = 56) -> None:
     """Matplotlib path for plot_network_umap (PNG + optional PDF/SVG).
 
     Splits out the static rendering so the parent function can also feed
@@ -3178,6 +3432,12 @@ def _plot_network_static(*, coords: np.ndarray, sub_idx: np.ndarray,
     UMAP space.
     """
     has_meta = (metadata_values is not None and metadata_name is not None)
+    if inline_metadata_legend:
+        if not has_meta:
+            raise ValueError("Inline metadata legend requires the full metadata vector and its name")
+        inline_labels = _inline_community_metadata_labels(membership, metadata_values, legend_wrap_chars)
+        if not np.array_equal(np.asarray(membership)[sub_idx], sub_memb):
+            raise ValueError("Inline legend membership does not match the plotted node order")
     ncols = 2 if has_meta else 1
     fig, axes = plt.subplots(
         1, ncols, figsize=(width_in * (1.5 if has_meta else 1.0), height_in),
@@ -3233,6 +3493,8 @@ def _plot_network_static(*, coords: np.ndarray, sub_idx: np.ndarray,
         figures are biologically accurate even when the scatter is
         rendered with max_nodes < N.
         """
+        if inline_metadata_legend:
+            return inline_labels["rows"][int(c)]["label"]
         full_size = int((membership == c).sum())
         if int(c) == NOISE_LABEL:
             return f"Noise (n={full_size})"
@@ -3248,9 +3510,13 @@ def _plot_network_static(*, coords: np.ndarray, sub_idx: np.ndarray,
     # without adding biological insight.
     colors_comm = [_community_color(int(m)) for m in sub_memb]
     non_noise_comms = np.unique(sub_memb[sub_memb != NOISE_LABEL])
+    if inline_metadata_legend:
+        non_noise_comms = np.unique(membership[membership != NOISE_LABEL])
     sizes_full = {int(c): int((membership == c).sum())
                    for c in non_noise_comms}
     top_n = 30
+    if inline_metadata_legend:
+        top_n = len(non_noise_comms)
     top_comms = sorted(non_noise_comms,
                         key=lambda c: -sizes_full[int(c)])[:top_n]
     uniq_comms = np.concatenate([
@@ -3280,11 +3546,28 @@ def _plot_network_static(*, coords: np.ndarray, sub_idx: np.ndarray,
                   label=f"{lvl} ({int((sub_meta == lvl).sum())})")
             for i, lvl in enumerate(levels)
         ]
+        if inline_metadata_legend:
+            # Levels above are strings, including representations of missing
+            # scalars; count on that same representation without recolouring.
+            for handle, lvl in zip(handles_meta, levels):
+                handle.set_label(f"{lvl} ({int((sub_meta.astype(str) == lvl).sum())})")
         _scatter(axes[0, 1], colors_meta,
                  f"Same layout coloured by {metadata_name}",
                  metadata_name, handles_meta)
 
-    fig.tight_layout()
+    # Optional provenance/caveats for saved-result replotting.  With no text,
+    # preserve the original plotting path and layout exactly.
+    if inline_metadata_legend:
+        _layout_inline_community_legend(fig, axes, inline_labels["header"], figure_title, figure_note)
+    else:
+        if figure_title:
+            fig.suptitle(figure_title, fontsize=12, y=0.995)
+        if figure_note:
+            fig.text(0.5, 0.015, figure_note, ha="center", va="bottom", fontsize=8)
+        if figure_title or figure_note:
+            fig.tight_layout(rect=(0, 0.13 if figure_note else 0, 1, 0.91 if figure_title else 1))
+        else:
+            fig.tight_layout()
     _save_fig(fig, out_path, dpi=dpi, export_pdf=export_pdf,
               export_svg=export_svg)
 
@@ -3889,8 +4172,9 @@ def build_html_report(out_dir: Path,
         if not k_opt_row.empty:
             k_opt = int(k_opt_row["k"].iloc[0])
             sections.append(
-                f"<p class='interp'>Recommended K (largest with "
-                f"cophenetic ≥ 0.90, Brunet 2004) = <b>K = {k_opt}</b>.</p>"
+                f"<p class='interp'>K marked by the configured selection rule "
+                f"or operational override = <b>K = {k_opt}</b>; "
+                f"not a validated number of ancestry components.</p>"
             )
         sections.append(coph_df.to_html(index=False, float_format="%.4f",
                                          classes="table"))
@@ -4034,27 +4318,38 @@ def _configure_threads(nthreads: int) -> None:
         os.environ.setdefault(env, str(nthreads))
 
 
+def load_graph_pair_summary(args, inputs: M14Paths) -> pd.DataFrame:
+    """Lee una sola fuente de estadísticas, antes de aplicar filtros al grafo.
+
+    Si hacen falta conteos de variantes o el segmento máximo, el resumen se
+    recalcula desde los segmentos. No se abre entonces el resumen redundante.
+    Los demás modos conservan la vía ligera del resumen publicado por M14.
+    Jaccard sólo se lee/calcula para el peso que lo utiliza; de otro modo su
+    columna se conserva como NA, sin asumir que el valor de origen sea constante.
+    """
+    include_jaccard = args.edge_weight_transform == "mean_jaccard_weighted"
+    needs_stream = (
+        args.edge_weight_transform == "n_shared_variants"
+        or int(getattr(args, "min_max_segment_bp", 0)) > 0
+    )
+    if needs_stream:
+        LOG.info("Pair statistics source: segments; skipping pair-summary read")
+        result = load_segments_aggregated(
+            inputs.segments, chunk_rows=args.segments_chunk_rows,
+            include_jaccard=include_jaccard,
+        )
+        return _validate_pair_rows(result, "segment aggregate")
+    return load_pair_summary(inputs.pair_summary, include_jaccard=include_jaccard)
+
+
 def do_build_graph(args, inputs: M14Paths, out_dir: Path
                     ) -> tuple[sp.csr_matrix, ig.Graph, list[str],
                                pd.DataFrame]:
     """Construye el grafo ponderado a partir de las salidas de M14."""
     samples = load_individuals(inputs.individual_summary)
-    pair_summary = load_pair_summary(inputs.pair_summary)
-    seg_summary = None
-    # Segments streaming is required whenever we need per-pair statistics
-    # that are not pre-computed in Module 14's pair_sharing_summary.tsv:
-    #  - n_shared_variants_total  (for --edge-weight-transform=n_shared_variants)
-    #  - max_segment_bp           (for --min-max-segment-bp)
-    needs_stream = (
-        args.edge_weight_transform in ("n_shared_variants",)
-        or int(getattr(args, "min_max_segment_bp", 0)) > 0
-    )
-    if needs_stream:
-        seg_summary = load_segments_aggregated(
-            inputs.segments, chunk_rows=args.segments_chunk_rows,
-        )
+    pair_summary = load_graph_pair_summary(args, inputs)
     pair_w = aggregate_pair_weights(
-        pair_summary, seg_summary,
+        pair_summary, None,
         args.edge_weight_transform,
         min_max_segment_bp=int(getattr(args, "min_max_segment_bp", 0)),
     )
@@ -4335,7 +4630,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             if (out_dir / NAME_GRAPH_MATRIX).exists():
                 LOG.info("Loading cached graph from %s", out_dir)
                 S, g, samples = load_graph(out_dir)
-                pair_summary = load_pair_summary(inputs.pair_summary)
+                # A cached graph needs no pair statistics for clustering or
+                # reporting. Diagnostics use the same source as a fresh build.
+                if args.mode in ("validate", "plot", "all"):
+                    pair_summary = load_graph_pair_summary(args, inputs)
             else:
                 S, g, samples, pair_summary = do_build_graph(args, inputs, out_dir)
         # Attach metadata as soon as samples are known (idempotent).
@@ -4417,6 +4715,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             # requires ``max_segment_bp``, which needs segments streaming.
             seg_summary = load_segments_aggregated(
                 inputs.segments, chunk_rows=args.segments_chunk_rows,
+                include_jaccard=args.edge_weight_transform == "mean_jaccard_weighted",
             )
             if val_col in assignments_df.columns and not seg_summary.empty:
                 kin_df = detect_cryptic_kinship(

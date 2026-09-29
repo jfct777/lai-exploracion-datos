@@ -4,6 +4,7 @@ import argparse
 import gzip
 import html
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -124,12 +125,13 @@ def parse_args():
     )
     parser.add_argument(
         "--carrier-allele-mode",
-        choices=["historical_alt", "minor_allele"],
+        choices=["historical_alt", "minor_allele", "source_minor"],
         default="historical_alt",
         help=(
             "Allele whose carriers define M14. historical_alt preserves the "
             "published behavior; minor_allele flips ALT-major sites to REF and "
-            "excludes frequency ties."
+            "excludes frequency ties; source_minor uses the certified M02.1 "
+            "RARE_ALLELE/RD annotation without reorienting in the selected subset."
         ),
     )
     parser.add_argument("--max-samples", type=int, default=None)
@@ -307,6 +309,44 @@ def _read_header_samples(input_path):
     return parts[9:]
 
 
+def read_source_minor_contract(input_path, carrier_allele_mode):
+    """Fail closed on incompatible allele semantics; never infer a source code from GT."""
+    modes = {"historical_alt", "minor_allele", "source_minor"}
+    if carrier_allele_mode not in modes:
+        _fail(f"Unsupported carrier allele mode: {carrier_allele_mode}")
+    lines = _read_vcf_header_lines(input_path)
+
+    def scalar(name, required=False):
+        values = [line.split("=", 1)[1] for line in lines if line.startswith(f"##{name}=")]
+        if len(values) > 1 or (required and len(values) != 1):
+            _fail(f"Expected one {name} header in {input_path}")
+        return values[0] if values else None
+
+    contract = scalar("dnabr_rare_contract")
+    if contract is None:
+        if carrier_allele_mode == "source_minor":
+            _fail("source_minor requires ##dnabr_rare_contract=minor_v1; legacy input is not certified")
+        return None
+    if contract != "minor_v1":
+        _fail(f"Unsupported dnabr_rare_contract: {contract}")
+    if carrier_allele_mode != "source_minor":
+        _fail("minor_v1 input requires --carrier-allele-mode source_minor; historical/recomputed orientation is incompatible")
+    cohort_sha = scalar("dnabr_rare_cohort_sha256", required=True)
+    if not re.fullmatch(r"[0-9a-f]{64}", cohort_sha):
+        _fail("dnabr_rare_cohort_sha256 must be a lowercase SHA-256 digest")
+    for namespace, name in (("INFO", "RARE_ALLELE"), ("FORMAT", "RD")):
+        definitions = [line for line in lines if line.startswith(f"##{namespace}=<ID={name},")]
+        if len(definitions) != 1 or ",Number=1," not in definitions[0] or ",Type=Integer," not in definitions[0]:
+            _fail(f"minor_v1 requires one {namespace}/{name} Number=1,Type=Integer declaration")
+    result = {"contract": contract, "cohort_sha256": cohort_sha}
+    cohort_n = scalar("dnabr_rare_cohort_n_samples")
+    if cohort_n is not None:
+        if not re.fullmatch(r"[1-9][0-9]*", cohort_n):
+            _fail("dnabr_rare_cohort_n_samples must be a positive integer")
+        result["cohort_n_samples"] = int(cohort_n)
+    return result
+
+
 def validate_input_schema(input_path, input_format):
     """Comprueba el formato y las columnas requeridas del archivo de variantes."""
     if input_format != "vcf_rare":
@@ -442,14 +482,27 @@ def parse_genotypes_carrier_sets(
     selected_samples,
     carrier_allele_mode="historical_alt",
     return_orientation_qc=False,
+    site_callback=None,
 ):
     """Return list of (pos, carrier_set) for each variant where carrier_set
     is a frozenset of sample indices that carry the requested allele.
     Also returns chromosome positional extent (min_pos, max_pos) from ALL
-    variants for proper plot scaling."""
-    query_cmd = [
-        "bcftools", "query", "-f", r"%CHROM\t%POS\t%ALT[\t%GT]\n",
-    ]
+    variants for proper plot scaling.
+
+    ``site_callback(pos, carriers)`` optionally observes every validated
+    source_minor record, including sites with zero or one selected carrier.
+    It does not change the returned sharing catalogue (two or more carriers).
+    This permits distance diagnostics without re-reading or reorienting GT.
+    """
+    source_contract = read_source_minor_contract(input_path, carrier_allele_mode)
+    source_minor = source_contract is not None
+    if site_callback is not None and not source_minor:
+        _fail("site_callback requires the authenticated source_minor contract")
+    query_format = (
+        r"%CHROM\t%POS\t%ALT\t%INFO/RARE_ALLELE[\t%GT:%RD]\n"
+        if source_minor else r"%CHROM\t%POS\t%ALT[\t%GT]\n"
+    )
+    query_cmd = ["bcftools", "query", "-f", query_format]
 
     temp_samples = None
     if selected_samples:
@@ -460,9 +513,6 @@ def parse_genotypes_carrier_sets(
         query_cmd.extend(["-S", temp_samples.name])
 
     query_cmd.append(str(input_path))
-
-    if carrier_allele_mode not in {"historical_alt", "minor_allele"}:
-        _fail(f"Unsupported carrier allele mode: {carrier_allele_mode}")
 
     proc = subprocess.Popen(query_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if proc.stdout is None or proc.stderr is None:
@@ -483,8 +533,9 @@ def parse_genotypes_carrier_sets(
             if not line:
                 continue
 
-            parts = line.split(b"\t", 3)
-            if len(parts) != 4:
+            prefix_fields = 4 if source_minor else 3
+            parts = line.split(b"\t", prefix_fields)
+            if len(parts) != prefix_fields + 1:
                 _fail(
                     "Unexpected bcftools query output for rare allele sharing: "
                     f"{line[:200]!r}"
@@ -493,7 +544,7 @@ def parse_genotypes_carrier_sets(
             row_chrom = parts[0].decode("ascii")
             pos_s = parts[1].decode("ascii")
             alt_s = parts[2].decode("ascii")
-            genotype_bytes = parts[3]
+            genotype_bytes = parts[-1]
             total_variants += 1
             orientation_qc["total_sites"] += 1
             observed_chrom = observed_chrom or row_chrom
@@ -516,7 +567,7 @@ def parse_genotypes_carrier_sets(
 
             if pos <= 0:
                 _fail(f"Invalid genomic position at {row_chrom}:{pos_s}")
-            if pos < prev_pos:
+            if pos < prev_pos or (source_minor and pos == prev_pos):
                 _fail(
                     f"Input rare VCF not sorted at {row_chrom}:{pos} after {prev_pos}"
                 )
@@ -527,6 +578,40 @@ def parse_genotypes_carrier_sets(
                 chrom_min_pos = pos
             if chrom_max_pos is None or pos > chrom_max_pos:
                 chrom_max_pos = pos
+
+            if source_minor:
+                rare_code = parts[3]
+                if rare_code not in {b"0", b"1"}:
+                    _fail(f"Invalid INFO/RARE_ALLELE at {row_chrom}:{pos}: {rare_code!r}")
+                # GT:RD is exactly five bytes; incomplete GT requires missing RD.
+                fixed_width = b"\t" + genotype_bytes
+                if len(fixed_width) != 6 * len(selected_samples):
+                    _fail(f"Malformed source_minor GT:RD width at {row_chrom}:{pos}")
+                records = np.frombuffer(fixed_width, dtype=np.uint8).reshape(len(selected_samples), 6)
+                alleles = records[:, (1, 3)]
+                if (not np.all(records[:, 0] == ord("\t"))
+                        or not np.all(np.isin(records[:, 2], [ord("/"), ord("|")]))
+                        or not np.all(records[:, 4] == ord(":"))
+                        or not np.all(np.isin(alleles, [ord("0"), ord("1"), ord(".")]))):
+                    _fail(f"Invalid diploid biallelic GT:RD at {row_chrom}:{pos}")
+                called = alleles != ord(".")
+                complete = np.all(called, axis=1)
+                dose_bytes = records[:, 5]
+                expected = np.count_nonzero(alleles == rare_code[0], axis=1)
+                if (not np.all(dose_bytes[~complete] == ord("."))
+                        or not np.all(dose_bytes[complete] == expected[complete] + ord("0"))):
+                    _fail(f"FORMAT/RD disagrees with GT and RARE_ALLELE at {row_chrom}:{pos}")
+                orientation_qc["source_ref_sites" if rare_code == b"0" else "source_alt_sites"] += 1
+                orientation_qc["partially_missing_genotypes"] += int(np.count_nonzero(called.sum(axis=1) == 1))
+                orientation_qc["incomplete_genotypes_excluded"] += int(np.count_nonzero(~complete))
+                carriers = frozenset(map(int, np.flatnonzero(complete & (expected > 0))))
+                if site_callback is not None:
+                    site_callback(pos, carriers)
+                if carriers:
+                    total_with_any_carrier += 1
+                if len(carriers) >= 2:
+                    variants.append((pos, carriers))
+                continue
 
             # Diploid autosomal GTs are exactly three bytes (0/0, 0|1, ./.)
             # separated by tabs. The fixed-width view avoids creating billions
@@ -577,6 +662,18 @@ def parse_genotypes_carrier_sets(
     finally:
         if temp_samples is not None:
             Path(temp_samples.name).unlink(missing_ok=True)
+        # A failed observer/resource guard must not leave bcftools blocked
+        # writing to a pipe whose consumer has stopped.
+        if sys.exc_info()[0] is not None and hasattr(proc, "poll"):
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+            proc.stdout.close()
+            proc.stderr.close()
 
     proc.stdout.close()
     stderr = proc.stderr.read().decode("utf-8", errors="replace")
@@ -981,21 +1078,13 @@ def detect_pairwise_segments_direct(chrom, variants, selected_samples,
         "end_pos": np.asarray(out_end, dtype=np.int64),
         "length_bp": np.asarray(out_length, dtype=np.int64),
         "n_shared_variants": np.asarray(out_n_shared, dtype=np.int64),
-        # Constant 1.0 by design — NOT a placeholder.
-        #
-        # The Jaccard index of a *segment* (a maximal run of shared rare-
-        # variant positions for one sample pair) is trivially 1 by
-        # construction: the segment IS the intersection of the two carrier
-        # sets restricted to that run, so |A ∩ B| / |A ∪ B| = n_shared /
-        # n_shared = 1.  Reporting it per row keeps the schema stable for
-        # downstream consumers (M16, M16.5, audits) and lets future
-        # producers that compute a different per-segment similarity
-        # (e.g. weighted Jaccard over MAF) populate the same column
-        # without a schema migration.
-        #
-        # Genuine pair-level Jaccard (intersection / union of carrier
-        # variant sets across the whole window) is reported by
-        # ``compute_sharing_windows`` and the per-pair aggregates.
+        # Campo histórico constante para conservar el esquema de salida.
+        # Se obtiene después de seleccionar sólo coincidencias; NO mide
+        # intersección/unión sobre todas las variantes del intervalo. Su
+        # promedio por pareja tampoco aporta una similitud informativa.
+        # El Jaccard de portación se calcula por separado en
+        # ``compute_sharing_windows``. No cambiar aquí los valores de las
+        # salidas históricas ni usarlos como evidencia de identidad perfecta.
         "jaccard": np.ones(n_segs, dtype=np.float64),
     }, columns=PAIRWISE_SEGMENT_COLUMNS)
 
@@ -2077,6 +2166,7 @@ def scan_mode(args):
         _fail("scan mode requires --input and --chr")
 
     validate_input_schema(args.input, args.input_format)
+    source_contract = read_source_minor_contract(args.input, args.carrier_allele_mode)
     header_samples = _read_header_samples(args.input)
     if args.carrier_allele_mode == "minor_allele":
         if not args.canonical_summary:
@@ -2223,7 +2313,8 @@ def scan_mode(args):
         "n_shared_carrier_variants": len(variants),
         "n_samples": len(selected_samples),
         "carrier_allele_mode": args.carrier_allele_mode,
-        "orientation_universe": "selected_samples",
+        "orientation_universe": "source_cohort" if source_contract else "selected_samples",
+        **({"source_rare_contract": source_contract} if source_contract else {}),
         "orientation_qc": orientation_qc,
         "selected_samples": selected_samples,
         "ordered_samples": all_samples_ordered,
@@ -2416,6 +2507,16 @@ def aggregate_mode(args):
     }
     if len(carrier_modes) != 1:
         _fail(f"Per-chromosome summaries mix carrier allele modes: {sorted(carrier_modes)}")
+    source_contract = None
+    if carrier_modes == {"source_minor"}:
+        contracts = [summary.get("source_rare_contract") for summary in chr_summaries]
+        if any(not isinstance(contract, dict) or contract.get("contract") != "minor_v1"
+               or not re.fullmatch(r"[0-9a-f]{64}", str(contract.get("cohort_sha256", "")))
+               for contract in contracts):
+            _fail("source_minor summaries require authenticated source-cohort metadata")
+        if any(contract != contracts[0] for contract in contracts[1:]):
+            _fail("Per-chromosome source_minor summaries mix source cohorts/contracts")
+        source_contract = contracts[0]
     sample_counts = {int(summary["n_samples"]) for summary in chr_summaries}
     if len(sample_counts) != 1:
         _fail(f"Per-chromosome summaries mix cohort sizes: {sorted(sample_counts)}")
@@ -2551,6 +2652,8 @@ def aggregate_mode(args):
     # ---- Global JSON summary --------------------------------------------
     global_summary = {
         "carrier_allele_mode": next(iter(carrier_modes)),
+        **({"orientation_universe": "source_cohort", "source_rare_contract": source_contract}
+           if source_contract else {}),
         "n_chromosomes_analyzed": len(chr_summaries),
         "chromosomes": [s["chrom"] for s in chr_summaries],
         "n_samples": len(all_samples_universe),

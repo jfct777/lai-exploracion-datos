@@ -1,0 +1,5 @@
+FROM us-central1-docker.pkg.dev/uspbr-242713/dnabr-lai/dnabr-qc@sha256:883fdadc1f951edc335c1f394d5a00958411dcd04a95d65334c6ce80e7b5d53d
+
+# Lectura/escritura VCF/BCF por HTSlib; conserva también el entorno M14 existente.
+RUN python3 -m pip install --no-cache-dir --break-system-packages pysam==0.23.3 \
+    && python3 -c "import pysam; assert pysam.__version__ == '0.23.3'"
