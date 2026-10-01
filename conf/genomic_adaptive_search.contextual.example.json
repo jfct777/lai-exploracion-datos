@@ -1,0 +1,59 @@
+{
+  "schema": "genomic-adaptive-search/2",
+  "campaign_id": "REPLACE_WITH_FROZEN_CONTEXTUAL_CAMPAIGN_ID",
+  "scope": "DEVELOPMENT",
+  "max_recipes": 24,
+  "startup_trials": 12,
+  "sampler_seed": 20260930,
+  "training_seeds": [],
+  "pruning": "none",
+  "search_space": {
+    "common_radius_cm": [0.05, 0.2, 1.0],
+    "rare_radius_cm": [0.05, 0.2, 1.0],
+    "width": [32, 64],
+    "depth": [1, 2, 3],
+    "heads": [2, 4, 8],
+    "dropout": [0.0, 0.1, 0.2],
+    "learning_rate": {"low": 0.0001, "high": 0.001, "log": true}
+  },
+  "provenance": {
+    "dataset_sha256": "REQUIRED",
+    "split_manifest_sha256": "REQUIRED",
+    "feature_contract_sha256": "REQUIRED",
+    "trainer_code_sha256": "REQUIRED",
+    "container_digest": "sha256:REQUIRED",
+    "development_only_audit_sha256": "REQUIRED"
+  },
+  "objectives": {
+    "structure": {
+      "families": ["structure_deep_sets", "structure_local_attention"],
+      "primary_metric": "macro_mse",
+      "secondary_metrics": ["macro_mae"],
+      "evaluation_unit": "component_macro",
+      "fixed_config": {"network_spec": "REQUIRED", "optimizer": "REQUIRED", "batch_size": "REQUIRED"},
+      "checkpoint_step": null,
+      "arm_input_sha256": {"NONE": "REQUIRED", "RARE": "REQUIRED"},
+      "range_rationale": "PROPOSED, NOT RUNNABLE: engineering ranges, not biological optima. Freeze chromosome sets, family-aware development, common context and quantity controls. common_radius_cm describes common context; rare_radius_cm constrains rare-event attention and is null for Deep Sets. Depth/dropout and conditional heads/radius are sampled from startup, not a curve-driven stage. Extra compute is not authorized by this template.",
+      "folds": [
+        {"id": "dev0", "fit_groups_sha256": "REQUIRED", "development_groups_sha256": "REQUIRED", "query_sha256": "REQUIRED", "truth_sha256": "REQUIRED", "n_evaluated": null},
+        {"id": "dev1", "fit_groups_sha256": "REQUIRED", "development_groups_sha256": "REQUIRED", "query_sha256": "REQUIRED", "truth_sha256": "REQUIRED", "n_evaluated": null},
+        {"id": "dev2", "fit_groups_sha256": "REQUIRED", "development_groups_sha256": "REQUIRED", "query_sha256": "REQUIRED", "truth_sha256": "REQUIRED", "n_evaluated": null}
+      ]
+    },
+    "lai": {
+      "families": ["lai_cnn", "lai_local_attention"],
+      "primary_metric": "one_minus_boundary_f1_0p2cm",
+      "secondary_metrics": ["log_loss", "brier", "mae_AFR", "mae_EUR", "mae_NAM"],
+      "evaluation_unit": "donor_macro",
+      "fixed_config": {"network_spec": "REQUIRED", "optimizer": "REQUIRED", "batch_size": "REQUIRED", "query_max_gap_cm": "REQUIRED"},
+      "checkpoint_step": null,
+      "arm_input_sha256": {"NONE": "REQUIRED", "RARE": "REQUIRED"},
+      "range_rationale": "PROPOSED, NOT RUNNABLE: freeze allele support, common context, identical reference sets and donor-disjoint development. common_radius_cm and rare_radius_cm are separate genetic neighborhoods, neither query spacing nor boundary scoring tolerance. CNN uses a rare neighborhood per query without heads; attention uses conditional heads. No training, resource authorization or safety guard is supplied by this template.",
+      "folds": [
+        {"id": "dev0", "fit_groups_sha256": "REQUIRED", "development_groups_sha256": "REQUIRED", "query_sha256": "REQUIRED", "truth_sha256": "REQUIRED", "n_evaluated": null},
+        {"id": "dev1", "fit_groups_sha256": "REQUIRED", "development_groups_sha256": "REQUIRED", "query_sha256": "REQUIRED", "truth_sha256": "REQUIRED", "n_evaluated": null},
+        {"id": "dev2", "fit_groups_sha256": "REQUIRED", "development_groups_sha256": "REQUIRED", "query_sha256": "REQUIRED", "truth_sha256": "REQUIRED", "n_evaluated": null}
+      ]
+    }
+  }
+}

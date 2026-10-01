@@ -24,7 +24,7 @@ DEFAULT_NETWORKS = ("L250000_G50000_N20_T250000_U0", "L250000_G50000_N20_T500000
 REQUIRED = ("graph_nodes.tsv", "graph_edges.tsv.gz", "graph_summary.json",
             "leiden_assignments.tsv", "resolution_summary.tsv",
             "leiden_ari_by_resolution.tsv", "leiden_modularity.tsv")
-SCOPE = ("Resultado descriptivo de chr22; comunidades del grafo, no poblaciones "
+SCOPE = ("Resultado descriptivo de compartición rara; comunidades del grafo, no poblaciones "
          "validadas ni ancestrías. Las semillas miden variabilidad algorítmica.")
 
 
@@ -51,6 +51,13 @@ def keyed_resolution(rows, name):
     return result
 
 
+def chromosome_label(value):
+    chromosomes = value.get("chromosomes", ["22"])
+    require(chromosomes == ["22"] or chromosomes == [str(c) for c in range(1, 23)],
+            "Unsupported or incomplete chromosome scope")
+    return "chr22" if chromosomes == ["22"] else "22 autosomas (chr1–chr22)"
+
+
 def load_results(results_dir):
     """Authenticate files and reconcile graph, assignments and 42 plot rows.
 
@@ -59,15 +66,26 @@ def load_results(results_dir):
     """
     root = Path(results_dir)
     graphs, plot_rows, hashes = [], [], {}
-    canonical_samples, source_hashes, core_hash = None, None, None
+    canonical_samples, source_hashes, core_hash, canonical_chromosomes = None, None, None, None
     for length, threshold in GRID:
         config_id = f"L{length}_G50000_N20_T{threshold}_U0"
         directory = root / config_id
         require(directory.is_dir(), f"Missing graph directory: {config_id}")
         manifest = json.loads((directory / "manifest.json").read_text())
         hashes[f"{config_id}/manifest.json"] = sha256(directory / "manifest.json")
-        require(manifest["status"] == "COMPLETE_DESCRIPTIVE" and manifest["chromosome"] == "22",
-                "Input graph is not a completed descriptive chr22 result")
+        chromosomes = manifest.get("chromosomes", [manifest["chromosome"]])
+        chromosome_label(dict(chromosomes=chromosomes))
+        expected_scope = "22" if chromosomes == ["22"] else "autosomes_1_22"
+        require(manifest["status"] == "COMPLETE_DESCRIPTIVE" and manifest["chromosome"] == expected_scope,
+                "Input graph is not a completed descriptive result with a valid chromosome scope")
+        if expected_scope != "22":
+            aggregation_sha = manifest.get("aggregation_receipt_sha256")
+            require(isinstance(aggregation_sha, str) and re.fullmatch(r"[0-9a-f]{64}", aggregation_sha)
+                    and manifest["source_sha256"].get("autosomal_aggregation") == aggregation_sha,
+                    "Missing authenticated autosomal aggregation")
+        if canonical_chromosomes is None:
+            canonical_chromosomes = chromosomes
+        require(chromosomes == canonical_chromosomes, "Graphs differ in chromosome coverage")
         plan = manifest["configuration"]
         require(plan == dict(length_bp=length, min_edge_bp=threshold, gap_bp=50000,
                             min_shared=20, min_shared_effective=20, min_max_segment_bp=0,
@@ -151,10 +169,10 @@ def load_results(results_dir):
                                   percent_assigned=100*assigned/n,
                                   **{k: float(ari[k]) for k in ("median_ari", "q25_ari", "q75_ari", "min_ari", "max_ari")}))
             labels_by_gamma[gamma] = labels
-        graphs.append(dict(config_id=config_id, length_bp=length, threshold_bp=threshold,
+        graphs.append(dict(config_id=config_id, length_bp=length, threshold_bp=threshold, chromosomes=chromosomes,
                            n_cohort=n, n_active=sum(active), edges=edges, active=active,
                            labels=labels_by_gamma))
-    return dict(graphs=graphs, rows=plot_rows, n_cohort=len(canonical_samples),
+    return dict(graphs=graphs, rows=plot_rows, n_cohort=len(canonical_samples), chromosomes=canonical_chromosomes,
                 input_sha256=hashes, source_sha256=source_hashes, core_sha256=core_hash)
 
 
@@ -190,7 +208,7 @@ def shared_layout(data, seed, iterations):
 def describe(output, stem, text):
     (output / f"{stem}.descripcion.md").write_text(
         f"# {stem}\n\n{text}\n\n{SCOPE}\n\n"
-        "Fuente: etapa 08_M16_5_barrido_de_03, resultados guardados y hashes en manifest.json. "
+        "Fuente: resultados guardados, alcance cromosómico y hashes en manifest.json. "
         "Sin genotipos nuevos, reclustering, inferencia de ancestría ni selección de óptimo.\n", encoding="utf-8")
 
 
@@ -225,7 +243,7 @@ def summary_figures(data, output, prefix, dpi):
                 ax.text(j, i, format(value, formatting), ha="center", va="center", fontsize=9,
                         color="white" if values[i,j] < (lower+limit)/2 else "#202020")
         fig.colorbar(im, ax=ax, fraction=.022, pad=.015)
-    fig.suptitle(f"M16.5 · resultado descriptivo de chr22 · N={data['n_cohort']}\n"
+    fig.suptitle(f"M16.5 · resultado descriptivo de {chromosome_label(data)} · N={data['n_cohort']}\n"
                  "G=50 kb · N mínimo=20 · U=0 · no selección de óptimo", fontsize=15)
     save_figure(fig, output, prefix+"A_resumen_42", dpi,
                 "Cada celda es un grafo/resolución observado. Filas: longitud mínima M14 L y suma mínima por pareja T. "
@@ -245,7 +263,7 @@ def summary_figures(data, output, prefix, dpi):
         ax.text(.02,.03,f"Activos: {graph['n_active']}/{graph['n_cohort']}\n25 semillas; 300 comparaciones dependientes",
                 transform=ax.transAxes, fontsize=8)
     axes.flat[0].legend(loc="upper right", fontsize=8)
-    fig.suptitle("Estabilidad algorítmica · chr22\nLa banda es IQR entre comparaciones, no intervalo de confianza biológico", fontsize=14)
+    fig.suptitle(f"Estabilidad algorítmica · {chromosome_label(data)}\nLa banda es IQR entre comparaciones, no intervalo de confianza biológico", fontsize=14)
     save_figure(fig, output, prefix+"B_estabilidad", dpi,
                 "Seis paneles con escalas iguales. Punto/línea: ARI mediano; banda: cuartiles25–75 de las "
                 "300 comparaciones entre25 semillas sobre nodos activos, antes de filtrar grupos<3. "
@@ -264,7 +282,7 @@ def summary_figures(data, output, prefix, dpi):
         left += values
     ax.set_yticks(range(6), labels); ax.invert_yaxis(); ax.set_xlim(0,data["n_cohort"])
     ax.set_xlabel(f"Personas; denominador común = {data['n_cohort']}")
-    ax.set_title("Cobertura de la cohorte · gamma=1 · resultado descriptivo de chr22", loc="left", fontsize=14)
+    ax.set_title(f"Cobertura de la cohorte · gamma=1 · resultado descriptivo de {chromosome_label(data)}", loc="left", fontsize=14)
     ax.legend(loc="upper center", bbox_to_anchor=(.5,-.13), ncol=3, fontsize=9)
     save_figure(fig, output, prefix+"C_cobertura_gamma1", dpi,
                 "Barras apiladas de conteos, todas con el mismo denominador. Azul: asignados a grupos≥3; "
@@ -342,7 +360,7 @@ def network_figures(data, output, prefix, dpi, positions, shown, limits, selecti
                 ax_sizes.spines["left"].set_visible(False)
                 ax.set_xlim(limits[:2]); ax.set_ylim(limits[2:]); ax.set_aspect("equal"); ax.axis("off")
                 omitted = data["n_cohort"]-len(shown)
-                fig.suptitle(f"Resultado descriptivo de chr22 · {graph_label(graph)} · gamma={gamma:g}\n"
+                fig.suptitle(f"Resultado descriptivo de {chromosome_label(graph)} · {graph_label(graph)} · gamma={gamma:g}\n"
                              f"G=50 kb · N mínimo=20 · U=0 · cohorte={graph['n_cohort']} · activos={graph['n_active']} · asignados={assigned.size}\n"
                              f"{len(sizes)} comunidades ≥3 · {len(graph['edges'])} aristas dibujadas completas",
                              fontsize=12,y=.975)
@@ -407,7 +425,8 @@ def run(results_dir, output_dir, prefix="M16_5_chr22__A01__09", dpi=300,
     for name,expected in data["input_sha256"].items():
         require(sha256(Path(results_dir)/name)==expected,"Source changed during rendering")
     versions={name:importlib.metadata.version(name) for name in ("numpy","matplotlib","igraph")}
-    result=dict(status="COMPLETE_FIGURES_FROM_SAVED_PARTITIONS",source_stage="08_M16_5_barrido_de_03",
+    result=dict(status="COMPLETE_FIGURES_FROM_SAVED_PARTITIONS",source_stage="authenticated_saved_sweep",
+        chromosomes=data["chromosomes"],
         n_graphs=6,n_resolutions=7,n_cells=42,n_network_figures=len(selection),
         n_png=3+len(selection),n_pdf=4+len(selection),n_descriptions=3+len(selection),
         n_cohort=data["n_cohort"],n_union_active=len(shown),n_union_isolated=data["n_cohort"]-len(shown),

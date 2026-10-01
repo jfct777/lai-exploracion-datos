@@ -267,9 +267,9 @@ def render_projection(core, matrix, coordinates, labels, graph, diagnostic, sett
     import numpy as np
     n = len(labels); assigned = int((labels >= 0).sum())
     gamma=diagnostic['resolution']
-    title = (f"Resultado descriptivo de chr22 · {saved.graph_label(graph)} · gamma = {gamma:g}\n"
+    title = (f"Resultado descriptivo de {saved.chromosome_label(graph)} · {saved.graph_label(graph)} · gamma = {gamma:g}\n"
              f"G = 50 kb · N = 20 · U = 0 · cohorte: {n} · activos: {graph['n_active']} · asignados: {assigned}")
-    note = ("Reproducción visual histórica: 15 dimensiones espectrales → UMAP; 15 vecinos, min_dist = 0,3, semilla = 42.\n"
+    note = ("Proyección descriptiva: 15 dimensiones espectrales → UMAP; 15 vecinos, min_dist = 0,3, semilla = 42.\n"
             f"Componentes con aristas: {diagnostic['n_connected_components_active']}; modos calculados λ≈1: {diagnostic['n_modes_lambda_near_one']}/{diagnostic['n_spectral_actual']}. "
             f"Aislados: {diagnostic['n_isolated']}, incluidos pero sin posición informativa.\n"
             "Mismas coordenadas entre resoluciones de un grafo, independientes entre grafos. Distancias entre islas no son distancias genéticas.\n"
@@ -317,6 +317,7 @@ def render_projection(core, matrix, coordinates, labels, graph, diagnostic, sett
             "Cada número tras una categoría es la cantidad de personas de esa categoría dentro del grupo; todos suman n del grupo, incluidos los datos faltantes si los hubiera. "
             "Una categoría puede pertenecer a varias comunidades. No representa ancestría ni asignación uno a uno. "
             "Sólo se amplía el espacio de leyenda y el lienzo cuando hace falta; no se recalculan ni alteran las coordenadas. ")
+    description = f"Alcance: {saved.chromosome_label(graph)}. " + description
     (output/f"{stem}.descripcion.md").write_text(description+"\n",encoding="utf-8")
 
 
@@ -459,6 +460,8 @@ def run(results_dir, output_dir, parameters_json=None, metadata_file=None,
             reused_config_ids=coordinate_source['reused'])
     (output/"diagnostics.json").write_text(json.dumps(diagnostics,indent=2,allow_nan=False)+"\n")
     manifest=dict(status="COMPLETE_HISTORICAL_VISUAL_REPRODUCTION",parameters=settings,
+        chromosomes=data["chromosomes"],
+        status_semantics="Historical spectral/UMAP procedure reused on the chromosomes explicitly listed; not a claim that input results are historical",
         no_reclustering=True,no_new_genotypes=True,no_threshold_changes=True,no_subsampling=True,no_umap_fallback=True,
         bitwise_reproducibility_claimed=False,coordinate_artifacts_persisted=True,
         reproducibility_note="Fixed seed does not uniquely fix degenerate spectral bases or UMAP spectral initialization; saved private coordinates preserve the realized layout.",

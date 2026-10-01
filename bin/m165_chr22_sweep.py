@@ -106,7 +106,34 @@ def write_pairs(path, rows):
                 writer.writerows(rows)
 
 
-def prepare(pair_summary, configuration_summary, sample_ids, output, settings):
+def validate_chromosomes(chromosomes):
+    """Only the historical chr22 or the complete autosomal panel is supported."""
+    require(isinstance(chromosomes, list) and all(type(c) is str for c in chromosomes),
+            "Chromosomes must be an explicit list of strings")
+    require(chromosomes == ["22"] or chromosomes == [str(c) for c in range(1, 23)],
+            "Expected chr22 or all 22 autosomes in order")
+    return "22" if chromosomes == ["22"] else "autosomes_1_22"
+
+
+def prepare(pair_summary, configuration_summary, sample_ids, output, settings,
+            chromosomes=None, aggregation_receipt=None):
+    chromosomes = ["22"] if chromosomes is None else chromosomes
+    scope = validate_chromosomes(chromosomes)
+    aggregation_sha = None
+    if scope != "22":
+        require(aggregation_receipt is not None, "Autosomes require an aggregation receipt")
+        aggregation = json.loads(Path(aggregation_receipt).read_text())
+        require(aggregation.get("status") == "COMPLETE_AUTOSOMAL_AGGREGATION"
+                and aggregation.get("chromosomes") == chromosomes
+                and aggregation.get("sample_ids_sha256") == sha256(sample_ids),
+                "Autosomal aggregation cohort/scope mismatch")
+        for name, path in (("pair_configuration_summary.tsv.gz", pair_summary),
+                           ("configuration_summary.tsv", configuration_summary)):
+            require(aggregation["outputs_sha256"].get(name) == sha256(path),
+                    "Autosomal aggregate hash mismatch")
+        aggregation_sha = sha256(aggregation_receipt)
+    else:
+        require(aggregation_receipt is None, "Historical chr22 does not accept an autosomal receipt")
     plans = validate_settings(settings)
     output = Path(output)
     require(not output.exists(), "Preparation destination already exists")
@@ -158,6 +185,8 @@ def prepare(pair_summary, configuration_summary, sample_ids, output, settings):
     input_hashes = {"pair_configuration_summary": source_sha,
                     "configuration_summary": sha256(configuration_summary),
                     "sample_ids": sha256(sample_ids)}
+    if aggregation_sha:
+        input_hashes["autosomal_aggregation"] = aggregation_sha
     output.mkdir(parents=True, exist_ok=False)
     for plan in plans:
         folder = output / plan["config_id"]
@@ -166,7 +195,8 @@ def prepare(pair_summary, configuration_summary, sample_ids, output, settings):
         with (folder / "samples.txt").open("x", encoding="utf-8") as handle:
             handle.write("\n".join(samples) + "\n")
         payload = {"schema_version": 1, "status": "PREPARED_AGGREGATE_PARITY",
-                   "chromosome": "22", "configuration": plan,
+                   "chromosome": scope, "chromosomes": chromosomes, "configuration": plan,
+                   "aggregation_receipt_sha256": aggregation_sha,
                    "settings": {k: v for k, v in settings.items() if k != "configurations"},
                    "source_totals": totals[plan["source_config_id"]],
                    "source_sha256": input_hashes,
@@ -174,6 +204,7 @@ def prepare(pair_summary, configuration_summary, sample_ids, output, settings):
                    "contains_individual_identifiers": True, "public_distribution_allowed": False}
         write_json(folder / "input_manifest.json", payload)
     receipt = {"status": "PREPARED", "n_configurations": len(plans),
+               "chromosomes": chromosomes, "aggregation_receipt_sha256": aggregation_sha,
                "n_source_configurations": len(source_ids), "rows_scanned": scanned,
                "source_sha256": input_hashes, "source_totals": totals,
                "adapter_sha256": sha256(__file__)}
@@ -190,8 +221,14 @@ def run(configuration_dir, output, core_script):
     configuration_dir, output = Path(configuration_dir), Path(output)
     require(not output.exists(), "Graph destination already exists")
     manifest = json.loads((configuration_dir / "input_manifest.json").read_text())
-    require(manifest["status"] == "PREPARED_AGGREGATE_PARITY" and manifest["chromosome"] == "22",
+    chromosomes = manifest.get("chromosomes", [manifest["chromosome"]])
+    scope = validate_chromosomes(chromosomes)
+    require(manifest["status"] == "PREPARED_AGGREGATE_PARITY" and manifest["chromosome"] == scope,
             "Wrong prepared-input contract")
+    if scope != "22":
+        require(isinstance(manifest.get("aggregation_receipt_sha256"), str)
+                and len(manifest["aggregation_receipt_sha256"]) == 64,
+                "Missing authenticated autosomal aggregation")
     for name, expected in manifest["prepared_sha256"].items():
         require(name in ("pairs.tsv.gz", "samples.txt") and
                 sha256(configuration_dir / name) == expected, "Prepared input hash mismatch")
@@ -259,13 +296,15 @@ def run(configuration_dir, output, core_script):
         except importlib.metadata.PackageNotFoundError:
             versions[package] = "unavailable"
     result = {"status": "COMPLETE_DESCRIPTIVE" if graph.ecount() else "COMPLETE_NO_EDGES",
-              "configuration": plan, "parameters": settings, "chromosome": "22",
+              "configuration": plan, "parameters": settings, "chromosome": scope,
+              "chromosomes": chromosomes,
+              "aggregation_receipt_sha256": manifest.get("aggregation_receipt_sha256"),
               "n_cohort": len(samples), "n_active": int(active.sum()), "n_edges": graph.ecount(),
               "input_manifest_sha256": sha256(configuration_dir / "input_manifest.json"),
               "source_sha256": manifest["source_sha256"], "adapter_sha256": sha256(__file__),
               "core_sha256": sha256(core_script), "package_versions": versions,
               "contains_individual_identifiers": True, "public_distribution_allowed": False,
-              "scope": "Unphased rare co-sharing, chr22, transductive and descriptive; not validated populations, IBD, LAI or supervised targets",
+              "scope": f"Unphased rare co-sharing, {scope}, transductive and descriptive; not validated populations, IBD, LAI or supervised targets",
               "no_nmf": True, "no_founder_classification": True, "no_confirmatory_pvalues": True,
               "quality_semantics": "rb_quality selects representative within fixed graph and resolution only; scores do not select resolution",
               "consensus_semantics": "coassignment frequencies across algorithmic seeds, not ancestry probabilities",
@@ -280,13 +319,16 @@ def main(argv=None):
     preparation = sub.add_parser("prepare")
     for name in ("pair-summary", "configuration-summary", "sample-ids", "output", "settings-base64"):
         preparation.add_argument("--" + name, required=True)
+    preparation.add_argument("--chromosomes", default="22")
+    preparation.add_argument("--aggregation-receipt")
     execution = sub.add_parser("run")
     for name in ("configuration-dir", "output", "core-script"):
         execution.add_argument("--" + name, required=True)
     args = parser.parse_args(argv)
     if args.mode == "prepare":
         settings = json.loads(base64.b64decode(args.settings_base64, validate=True))
-        result = prepare(args.pair_summary, args.configuration_summary, args.sample_ids, args.output, settings)
+        result = prepare(args.pair_summary, args.configuration_summary, args.sample_ids, args.output, settings,
+                         args.chromosomes.split(","), args.aggregation_receipt)
     else:
         result = run(args.configuration_dir, args.output, args.core_script)
     print(json.dumps({k: result[k] for k in ("status", "n_configurations", "n_cohort", "n_edges") if k in result}))

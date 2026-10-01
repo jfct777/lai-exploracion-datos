@@ -4,6 +4,7 @@ import groovy.json.JsonOutput
 
 include { SMOKE_TEST } from './modules/00_smoke_test'
 include { PREPROCESS_NORM_LEFTALIGN } from './modules/01_preprocess_norm_leftalign'
+include { PREPROCESS_NORM_LEFTALIGN_CHECKPOINTED } from './modules/01_preprocess_checkpointed'
 include { PREPROCESS_FILTER_SNV_BIALLELIC_PASS } from './modules/02_preprocess_filter_snv_biallelic_pass'
 include { LAI_RARE_BIALELIC_ONLY } from './modules/lai_rare_bialelic_only'
 include { VALIDATED_RARE_INPUT; discoverLaiRareVcfs; rareUnsupportedConsumers; validateRareGenotypeOptions } from './modules/02_1_VALIDATE_RARE_CONSUMERS'
@@ -546,10 +547,18 @@ workflow {
     // -----------------------------------------------------------------------
     def ch_norm_vcfs
     if( do_norm ) {
-        def (_ch_norm, _ch_norm_logs) = PREPROCESS_NORM_LEFTALIGN(
-            ch_vcfs.combine(ch_ref), file("${projectDir}/bin/mark_original_alleles.py")
-        )
-        ch_norm_vcfs = _ch_norm
+        if (params.preprocess_checkpointed_m01 == true) {
+            def (_ch_norm, _ch_norm_logs) = PREPROCESS_NORM_LEFTALIGN_CHECKPOINTED(
+                ch_vcfs.combine(ch_ref), file("${projectDir}/bin/mark_original_alleles.py"),
+                file("${projectDir}/bin/preprocess_storage_guard.py")
+            )
+            ch_norm_vcfs = _ch_norm
+        } else {
+            def (_ch_norm, _ch_norm_logs) = PREPROCESS_NORM_LEFTALIGN(
+                ch_vcfs.combine(ch_ref), file("${projectDir}/bin/mark_original_alleles.py")
+            )
+            ch_norm_vcfs = _ch_norm
+        }
     } else if( do_filter ) {
         // 02 needs norm VCFs but 01 is skipped → discover from outdir
         ch_norm_vcfs = discoverNormVcfs(params.outdir)

@@ -146,6 +146,10 @@ def parse_args():
                              "and produces one painting per window.")
     parser.add_argument("--window-size-bp", type=int, default=500000)
     parser.add_argument("--step-size-bp", type=int, default=250000)
+    parser.add_argument("--skip-windows", type=_parse_bool, default=False,
+                        help="If true, omit the legacy sharing-window calculation. "
+                             "Direct segments are unchanged; the window TSV contains "
+                             "only its header and the summary marks windows NOT_COMPUTED.")
     parser.add_argument("--min-shared-variants", type=int, default=2)
     parser.add_argument("--min-jaccard", type=float, default=0.05)
     parser.add_argument("--max-gap-bp", type=int, default=500000)
@@ -446,15 +450,16 @@ def load_and_validate_canonical_summary(path, chrom, args):
 
     canonical_params = summary.get("parameters_used", {})
     checks = {
-        "window_size_bp": int(args.window_size_bp),
-        "step_size_bp": int(args.step_size_bp),
         "min_shared_variants": int(args.min_shared_variants),
-        "min_jaccard": float(args.min_jaccard),
         "max_gap_bp": int(args.max_gap_bp),
         "min_segment_bp": int(args.min_segment_bp),
     }
+    if not getattr(args, "skip_windows", False):
+        checks.update(window_size_bp=int(args.window_size_bp),
+                      step_size_bp=int(args.step_size_bp),
+                      min_jaccard=float(args.min_jaccard))
     for key, current in checks.items():
-        if key not in canonical_params:
+        if canonical_params.get(key) is None:
             _fail(f"Canonical summary lacks load-bearing parameter {key!r}")
         canonical = type(current)(canonical_params[key])
         if canonical != current:
@@ -2237,11 +2242,18 @@ def scan_mode(args):
         n_jobs=args.n_jobs,
     )
 
-    window_df = compute_sharing_windows(
-        chrom_key, variants, selected_samples,
-        args.window_size_bp, args.step_size_bp,
-        args.min_shared_variants, args.min_jaccard,
-    )
+    skip_windows = bool(getattr(args, "skip_windows", False))
+    if skip_windows:
+        window_df = pd.DataFrame(columns=SHARING_WINDOW_COLUMNS)
+        _log(f"{chrom_label}: --skip-windows=true; legacy sharing windows NOT_COMPUTED")
+    else:
+        window_df = compute_sharing_windows(
+            chrom_key, variants, selected_samples,
+            args.window_size_bp, args.step_size_bp,
+            args.min_shared_variants, args.min_jaccard,
+        )
+    # None means not evaluated, whereas 0 means an evaluated empty result.
+    n_windows = None if skip_windows else int(window_df.shape[0])
 
     all_samples_ordered = order_individuals_by_sharing(segment_df, selected_samples)
 
@@ -2319,17 +2331,20 @@ def scan_mode(args):
         "selected_samples": selected_samples,
         "ordered_samples": all_samples_ordered,
         "chrom_extent": [chrom_min_pos, chrom_max_pos],
-        "n_windows": int(window_df.shape[0]),
+        "n_windows": n_windows,
+        "windows_status": "NOT_COMPUTED" if skip_windows else "COMPUTED",
+        "segment_jaccard_status": "LEGACY_PLACEHOLDER_NOT_SIMILARITY",
         "n_sharing_pairs": n_sharing_pairs,
         "n_segments": int(segment_df.shape[0]),
         "total_shared_bp": total_shared_bp,
         "status": "analyzed" if not segment_df.empty else "no_sharing_detected",
         "parameters_used": {
             "input_format": args.input_format,
-            "window_size_bp": int(args.window_size_bp),
-            "step_size_bp": int(args.step_size_bp),
+            "skip_windows": skip_windows,
+            "window_size_bp": None if skip_windows else int(args.window_size_bp),
+            "step_size_bp": None if skip_windows else int(args.step_size_bp),
             "min_shared_variants": int(args.min_shared_variants),
-            "min_jaccard": float(args.min_jaccard),
+            "min_jaccard": None if skip_windows else float(args.min_jaccard),
             "max_gap_bp": int(args.max_gap_bp),
             "min_segment_bp": int(args.min_segment_bp),
             "plot_dpi": int(args.plot_dpi),
@@ -2350,7 +2365,7 @@ def scan_mode(args):
         "chrom": str(chrom_key),
         "n_samples": len(selected_samples),
         "n_rare_variants": len(variants),
-        "n_windows": int(window_df.shape[0]),
+        "n_windows": n_windows,
         "n_sharing_pairs": n_sharing_pairs,
         "n_segments": int(segment_df.shape[0]),
         "total_shared_bp": total_shared_bp,

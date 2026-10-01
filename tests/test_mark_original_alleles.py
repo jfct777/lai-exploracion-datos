@@ -1,5 +1,6 @@
 """Synthetic tests for pre-normalization site provenance; no human data used."""
 
+import argparse
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -7,6 +8,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "bin" / "mark_original_alleles.py"
@@ -23,6 +25,28 @@ def record(pos, alts=("T",), ref="C", chrom="chr22"):
 
 
 class SiteGroupingTests(unittest.TestCase):
+    def test_thread_budget_counts_python_and_htslib_io_threads(self):
+        expected = {1: (1, 1), 2: (1, 1), 3: (1, 2), 4: (1, 3),
+                    5: (2, 2), 6: (2, 3), 8: (3, 4)}
+        for budget, allocation in expected.items():
+            with self.subTest(budget=budget):
+                self.assertEqual(MARKER.io_thread_allocation(budget, True), allocation)
+        for compressed in (False, True):
+            for budget in range(1, 65):
+                reader, writer = MARKER.io_thread_allocation(budget, compressed)
+                self.assertLessEqual(1 + sum(n for n in (reader, writer) if n > 1), budget)
+                if not compressed:
+                    self.assertEqual(writer, 1)
+
+    def test_invalid_thread_budgets_are_rejected(self):
+        for value in (0, -1, 1.5, True, False, "2", None):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "integer >= 1"):
+                MARKER.io_thread_allocation(value, True)
+        for value in ("0", "-1", "1.5", "bad"):
+            with self.subTest(cli=value), self.assertRaises(argparse.ArgumentTypeError):
+                MARKER.positive_threads(value)
+        self.assertEqual(MARKER.positive_threads("6"), 6)
+
     def test_union_across_split_and_multiallelic_rows(self):
         rows = [record(10), record(10, ("A",)), record(10, ("T", "G")), record(20)]
         groups = list(MARKER.iter_site_groups(rows))
@@ -164,6 +188,116 @@ class VariantFileTests(unittest.TestCase):
                     MARKER.annotate(source, output)
                 self.assertFalse(output.exists())
 
+    def test_threaded_output_matches_copy_based_algorithm_exactly(self):
+        # Exercise missing alleles, phased and unphased GT, haploidy,
+        # triploidy, allele-specific fields and repeated original positions.
+        header = self.header()
+        header.info.add("FLAG", 0, "Flag", "Synthetic boolean INFO")
+        header.info.add("AF", "A", "Float", "Synthetic ALT frequencies")
+        header.info.add("TXT", 1, "String", "Synthetic annotation")
+        header.formats.add("PL", "G", "Integer", "Synthetic genotype likelihoods")
+        source_vcf = self.root / "adversarial.vcf"
+        records = [
+            "chr22\t10\trs1\tA\tG\t60\tPASS\tAC=1;AF=0.1;FLAG;TXT=gene\tGT:DP:AD:PL\t0|1:30:15,15:30,0,30\t./.:.:.,.:.,.,.\n",
+            "chr22\t10\t.\tA\tT\t.\tPASS\tAC=2;AF=0.2\tGT:DP:AD:PL\t1:20:0,20:40,0\t0/1/1:15:5,10:40,20,0,20\n",
+            "chr22\t20\t.\tG\tA,T\t99\tPASS\tAC=1,2;AF=0.1,0.2\tGT:DP:AD:PL\t2|1:12:0,6,6:40,30,20,10,0,10\t./2:8:0,0,8:.,.,.,.,.,.\n",
+            "chr22\t40\t.\tC\t<DEL>\t42\tPASS\tEND=45;AC=1\tGT:DP:AD:PL\t0/1:20:10,10:20,0,20\t0|.:5:5,0:.,.,.\n",
+        ]
+        source_vcf.write_text(str(header) + "".join(records))
+        for suffix in (".vcf", ".vcf.gz", ".bcf"):
+            source = self.root / ("input-adversarial" + suffix)
+            with pysam.VariantFile(str(source_vcf)) as reader:
+                with pysam.VariantFile(str(source), MARKER.output_mode(source),
+                                       header=reader.header) as writer:
+                    for row in reader:
+                        writer.write(row)
+            before = source.read_bytes()
+            expected = self.root / (suffix.replace(".", "_") + "-copy-reference.vcf")
+            # Reference implementation retains the original record.copy().
+            with pysam.VariantFile(str(source)) as reader:
+                output_header = MARKER.annotated_header(reader.header)
+                original_header = str(reader.header)
+                with pysam.VariantFile(str(expected), "w", header=output_header) as writer:
+                    for group in MARKER.iter_site_groups(reader):
+                        count = MARKER.site_allele_count(group)
+                        for row in group:
+                            copied = row.copy()
+                            copied.translate(output_header)
+                            copied.info["ORIG_NALLELES"] = count
+                            copied.info["ORIG_SITE"] = f"{row.contig}|{row.pos}"
+                            writer.write(copied)
+                self.assertEqual(str(reader.header), original_header)
+            expected_text = expected.read_text()
+            for out_suffix in (".vcf", ".vcf.gz", ".bcf"):
+                for threads in (1, 2, 3, 4, 5, 6, 8):
+                    with self.subTest(input=suffix, output=out_suffix, threads=threads):
+                        output = self.root / f"out-{suffix}-{threads}{out_suffix}"
+                        self.assertEqual(MARKER.annotate(source, output, threads=threads), (4, 3))
+                        with pysam.VariantFile(str(output)) as reader:
+                            observed_text = str(reader.header) + "".join(str(row) for row in reader)
+                        self.assertEqual(observed_text, expected_text)
+                        self.assertEqual(source.read_bytes(), before)
+
+    @unittest.skipUnless(Path("/proc/self/task").is_dir(), "Linux thread counters required")
+    def test_actual_bgzf_threads_do_not_exceed_total_budget(self):
+        source = self.root / "threads-input.bcf"
+        self.write_fixture(source)
+        original_groups = MARKER.iter_site_groups
+        for budget in (1, 2, 3, 4, 5, 6, 8):
+            baseline = len(list(Path("/proc/self/task").iterdir()))
+            observed = []
+
+            def inspect_threads(reader):
+                for group in original_groups(reader):
+                    observed.append(len(list(Path("/proc/self/task").iterdir())))
+                    yield group
+
+            with self.subTest(budget=budget), patch.object(
+                MARKER, "iter_site_groups", side_effect=inspect_threads
+            ):
+                MARKER.annotate(source, self.root / f"threads-{budget}.bcf", threads=budget)
+            self.assertTrue(observed)
+            self.assertLessEqual(max(observed) - baseline, budget - 1)
+
+    def test_invalid_budget_does_not_create_output(self):
+        source, output = self.root / "input.vcf", self.root / "output.bcf"
+        self.write_fixture(source)
+        with self.assertRaisesRegex(ValueError, "integer >= 1"):
+            MARKER.annotate(source, output, threads=0)
+        self.assertFalse(output.exists())
+
+    def test_undeclared_header_after_valid_row_is_rejected_with_threads(self):
+        source, output = self.root / "late-error.vcf", self.root / "late-error.bcf"
+        self.write_fixture(source)
+        source.write_text(source.read_text() +
+                          "chr22\t50\t.\tA\tT\t.\tPASS\tUNKNOWN=4\tGT\t0|1\t./.\n")
+        with self.assertRaisesRegex(ValueError, "undeclared info"):
+            MARKER.annotate(source, output, threads=6)
+        self.assertFalse(output.exists())
+
+    def test_threaded_reader_rejects_truncated_bgzf(self):
+        source, output = self.root / "truncated.bcf", self.root / "output.bcf"
+        self.write_fixture(source)
+        source.write_bytes(source.read_bytes()[:-28])  # Remove BGZF EOF block.
+        with self.assertRaises((ValueError, OSError)):
+            MARKER.annotate(source, output, threads=6)
+        self.assertFalse(output.exists())
+
+    def test_in_place_translation_does_not_change_reader_header(self):
+        source = self.root / "reader-header.vcf.gz"
+        self.write_fixture(source)
+        original_groups = MARKER.iter_site_groups
+
+        def check_reader_header(reader):
+            before = str(reader.header)
+            for group in original_groups(reader):
+                yield group
+                self.assertEqual(str(reader.header), before)
+                self.assertNotIn("ORIG_NALLELES", reader.header.info)
+
+        with patch.object(MARKER, "iter_site_groups", side_effect=check_reader_header):
+            MARKER.annotate(source, self.root / "header-checked.bcf", threads=6)
+
     def test_annotation_cannot_be_applied_twice(self):
         source, once, twice = (self.root / name for name in ("source.vcf", "once.bcf", "twice.vcf"))
         self.write_fixture(source)
@@ -223,6 +357,17 @@ class VariantFileTests(unittest.TestCase):
                                  "--output", str(output)], capture_output=True, text=True, check=True)
         self.assertIn("Annotated 5 records at 4 supplied-input sites", result.stdout)
         self.assertTrue(output.is_file())
+
+    def test_cli_threads_and_invalid_budget(self):
+        source, output = self.root / "source.vcf", self.root / "out.bcf"
+        self.write_fixture(source)
+        command = [sys.executable, str(SCRIPT), "--input", str(source), "--output", str(output)]
+        rejected = subprocess.run(command + ["--threads", "0"], capture_output=True, text=True)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("--threads must be an integer >= 1", rejected.stderr)
+        self.assertFalse(output.exists())
+        result = subprocess.run(command + ["--threads", "6"], capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout, "Annotated 5 records at 4 supplied-input sites\n")
 
 
 if __name__ == "__main__":

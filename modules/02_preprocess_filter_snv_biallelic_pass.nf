@@ -24,18 +24,42 @@ process PREPROCESS_FILTER_SNV_BIALLELIC_PASS {
     def alleles_filter = "-m${min_alleles} -M${max_alleles}"
     def maf_filter = params.max_maf ? "-Q ${params.max_maf}:minor" : ""
     def pass_flag_cmd = params.keep_pass ? "bcftools view -f PASS --threads ${threads} -Oz -o ${sample_id}.snv.bi.pass.vcf.gz ${sample_id}.snv.bi.vcf.gz" : "cp ${sample_id}.snv.bi.vcf.gz ${sample_id}.snv.bi.pass.vcf.gz"
+    def largeRoot = params.preprocess_large_temp_dir ?: ''
+    if (largeRoot && (!largeRoot.startsWith('/') || largeRoot.contains('\n') || largeRoot.contains('\r'))) {
+        throw new IllegalArgumentException('preprocess_large_temp_dir must be an absolute filesystem directory')
+    }
+    def quotedRoot = "'" + largeRoot.replace("'", "'\"'\"'") + "'"
+    def bulkStart = largeRoot ? """
+    local_task_dir=\$PWD
+    raw_source=\$(readlink -f '${vcf_gz}')
+    norm_source=\$(readlink -f '${norm_vcf}')
+    test -d ${quotedRoot}
+    bulk_dir=\$(mktemp -d ${quotedRoot}/m02_chr${chr}.XXXXXXXX)
+    printf '%s\\n' "\$bulk_dir" > '${sample_id}.m02.large_temp_dir.txt'
+    cd "\$bulk_dir"
+    """ : """
+    raw_source='${vcf_gz}'
+    norm_source='${norm_vcf}'
+    """
+    def bulkFinish = largeRoot ? """
+    cd "\$local_task_dir"
+    ln -s "\$bulk_dir/${sample_id}.snv.bi.pass.vcf.gz" '${sample_id}.snv.bi.pass.vcf.gz'
+    ln -s "\$bulk_dir/${sample_id}.snv.bi.pass.vcf.gz.tbi" '${sample_id}.snv.bi.pass.vcf.gz.tbi'
+    cp "\$bulk_dir/${sample_id}.counts.tsv" '${sample_id}.counts.tsv'
+    """ : ''
     """
     set -euo pipefail
 
-    bcftools view ${alleles_filter} ${variant_types} ${maf_filter} --threads ${threads} -Oz -o ${sample_id}.snv.bi.vcf.gz ${norm_vcf}
+    ${bulkStart}
+    bcftools view ${alleles_filter} ${variant_types} ${maf_filter} --threads ${threads} -Oz -o ${sample_id}.snv.bi.vcf.gz "\$norm_source"
     bcftools index --threads ${threads} -t ${sample_id}.snv.bi.vcf.gz
 
     ${pass_flag_cmd}
 
     bcftools index --threads ${threads} -t ${sample_id}.snv.bi.pass.vcf.gz
 
-    raw_total=\$(bcftools index -n ${vcf_gz})
-    norm_total=\$(bcftools index -n ${norm_vcf})
+    raw_total=\$(bcftools index -n "\$raw_source")
+    norm_total=\$(bcftools index -n "\$norm_source")
     snv_bi_total=\$(bcftools index -n ${sample_id}.snv.bi.vcf.gz)
     snv_bi_pass_total=\$(bcftools index -n ${sample_id}.snv.bi.pass.vcf.gz)
 
@@ -44,5 +68,6 @@ process PREPROCESS_FILTER_SNV_BIALLELIC_PASS {
     printf "%s\tnorm\t%s\n" "${chr}" "\$norm_total" >> ${sample_id}.counts.tsv
     printf "%s\tsnv_bi\t%s\n" "${chr}" "\$snv_bi_total" >> ${sample_id}.counts.tsv
     printf "%s\tsnv_bi_pass\t%s\n" "${chr}" "\$snv_bi_pass_total" >> ${sample_id}.counts.tsv
+    ${bulkFinish}
     """
 }

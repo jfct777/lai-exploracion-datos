@@ -9,6 +9,8 @@ annotation certifies the earlier variant-calling history or modifies genotypes.
 
 Production execution belongs to the M01 Nextflow process. Memory is bounded
 by one coordinate group, plus the set of previously encountered chromosomes.
+The optional CPU budget parallelizes BGZF I/O only; grouping and annotation
+remain ordered and serial. No variant or chromosome is partitioned.
 """
 
 from __future__ import annotations
@@ -38,6 +40,43 @@ def output_mode(path: Path) -> str:
     if path.name.endswith(".vcf"):
         return "w"
     raise ValueError("Output must end in .bcf, .vcf.gz or .vcf")
+
+
+def io_thread_allocation(total_threads: int, compressed_output: bool) -> tuple[int, int]:
+    """Return pysam (reader, writer) thread arguments within a total budget.
+
+    In the pinned pysam 0.23.3, an argument of one is serial. An argument
+    of n > 1 creates n - 1 BGZF workers plus one htslib I/O thread. Count
+    those I/O threads as well as the single Python annotation thread:
+    total = 1 + sum(n for n in (reader, writer) if n > 1).
+
+    Budgets 1 and 2 therefore remain serial. For compressed output and
+    budgets 3 or 4, prioritize compression. At >= 5 split the remaining
+    budget between both streams, giving an odd extra worker to writing.
+    Plain VCF output needs no compressor, so its spare budget goes to
+    the reader. An uncompressed input may leave reader capacity unused.
+    This is an upper bound, not a promise that every CPU will stay busy.
+    """
+    if type(total_threads) is not int or total_threads < 1:
+        raise ValueError("threads must be an integer >= 1 (total CPU budget)")
+    if total_threads < 3:
+        return 1, 1
+    if not compressed_output:
+        return total_threads - 1, 1
+    if total_threads < 5:
+        return 1, total_threads - 1
+    reader_threads = (total_threads - 1) // 2
+    return reader_threads, total_threads - 1 - reader_threads
+
+
+def positive_threads(value: str) -> int:
+    """Validate the CLI CPU budget before opening either genomic file."""
+    try:
+        threads = int(value)
+        io_thread_allocation(threads, compressed_output=True)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("--threads must be an integer >= 1") from error
+    return threads
 
 
 def iter_site_groups(
@@ -128,17 +167,18 @@ def validate_header_definitions(
             raise ValueError(f"Input contains undeclared {kind}: {', '.join(unknown)}")
 
 
-def annotate(input_path: Path, output_path: Path) -> tuple[int, int]:
+def annotate(input_path: Path, output_path: Path, threads: int = 1) -> tuple[int, int]:
     """Write annotated records without an index; return (record count, site count)."""
     import pysam
 
     mode = output_mode(output_path)
+    reader_threads, writer_threads = io_thread_allocation(threads, mode != "w")
     if input_path.resolve() == output_path.resolve():
         raise ValueError("Input and output must be different files")
     if output_path.exists() or output_path.is_symlink():
         raise FileExistsError(f"Refusing to overwrite output: {output_path}")
     n_records = n_sites = 0
-    with pysam.VariantFile(str(input_path)) as reader:
+    with pysam.VariantFile(str(input_path), threads=reader_threads) as reader:
         declared = {kind: frozenset(getattr(reader.header, kind))
                     for kind in HEADER_DEFINITION_KINDS}
         header = annotated_header(reader.header)
@@ -146,7 +186,8 @@ def annotate(input_path: Path, output_path: Path) -> tuple[int, int]:
         # the check above. A failed run retains no misleading partial output.
         with output_path.open("xb") as output_handle:
             try:
-                with pysam.VariantFile(output_handle, mode, header=header) as writer:
+                with pysam.VariantFile(output_handle, mode, header=header,
+                                       threads=writer_threads) as writer:
                     for group in iter_site_groups(reader):
                         validate_header_definitions(reader.header, declared)
                         allele_count = site_allele_count(group)
@@ -154,11 +195,16 @@ def annotate(input_path: Path, output_path: Path) -> tuple[int, int]:
                         for record in group:
                             if any(tag in record.info for tag in (INFO_ALLELE_COUNT, INFO_SITE)):
                                 raise ValueError("Input already contains original-allele annotations")
-                            annotated = record.copy()
-                            annotated.translate(header)
-                            annotated.info[INFO_ALLELE_COUNT] = allele_count
-                            annotated.info[INFO_SITE] = site
-                            writer.write(annotated)
+                            # Each iterator result owns its record buffer and
+                            # is consumed exactly once. Translate that record
+                            # to the copied output header instead of duplicating
+                            # all sample fields. This does not mutate the input
+                            # file or reader.header; translate remains required
+                            # because the new INFO definitions live in header.
+                            record.translate(header)
+                            record.info[INFO_ALLELE_COUNT] = allele_count
+                            record.info[INFO_SITE] = site
+                            writer.write(record)
                             n_records += 1
                         n_sites += 1
             except BaseException:
@@ -171,8 +217,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--threads", type=positive_threads, default=1,
+        help="Total CPU budget including annotation and BGZF I/O threads (default: 1)",
+    )
     args = parser.parse_args()
-    records, sites = annotate(args.input, args.output)
+    records, sites = annotate(args.input, args.output, threads=args.threads)
     print(f"Annotated {records} records at {sites} supplied-input sites")
 
 

@@ -28,6 +28,14 @@ from optuna.trial import TrialState
 
 
 SCHEMA = "genomic-adaptive-search/1"
+CONTEXTUAL_SCHEMA = "genomic-adaptive-search/2"
+CONTEXTUAL_FAMILIES = {
+    "structure": ("structure_deep_sets", "structure_local_attention"),
+    "lai": ("lai_cnn", "lai_local_attention"),
+}
+CONTEXTUAL_FIELDS = {
+    "common_radius_cm", "rare_radius_cm", "width", "depth", "dropout", "heads", "learning_rate",
+}
 OPTUNA_VERSION = "4.9.0"
 HARD_MAX_RECIPES = 24
 ARMS = ("NONE", "RARE")
@@ -95,7 +103,9 @@ def validate_plan(plan):
     keys(plan, ("schema", "campaign_id", "scope", "max_recipes", "startup_trials",
                 "sampler_seed", "training_seeds", "search_space", "objectives",
                 "provenance", "pruning"), "plan")
-    require(plan["schema"] == SCHEMA and plan["scope"] == "DEVELOPMENT", "development plan required")
+    require(plan["schema"] in (SCHEMA, CONTEXTUAL_SCHEMA) and plan["scope"] == "DEVELOPMENT",
+            "supported versioned development plan required")
+    contextual = plan["schema"] == CONTEXTUAL_SCHEMA
     require(isinstance(plan["campaign_id"], str) and IDENTIFIER.fullmatch(plan["campaign_id"]),
             "invalid campaign_id")
     require(integer(plan["max_recipes"], 1) and plan["max_recipes"] <= HARD_MAX_RECIPES,
@@ -108,18 +118,28 @@ def validate_plan(plan):
     require(isinstance(seeds, list) and seeds and all(integer(s) for s in seeds)
             and len(set(seeds)) == len(seeds), "training seeds must be fixed unique integers")
     space = plan["search_space"]
-    keys(space, ("radius_cm", "width", "learning_rate"), "search_space")
-    for name in ("radius_cm", "width"):
+    radius_name = "common_radius_cm" if contextual else "radius_cm"
+    keys(space, CONTEXTUAL_FIELDS if contextual else ("radius_cm", "width", "learning_rate"), "search_space")
+    checks = {radius_name: lambda x: finite(x) and x > 0, "width": lambda x: integer(x, 1)}
+    if contextual:
+        checks.update({"rare_radius_cm": lambda x: finite(x) and x > 0,
+                       "depth": lambda x: integer(x, 1), "heads": lambda x: integer(x, 1),
+                       "dropout": lambda x: finite(x) and x < 1})
+    for name, check in checks.items():
         values = space[name]
-        require(isinstance(values, list) and values and len(set(values)) == len(values),
+        require(isinstance(values, list) and values and all(check(x) for x in values),
                 f"invalid {name} choices")
-        check = (lambda x: finite(x) and x > 0) if name == "radius_cm" else (lambda x: integer(x, 1))
-        require(all(check(x) for x in values), f"invalid {name} choices")
+        require(len(set(values)) == len(values), f"invalid {name} choices")
+    if contextual:
+        # A fixed categorical domain avoids invalid trials and Optuna's
+        # forbidden dynamic categorical distributions after choosing width.
+        require(all(width % heads == 0 for width in space["width"] for heads in space["heads"]),
+                "every width must be divisible by every heads choice")
     keys(space["learning_rate"], ("low", "high", "log"), "learning_rate")
     low, high = space["learning_rate"]["low"], space["learning_rate"]["high"]
     require(finite(low) and finite(high) and 0 < low < high and space["learning_rate"]["log"] is True,
             "learning rate requires a positive log-uniform interval")
-    require(plan["startup_trials"] == 2 * len(space["radius_cm"]) * len(space["width"]),
+    require(plan["startup_trials"] == 2 * len(space[radius_name]) * len(space["width"]),
             "startup budget must cover the two-family/radius/width product exactly")
     provenance = plan["provenance"]
     keys(provenance, ("dataset_sha256", "split_manifest_sha256", "feature_contract_sha256",
@@ -139,12 +159,18 @@ def validate_plan(plan):
                 and len(set(spec["families"])) == 2
                 and all(isinstance(f, str) and IDENTIFIER.fullmatch(f) for f in spec["families"]),
                 "exactly two named families per objective required")
+        if contextual:
+            require(set(spec["families"]) == set(CONTEXTUAL_FAMILIES[name]),
+                    f"v2 {name} requires its canonical contextual families")
         require(isinstance(spec["secondary_metrics"], list), "secondary_metrics must be a list")
         metrics = [spec["primary_metric"], *spec["secondary_metrics"]]
         require(len(set(metrics)) == len(metrics)
                 and all(isinstance(m, str) and IDENTIFIER.fullmatch(m) for m in metrics), "invalid metric names")
         require(isinstance(spec["fixed_config"], dict) and spec["fixed_config"], "fixed trainer config is required")
-        require(not set(spec["fixed_config"]) & {"family", "radius_cm", "width", "learning_rate", "seed", "arm", "fold"},
+        reserved = {"family", "radius_cm", "width", "learning_rate", "seed", "arm", "fold"}
+        if contextual:
+            reserved |= CONTEXTUAL_FIELDS
+        require(not set(spec["fixed_config"]) & reserved,
                 "fixed config must not override sampled or paired fields")
         require(integer(spec["checkpoint_step"], 1), "positive fixed checkpoint step required")
         require(spec["evaluation_unit"] in ("person_macro", "family_macro", "donor_macro", "component_macro"),
@@ -198,11 +224,12 @@ class SearchController:
         sampler = TPESampler(seed=seed, n_startup_trials=self.plan["startup_trials"])
         if trial_number < self.plan["startup_trials"]:
             spec, space = self.plan["objectives"][objective], self.plan["search_space"]
-            grid = list(itertools.product(space["radius_cm"], space["width"], spec["families"]))
+            radius_name = "common_radius_cm" if self.plan["schema"] == CONTEXTUAL_SCHEMA else "radius_cm"
+            grid = list(itertools.product(space[radius_name], space["width"], spec["families"]))
             radius, width, family = grid[trial_number]
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", optuna.exceptions.ExperimentalWarning)
-                sampler = PartialFixedSampler({"radius_cm": radius, "width": width, "family": family}, sampler)
+                sampler = PartialFixedSampler({radius_name: radius, "width": width, "family": family}, sampler)
         # One fixed study name per objective prevents resetting the budget by
         # changing a study/campaign name inside the same state directory.
         study = optuna.create_study(storage=self.storage, study_name=objective,
@@ -248,13 +275,24 @@ class SearchController:
             trial = study.ask()
             require(trial.number == number, "unexpected trial numbering")
             spec, space = self.plan["objectives"][objective], self.plan["search_space"]
+            contextual = self.plan["schema"] == CONTEXTUAL_SCHEMA
+            radius_name = "common_radius_cm" if contextual else "radius_cm"
             params = {
                 "family": trial.suggest_categorical("family", spec["families"]),
-                "radius_cm": trial.suggest_categorical("radius_cm", space["radius_cm"]),
+                radius_name: trial.suggest_categorical(radius_name, space[radius_name]),
                 "width": trial.suggest_categorical("width", space["width"]),
                 "learning_rate": trial.suggest_float("learning_rate", space["learning_rate"]["low"],
                                                     space["learning_rate"]["high"], log=True),
             }
+            if contextual:
+                params.update({
+                    "depth": trial.suggest_categorical("depth", space["depth"]),
+                    "dropout": trial.suggest_categorical("dropout", space["dropout"]),
+                    "rare_radius_cm": (None if params["family"] == "structure_deep_sets" else
+                                       trial.suggest_categorical("rare_radius_cm", space["rare_radius_cm"])),
+                    "heads": (trial.suggest_categorical("heads", space["heads"])
+                              if params["family"].endswith("_local_attention") else None),
+                })
             config = {**spec["fixed_config"], **params}
             tasks = []
             for fold, seed, arm in itertools.product(spec["folds"], self.plan["training_seeds"], ARMS):
@@ -263,7 +301,7 @@ class SearchController:
                               "config_sha256": digest(config), "checkpoint_step": spec["checkpoint_step"],
                               "checkpoint_rule": "fixed_updates", "n_evaluated": fold["n_evaluated"],
                               "evaluation_unit": spec["evaluation_unit"]})
-            recipe = {"schema": SCHEMA, "campaign_id": self.plan["campaign_id"], "objective": objective,
+            recipe = {"schema": self.plan["schema"], "campaign_id": self.plan["campaign_id"], "objective": objective,
                       "trial_number": number, "phase": "STARTUP" if number < self.plan["startup_trials"] else "TPE",
                       "scope": "DEVELOPMENT", "plan_sha256": self.plan_sha256,
                       "provenance": self.plan["provenance"], "config": config, "tasks": tasks,
@@ -364,7 +402,7 @@ class SearchController:
             study = self.study(objective)
             trials = study.get_trials(deepcopy=True)
             entries = study.user_attrs.get("receipts", {})
-            return {"schema": SCHEMA, "objective": objective, "plan_sha256": self.plan_sha256,
+            return {"schema": self.plan["schema"], "objective": objective, "plan_sha256": self.plan_sha256,
                     "issued": len(trials), "budget": self.plan["max_recipes"],
                     "trials": [{"number": t.number, "state": t.state.name, "params": t.params,
                                 "value": t.value, "summary": entries.get(str(t.number), {}).get("summary")}
@@ -381,7 +419,7 @@ class SearchController:
                     "finish the declared recipe budget before freezing selection")
             require(any(t.state == TrialState.COMPLETE for t in trials), "no completed recipe")
             best = study.best_trial
-            selection = {"schema": SCHEMA, "objective": objective, "plan_sha256": self.plan_sha256,
+            selection = {"schema": self.plan["schema"], "objective": objective, "plan_sha256": self.plan_sha256,
                          "selected_trial": best.number, "recipe": best.user_attrs["recipe"],
                          "selection_loss": best.value, "scope": "DEVELOPMENT_SELECTION_NOT_CONFIRMATORY",
                          "refit": "SEPARATE_PLAN_AND_AUTHORIZATION_REQUIRED",
