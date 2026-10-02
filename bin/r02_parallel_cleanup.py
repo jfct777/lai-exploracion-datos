@@ -105,10 +105,13 @@ def prepare(run, coordinator_source, *, coordinator_manifest=None, cleanup_direc
     coordinator_path = Path(coordinator_manifest).resolve() if coordinator_manifest else parent/'manifest.json'
     legacy_folder = parent/'cleanup'
     amended_folder = run/'repairs/preprocess-v1/cleanup'
+    repaired_folder = run/'repairs/preprocess-v2/cleanup'
     folder = Path(cleanup_directory).resolve() if cleanup_directory else legacy_folder
     require((coordinator_path == parent/'manifest.json' and folder == legacy_folder)
             or (coordinator_path == run/'repairs/preprocess-v1/coordinator/manifest.json'
-                and folder == amended_folder), 'Coordinator and cleanup versions must use matching approved directories')
+                and folder == amended_folder)
+            or (coordinator_path == run/'repairs/preprocess-v2/coordinator/manifest.json'
+                and folder == repaired_folder), 'Coordinator and cleanup versions must use matching approved directories')
     fleet, coordinator = read(fleet_path), read(coordinator_path)
     require(fleet.get('schema') == 'r02_fleet_v1' and fleet['project'] == 'uspbr-242713'
             and fleet['zone'] == 'us-central1-a', 'Unexpected fleet')
@@ -171,10 +174,13 @@ def validate(path, expected):
     spec = read(path)
     require(spec.get('schema') == 'r02_success_only_cleanup_v1', 'Invalid cleanup schema')
     run = Path(spec['parent_run'])
-    allowed = {run/'repairs/parallel-v1/cleanup', run/'repairs/preprocess-v1/cleanup'}
+    allowed = {run/'repairs/parallel-v1/cleanup', run/'repairs/preprocess-v1/cleanup',
+               run/'repairs/preprocess-v2/cleanup'}
     require(path.parent in allowed and path.parent == Path(spec.get('cleanup_directory',
             str(run/'repairs/parallel-v1/cleanup'))), 'Wrong cleanup directory')
-    expected_coordinator = (run/'repairs/preprocess-v1/coordinator/manifest.json'
+    expected_coordinator = (run/'repairs/preprocess-v2/coordinator/manifest.json'
+                            if path.parent == run/'repairs/preprocess-v2/cleanup' else
+                            run/'repairs/preprocess-v1/coordinator/manifest.json'
                             if path.parent == run/'repairs/preprocess-v1/cleanup'
                             else run/'repairs/parallel-v1/manifest.json')
     require(Path(spec['coordinator_manifest']) == expected_coordinator, 'Wrong version of cleanup coordinator')

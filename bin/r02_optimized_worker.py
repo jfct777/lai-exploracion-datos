@@ -25,6 +25,8 @@ import types
 
 SCHEMA = 'r02_optimized_worker_v1'
 AMENDMENT_SCHEMA = 'r02_preprocess_operational_amendment_v1'
+COUNT_SCHEMA = 'r02_optimized_worker_v2'
+COUNT_AMENDMENT_SCHEMA = 'r02_preprocess_operational_amendment_v2'
 OVERRIDES = dict(preprocess_checkpointed_m01=True,
                  preprocess_scratch_input_multiplier=3, preprocess_scratch_reserve_gib=32)
 ALLOWED_SOURCE_DELTA = frozenset({
@@ -160,11 +162,26 @@ def validate_spec(path, expected):
     require(path.is_absolute() and path.resolve() == path and is_digest(expected)
             and sha(path) == expected, 'Amendment manifest hash/path differs')
     spec = read(path)
-    require(set(spec) == SPEC_FIELDS and spec['schema'] == SCHEMA, 'Invalid amendment manifest schema')
+    repaired = spec.get('schema') == COUNT_SCHEMA
+    extra = {'count_validator_sha256', 'previous_manifest_sha256'} if repaired else set()
+    require(set(spec) == SPEC_FIELDS | extra and spec['schema'] in (SCHEMA, COUNT_SCHEMA),
+            'Invalid amendment manifest schema')
     require(spec['wrapper_sha256'] == sha(__file__), 'Optimized wrapper changed')
     run = Path(spec['run_dir'])
     require(run.is_absolute() and run.resolve() == run and run.is_dir(), 'Invalid original run directory')
-    require(path == run/'repairs/preprocess-v1/manifest.json', 'Unexpected amendment directory')
+    version = 'preprocess-v2' if repaired else 'preprocess-v1'
+    require(path == run/'repairs'/version/'manifest.json', 'Unexpected amendment directory')
+    if repaired:
+        require(is_digest(spec['count_validator_sha256'])
+                and sha(safe_file(path.parent, 'preprocess_count_validation.py')) == spec['count_validator_sha256'],
+                'Count validator changed')
+        previous = run/'repairs/preprocess-v1/manifest.json'
+        require(is_digest(spec['previous_manifest_sha256']) and sha(previous) == spec['previous_manifest_sha256'],
+                'Previous preprocessing amendment changed')
+        old = read(previous)
+        require(old.get('schema') == SCHEMA, 'Expected version1 predecessor')
+        for key in SPEC_FIELDS - {'schema', 'wrapper_sha256'}:
+            require(old[key] == spec[key], 'Count repair changed previous settings: ' + key)
     for name, key in [('run.json', 'original_run_sha256'), ('frozen.sha256.json', 'original_frozen_sha256'),
                       ('source.sha256.json', 'original_source_manifest_sha256')]:
         require(is_digest(spec[key]) and sha(safe_file(run, name)) == spec[key], 'Original run changed: ' + name)
@@ -258,11 +275,39 @@ def operational_evidence(runner, directory, manifest_path, spec, changed):
         copy_unchanged(source, folder/name)
     for relative in changed:
         copy_unchanged(directory/'source'/relative, folder/'source'/relative)
+    if spec['schema'] == COUNT_SCHEMA:
+        copy_unchanged(directory/'preprocess_count_validation.py', folder/'preprocess_count_validation.py')
+        copy_unchanged(runner.run/'repairs/preprocess-v1/manifest.json', folder/'previous_manifest.json')
     relative = '00_worker_provenance/operational_amendments/' + sha(manifest_path)
     runner.publish(folder, relative)
     receipt = read(runner.run/'checkpoints'/('publish_' + relative.replace('/', '_') + '.json'))
     return [{key: item[key] for key in ('uri', 'generation', 'bytes', 'sha256', 'md5_base64')}
             for item in receipt['files']]
+
+
+def validation_delta(spec):
+    return ({key: spec[key] for key in ('count_validator_sha256', 'previous_manifest_sha256')}
+            if spec['schema'] == COUNT_SCHEMA else {})
+
+
+def bind_count_validator(directory, spec, *pipelines):
+    """Explicit authenticated runtime delta; frozen source bytes stay intact."""
+    if spec['schema'] != COUNT_SCHEMA:
+        return None
+    helper = load_module(Path(directory)/'preprocess_count_validation.py',
+                         spec['count_validator_sha256'], '_repaired_record_count')
+    for pipeline in pipelines:
+        pipeline.validate_raw_record_count = helper.validate_raw_record_count
+    return helper
+
+
+def validate_legacy_count(manifest_path, expected, chromosome):
+    spec, _, _, _, _ = validate_spec(manifest_path, expected)
+    require(chromosome in spec['legacy_chromosomes'] and spec['schema'] == COUNT_SCHEMA,
+            'Only a legacy chromosome with an explicit count repair can be checked')
+    helper = bind_count_validator(Path(manifest_path).parent, spec)
+    audit = helper.validate_raw_record_count(Path(spec['run_dir'])/f'chr{chromosome:02d}', chromosome)
+    return dict(chromosome=chromosome, legacy_count_validated=True, **audit)
 
 
 def run_worker(manifest_path, expected):
@@ -275,13 +320,15 @@ def run_worker(manifest_path, expected):
                       '_original_pipeline')
     new = load_module(directory/'source/bin/r02_autosome_pipeline.py', new_source['bin/r02_autosome_pipeline.py'],
                       '_optimized_preprocess_pipeline')
+    bind_count_validator(directory, spec, old, new)
     with old.execution_lock(run):
         validate_idle(spec, configuration)
         runner = build_runner(run, directory, spec, old, new)
-        fixed(directory/'activation.json', dict(schema=AMENDMENT_SCHEMA, manifest_sha256=expected,
+        amendment_schema = COUNT_AMENDMENT_SCHEMA if spec['schema'] == COUNT_SCHEMA else AMENDMENT_SCHEMA
+        fixed(directory/'activation.json', dict(schema=amendment_schema, manifest_sha256=expected,
             original_source_manifest_sha256=spec['original_source_manifest_sha256'],
             new_source_manifest_sha256=spec['source_manifest_sha256'], changed_source_files=changed,
-            operational_only=True, biological_validation_complete=False))
+            operational_only=True, biological_validation_complete=False, **validation_delta(spec)))
         try:
             operational_provenance = operational_evidence(runner, directory, manifest_path, spec, changed)
             for c in configuration['processing_order']:
@@ -303,10 +350,10 @@ def run_worker(manifest_path, expected):
                          'worker.py', 'm14_diagnostic_settings.json'):
                 copy_unchanged(run/name, provenance/name)
             worker = configuration['parallel_worker']
-            amendment = dict(schema=AMENDMENT_SCHEMA, manifest_sha256=expected,
+            amendment = dict(schema=amendment_schema, manifest_sha256=expected,
                 source_manifest_sha256=spec['source_manifest_sha256'],
                 new_preprocess_chromosomes=spec['new_preprocess_chromosomes'],
-                legacy_chromosomes=spec['legacy_chromosomes'])
+                legacy_chromosomes=spec['legacy_chromosomes'], **validation_delta(spec))
             receipt = dict(schema_version=1, worker_id=worker['worker_id'], parent_run_id=worker['parent_run_id'],
                 chromosomes=configuration['processing_order'], analysis_protocol_version=2,
                 source_manifest_sha256=spec['original_source_manifest_sha256'],
@@ -346,9 +393,13 @@ def main():
     parser.add_argument('--manifest', required=True, type=Path)
     parser.add_argument('--manifest-sha256', required=True)
     parser.add_argument('--run', action='store_true')
+    parser.add_argument('--validate-legacy-count', type=int)
     args = parser.parse_args()
     os.umask(0o077)
-    if args.run:
+    if args.validate_legacy_count is not None:
+        require(not args.run, 'Read-only validation cannot also execute the worker')
+        print(json.dumps(validate_legacy_count(args.manifest, args.manifest_sha256, args.validate_legacy_count)))
+    elif args.run:
         run_worker(args.manifest, args.manifest_sha256)
     else:
         spec, _, _, _, changed = validate_spec(args.manifest, args.manifest_sha256)

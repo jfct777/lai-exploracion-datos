@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import sys
 import tempfile
 import types
 import unittest
@@ -98,6 +99,43 @@ class BoundaryTests(unittest.TestCase):
         self.put(checkpoint, dict(returncode=0, command=h.command, outputs=records))
         self.put(self.run / 'status.json', dict(state='FAILED', failed_stage='chr02_rare_J', error='[Errno 11] Resource temporarily unavailable'))
         return checkpoint
+
+    def continuation(self):
+        old_path, old_spec, old_boundary = self.path, copy.deepcopy(self.s), self.boundary
+        old_directory = old_boundary.directory
+        old_directory.mkdir()
+        (old_directory / 'spec.json').write_bytes(old_path.read_bytes())
+        (old_directory / 'helper.py').write_bytes(Path(b.__file__).read_bytes())
+        baseline = getattr(old_boundary, 'baseline', b.checkpoint_inventory(self.run))
+        original = dict(spec_sha256=b.sha(old_path), checkpoint_baseline=baseline, child_limits=[99999, 99999])
+        self.put(old_directory / 'intent.json', original)
+        self.put(old_directory / 'armed.json', dict(original, startup_paused=True, supervisor_fork_blocked=True))
+        self.directory = self.run / 'repairs/preprocess-v2'
+        self.directory.mkdir()
+        (self.directory / 'r02_optimized_worker.py').write_text('# authenticated count-preflight fixture\n')
+        self.put(self.directory / 'manifest.json', {'fixture': 'v2'})
+        self.put(self.directory / 'source.sha256.json', {'fixture': 'v2'})
+        replacement = dict(script_path=str(self.directory / 'r02_optimized_worker.py'),
+            script_sha256=b.sha(self.directory / 'r02_optimized_worker.py'),
+            manifest_path=str(self.directory / 'manifest.json'), manifest_sha256=b.sha(self.directory / 'manifest.json'),
+            completion_path=str(self.directory / 'completed.json'))
+        replacement['command'] = ['/usr/bin/python3', replacement['script_path'], '--manifest', replacement['manifest_path'],
+                                  '--manifest-sha256', replacement['manifest_sha256'], '--run']
+        self.s = dict(old_spec, schema='r02_optimization_boundary_v2', replacement=replacement,
+            previous_boundary=dict(spec_path=str(old_path), spec_sha256=b.sha(old_path),
+                intent_sha256=b.sha(old_directory / 'intent.json'), armed_sha256=b.sha(old_directory / 'armed.json'),
+                controller=self.ident(5555)))
+        self.path = self.directory / 'boundary.json'
+        with patch.object(b, 'authenticated', return_value=None):
+            self.boundary = self.load()
+        return self.boundary
+
+    def legacy_failure(self):
+        self.put(self.run / 'status.json', dict(state='FAILED', failed_stage='chr02_M01_M02_M021',
+            error='chr2: source index count does not match completed sequential M01 annotation'))
+        names = ('PREPROCESS_NORM_LEFTALIGN', 'PREPROCESS_FILTER_SNV_BIALLELIC_PASS', 'LAI_RARE_BIALELIC_ONLY')
+        (self.folder / 'trace.tsv').write_text('hash\tname\tstatus\texit\n' + ''.join(
+            f'ab/12345{i}\t{name} (chr2)\tCOMPLETED\t0\n' for i, name in enumerate(names)))
 
     def test_preflight_does_not_create_boundary_or_signal(self):
         self.assertFalse(self.boundary.directory.exists())
@@ -387,6 +425,183 @@ class BoundaryTests(unittest.TestCase):
         self.assertEqual(result['startup'], self.s['startup'])
         self.assertEqual(result['ancestors'], self.s['ancestors'])
         self.assertEqual(result['replacement']['completion_path'], str(self.directory / 'completed.json'))
+
+    def test_continuation_inherits_armed_baseline_without_process_changes(self):
+        h = self.continuation()
+        h.directory.mkdir()
+        infos = {1111: self.info('startup', 'T'), 2222: self.info('ancestor'),
+                 3333: self.info('supervisor'), 4444: self.info('child', 'T'), 5555: None}
+        with patch.object(b, 'authenticated', side_effect=lambda s: infos[s['pid']]), \
+             patch.object(b, 'nproc', side_effect=lambda pid: (0, 99999) if pid == 3333 else (99999, 99999)) as limits, \
+             patch.object(b, 'send') as send, patch.object(h, 'health'), patch.object(h, 'arm') as arm:
+            h.adopt()
+        arm.assert_not_called()
+        send.assert_not_called()
+        self.assertTrue(all(len(call.args) == 1 for call in limits.call_args_list))
+        self.assertTrue(h.interfered)
+        self.assertEqual(h.baseline, {})
+        self.assertEqual(h.child_limits, [99999, 99999])
+        self.assertTrue(b.read(h.directory / 'intent.json')['existing_barrier_adopted'])
+
+    def test_version_one_cannot_enable_dead_continuation_option(self):
+        self.s['previous_boundary'] = {}
+        with self.assertRaisesRegex(ValueError, 'explicit version-2 predecessor'):
+            self.load()
+
+    def test_version_two_must_authenticate_predecessor(self):
+        self.s['schema'] = 'r02_optimization_boundary_v2'
+        with self.assertRaisesRegex(ValueError, 'explicit version-2 predecessor'):
+            self.load()
+
+    def test_continuation_rejects_changed_original_deadline(self):
+        self.continuation()
+        self.s['deadline_utc'] = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat()
+        with patch.object(b, 'authenticated', return_value=None):
+            with self.assertRaisesRegex(ValueError, 'changed original'):
+                self.load()
+
+    def test_continuation_still_rejects_changed_original_source(self):
+        self.continuation()
+        (self.run / 'source/workflows/r02_preprocess_autosome.nf').write_text('changed')
+        with patch.object(b, 'authenticated', return_value=None):
+            with self.assertRaisesRegex(ValueError, 'hash mismatch'):
+                self.load()
+
+    def test_continuation_cli_checks_adopted_not_unarmed_processes(self):
+        h = self.continuation()
+        arguments = ['boundary.py', '--spec', str(self.path), '--spec-sha256', b.sha(self.path)]
+        with patch.object(sys, 'argv', arguments), patch.object(b, 'Boundary', return_value=h), \
+             patch.object(h, 'validate', return_value=h), patch.object(h, 'continuation_eligible') as adopted, \
+             patch.object(h, 'eligible') as unarmed, patch.object(h, 'apply') as apply, patch.object(os, 'umask'):
+            b.main()
+        adopted.assert_called_once_with()
+        unarmed.assert_not_called()
+        apply.assert_not_called()
+
+    def test_continuation_rejects_missing_fork_barrier_without_mutation(self):
+        h = self.continuation()
+        infos = {1111: self.info('startup', 'T'), 2222: self.info('ancestor'),
+                 3333: self.info('supervisor'), 4444: self.info('child', 'T'), 5555: None}
+        with patch.object(b, 'authenticated', side_effect=lambda s: infos[s['pid']]), \
+             patch.object(b, 'nproc', return_value=(99999, 99999)), patch.object(b, 'send') as send, \
+             patch.object(h, 'health'):
+            with self.assertRaisesRegex(ValueError, 'fork barrier disappeared'):
+                h.continuation_eligible()
+        send.assert_not_called()
+
+    def test_continuation_rejects_changed_armed_record(self):
+        h = self.continuation()
+        self.put(h.previous_directory / 'armed.json', {'forged': True})
+        with patch.object(b, 'authenticated', return_value=None):
+            with self.assertRaisesRegex(ValueError, 'hash mismatch'):
+                self.load()
+
+    def test_continuation_rejects_previous_successor_started(self):
+        h = self.continuation()
+        self.put(h.previous_directory / 'successor_started.json', {})
+        with patch.object(b, 'authenticated', return_value=None):
+            with self.assertRaisesRegex(ValueError, 'advanced beyond waiting'):
+                self.load()
+
+    def test_continuation_rejects_live_previous_controller_without_signalling(self):
+        h = self.continuation()
+        with patch.object(b, 'authenticated', return_value=self.ident(5555)), patch.object(b, 'send') as send, \
+             patch.object(b, 'run_checked') as command:
+            with self.assertRaisesRegex(ValueError, 'controller is still active'):
+                h.validate_previous_boundary()
+        send.assert_not_called()
+        command.assert_not_called()
+
+    def test_failed_adoption_does_not_shutdown_another_controller(self):
+        h = self.continuation()
+        with patch.object(os, 'geteuid', return_value=0), \
+             patch.object(h, 'continuation_eligible', side_effect=ValueError('Previous controller active')), \
+             patch.object(h, 'arm') as arm, patch.object(h, 'emergency') as emergency, \
+             patch.object(h, 'publish') as publish, patch.object(b, 'run_checked') as command:
+            with self.assertRaisesRegex(ValueError, 'Previous controller active'):
+                h.apply()
+        arm.assert_not_called()
+        emergency.assert_not_called()
+        publish.assert_not_called()
+        command.assert_not_called()
+
+    def test_continuation_apply_adopts_once_and_preserves_shutdown_policy(self):
+        h = self.continuation()
+        def adopted():
+            h.interfered = True
+        with patch.object(os, 'geteuid', return_value=0), patch.object(h, 'adopt', side_effect=adopted) as adopt, \
+             patch.object(h, 'arm') as arm, patch.object(h, 'wait_boundary', return_value='fixture-checkpoint'), \
+             patch.object(h, 'run_successor') as successor, patch.object(h, 'publish') as publish, \
+             patch.object(b, 'metadata_identity', return_value=h.s['instance']), patch.object(b, 'run_checked') as command:
+            h.apply()
+        adopt.assert_called_once_with()
+        arm.assert_not_called()
+        successor.assert_called_once_with('fixture-checkpoint')
+        publish.assert_called_once_with()
+        command.assert_called_once_with(['/usr/sbin/shutdown', '-h', 'now'])
+
+    def test_legacy_count_recovery_requires_new_schema_and_genuine_checkpoint(self):
+        checkpoint = self.completed()
+        self.legacy_failure()
+        with patch.object(b, 'authenticated', return_value=None):
+            with self.assertRaisesRegex(ValueError, 'expected next-stage EAGAIN'):
+                self.boundary.completion()
+        h = self.continuation()
+        status_hash = b.sha(self.run / 'status.json')
+        with patch.object(b, 'authenticated', return_value=None), patch.object(b, 'containers', return_value=[]), \
+             patch.object(os, 'geteuid', return_value=0), patch.object(b, 'run_checked',
+                return_value=types.SimpleNamespace(stdout=json.dumps(dict(chromosome=2, legacy_count_validated=True)))) as command:
+            self.assertEqual(h.completion(), b.sha(checkpoint))
+        self.assertEqual(b.sha(self.run / 'status.json'), status_hash)
+        self.assertEqual(command.call_args.kwargs, {'timeout': 60})
+        invoked = command.call_args.args[0]
+        self.assertEqual(invoked[:4], ['/usr/sbin/runuser', '-u', 'fixtureuser', '--'])
+        self.assertEqual(invoked[-2:], ['--validate-legacy-count', '2'])
+        self.assertNotIn('--run', invoked)
+        self.assertEqual(h.legacy_count_evidence['trace_sha256'], b.sha(self.folder / 'trace.tsv'))
+
+    def test_legacy_count_recovery_rejects_generic_or_embedded_error(self):
+        self.completed()
+        h = self.continuation()
+        for error in ('exit 1', 'chr2: source index count does not match completed sequential M01 annotation; other failure'):
+            self.put(self.run / 'status.json', dict(state='FAILED', failed_stage=h.stage, error=error))
+            with patch.object(b, 'authenticated', return_value=None), patch.object(b, 'run_checked') as command:
+                with self.assertRaisesRegex(ValueError, 'expected next-stage EAGAIN'):
+                    h.completion()
+            command.assert_not_called()
+
+    def test_legacy_count_recovery_rejects_failed_trace(self):
+        self.completed()
+        h = self.continuation()
+        self.legacy_failure()
+        trace = self.folder / 'trace.tsv'
+        trace.write_text(trace.read_text().replace('COMPLETED\t0', 'FAILED\t1', 1))
+        with patch.object(b, 'authenticated', return_value=None), patch.object(b, 'containers', return_value=[]), \
+             patch.object(b, 'run_checked') as command:
+            with self.assertRaisesRegex(ValueError, 'three genuine successful'):
+                h.completion()
+        command.assert_not_called()
+
+    def test_count_cli_exit_zero_without_validation_is_not_success(self):
+        self.completed()
+        h = self.continuation()
+        self.legacy_failure()
+        with patch.object(b, 'authenticated', return_value=None), patch.object(b, 'containers', return_value=[]), \
+             patch.object(os, 'geteuid', return_value=0), patch.object(b, 'run_checked',
+                return_value=types.SimpleNamespace(stdout='{"status":"PASS"}')):
+            with self.assertRaisesRegex(ValueError, 'did not validate'):
+                h.completion()
+
+    def test_legacy_count_recovery_never_waives_output_hashes(self):
+        checkpoint = self.completed()
+        h = self.continuation()
+        self.legacy_failure()
+        output = Path(b.read(checkpoint)['outputs'][0]['path'])
+        output.write_text('changed')
+        with patch.object(b, 'authenticated', return_value=None), patch.object(b, 'run_checked') as command:
+            with self.assertRaisesRegex(ValueError, 'Output size changed'):
+                h.completion()
+        command.assert_not_called()
 
 
 if __name__ == '__main__':

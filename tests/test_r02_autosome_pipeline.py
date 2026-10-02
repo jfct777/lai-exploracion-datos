@@ -51,7 +51,10 @@ class ControllerTests(unittest.TestCase):
             counts=root/'preprocess/02_filter/dnabr.hg38.2723.chr21.counts.tsv'
             counts.parent.mkdir(parents=True)
             counts.write_text('chr\tstep\tn_variants\n21\traw\t9\n21\tnorm\t10\n')
-            log=root/'work/aa/bb/.command.out';log.parent.mkdir(parents=True)
+            log=root/'work/aa/bbbbbb/.command.out';log.parent.mkdir(parents=True)
+            (log.parent/'.exitcode').write_text('0')
+            (root/'trace.tsv').write_text('hash\tname\tstatus\texit\n'
+                'aa/bbbbbb\tPREPROCESS_NORM_LEFTALIGN (chr21)\tCOMPLETED\t0\n')
             log.write_text('Annotated 9 records at 8 supplied-input sites\n')
             self.assertEqual(pipeline.validate_raw_record_count(root,21)['m01_original_sites'],8)
             log.write_text('Annotated 8 records at 8 supplied-input sites\n')

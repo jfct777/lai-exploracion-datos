@@ -36,6 +36,7 @@ ESSENTIAL = frozenset({
 })
 SCHEMA = 'r02_parallel_coordinator_v1'
 OPERATIONAL_SCHEMA = 'r02_preprocess_operational_amendment_v1'
+COUNT_OPERATIONAL_SCHEMA = 'r02_preprocess_operational_amendment_v2'
 OPERATIONAL_SOURCE_FILES = frozenset({
     'bin/r02_autosome_pipeline.py', 'bin/mark_original_alleles.py',
     'bin/preprocess_storage_guard.py', 'bin/preprocess_audit.py',
@@ -106,13 +107,16 @@ def validate_operational_amendments(spec):
         assigned = sorted(item['chromosome'] for item in spec['remote_chromosomes']
                           if item['worker_id'] == worker)
         require(assigned, 'Operational amendment names an unassigned worker')
+        repaired = isinstance(amendment, dict) and amendment.get('schema') == COUNT_OPERATIONAL_SCHEMA
+        extra = {'count_validator_sha256', 'previous_manifest_sha256'} if repaired else set()
         require(isinstance(amendment, dict) and set(amendment) == {
             'schema', 'manifest_sha256', 'source_manifest_sha256',
-            'new_preprocess_chromosomes', 'legacy_chromosomes'},
+            'new_preprocess_chromosomes', 'legacy_chromosomes'} | extra,
             'Operational amendment fields differ')
-        require(amendment['schema'] == OPERATIONAL_SCHEMA
+        require(amendment['schema'] in (OPERATIONAL_SCHEMA, COUNT_OPERATIONAL_SCHEMA)
                 and digest(amendment['manifest_sha256'])
                 and digest(amendment['source_manifest_sha256']), 'Invalid operational amendment identity')
+        require(all(digest(amendment[key]) for key in extra), 'Invalid count repair identity')
         new, old = amendment['new_preprocess_chromosomes'], amendment['legacy_chromosomes']
         require(isinstance(new, list) and isinstance(old, list)
                 and all(type(c) is int for c in new + old)
@@ -147,7 +151,9 @@ def operational_records(payload, entry, spec):
         require(relative.parts and not relative.is_absolute() and '..' not in relative.parts
                 and name == uri[len(prefix):] and name not in records,
                 'Unsafe or duplicate operational provenance path')
-        require(name in {'manifest.json', 'source.sha256.json', 'optimized_worker.py', 'activation.json'}
+        extra_files = ({'preprocess_count_validation.py', 'previous_manifest.json'}
+                       if amendment['schema'] == COUNT_OPERATIONAL_SCHEMA else set())
+        require(name in {'manifest.json', 'source.sha256.json', 'optimized_worker.py', 'activation.json'} | extra_files
                 or (name.startswith('source/') and name[len('source/'):] in OPERATIONAL_SOURCE_FILES),
                 'Non-code file in operational provenance')
         require(type(record['bytes']) is int and 0 < record['bytes'] <= 16 * 1024**2
@@ -157,6 +163,9 @@ def operational_records(payload, entry, spec):
     expected = {'manifest.json': amendment['manifest_sha256'],
                 'source.sha256.json': amendment['source_manifest_sha256'],
                 'optimized_worker.py': spec['operational_wrapper_sha256'][entry['worker_id']]}
+    if amendment['schema'] == COUNT_OPERATIONAL_SCHEMA:
+        expected.update({'preprocess_count_validation.py': amendment['count_validator_sha256'],
+                         'previous_manifest.json': amendment['previous_manifest_sha256']})
     require(all(name in records and records[name]['sha256'] == checksum
                 for name, checksum in expected.items()) and 'activation.json' in records,
             'Operational provenance lacks its approved source identities')
@@ -179,12 +188,14 @@ def verify_operational_provenance(payload, entry, spec, cloud):
         amendment = payload['operational_amendment']
         activation = json.loads(raw['activation.json'])
         changed = sorted(name[len('source/'):] for name in records if name.startswith('source/'))
+        extra = ({key: amendment[key] for key in ('count_validator_sha256', 'previous_manifest_sha256')}
+                 if amendment['schema'] == COUNT_OPERATIONAL_SCHEMA else {})
         require(changed and isinstance(activation, dict) and activation == {
-            'schema': OPERATIONAL_SCHEMA, 'manifest_sha256': amendment['manifest_sha256'],
+            'schema': amendment['schema'], 'manifest_sha256': amendment['manifest_sha256'],
             'original_source_manifest_sha256': spec['source_manifest_sha256'],
             'new_source_manifest_sha256': amendment['source_manifest_sha256'],
             'changed_source_files': changed, 'operational_only': True,
-            'biological_validation_complete': False}, 'Operational activation differs from approved source delta')
+            'biological_validation_complete': False, **extra}, 'Operational activation differs from approved source delta')
         for name, record in records.items():
             if name.startswith('source/'):
                 require(source.get(name[len('source/'):]) == record['sha256'],
@@ -200,8 +211,19 @@ def validate_manifest(path, expected_sha256):
     require(spec.get('coordinator_sha256') == sha(__file__), 'Coordinator source changed')
     run = Path(spec['run_dir'])
     require(run.is_absolute() and run.resolve() == run and run.is_dir(), 'Invalid parent run path')
-    allowed = {run/'repairs/parallel-v1', run/'repairs/preprocess-v1/coordinator'}
+    allowed = {run/'repairs/parallel-v1', run/'repairs/preprocess-v1/coordinator',
+               run/'repairs/preprocess-v2/coordinator'}
     require(path.parent in allowed, 'Unexpected coordinator directory')
+    repair = spec.get('record_count_repair')
+    if repair is not None:
+        require(path.parent == run/'repairs/preprocess-v2/coordinator'
+                and isinstance(repair, dict) and set(repair) == {'validator_sha256', 'adoption_sha256'},
+                'Count repair requires its versioned coordinator directory')
+        for name, key in [('preprocess_count_validation.py', 'validator_sha256'),
+                          ('adoption.json', 'adoption_sha256')]:
+            target = path.parent/name
+            require(digest(repair[key]) and target.is_file() and not target.is_symlink()
+                    and sha(target) == repair[key], 'Changed coordinator count-repair evidence')
     request = Path(spec['request'])
     require(request == run/'repairs/boundary-v2/request.json', 'Unexpected boundary request')
     require(digest(spec['request_sha256']) and sha(request) == spec['request_sha256'], 'Boundary request changed')
@@ -238,7 +260,8 @@ def validate_manifest(path, expected_sha256):
         workers[worker] = identity
     require(len(workers) == 12, 'This authorization is for exactly12 workers')
     amendments = validate_operational_amendments(spec)
-    require(not amendments or path.parent == run/'repairs/preprocess-v1/coordinator',
+    require(not amendments or path.parent in {run/'repairs/preprocess-v1/coordinator',
+                                             run/'repairs/preprocess-v2/coordinator'},
             'Operational changes need their own coordinator directory')
     return spec
 
@@ -412,9 +435,16 @@ def run_after_boundary(spec, directory, boundary, *, activate=True):
     _, pipeline, _ = adapter.validate_snapshot(Path(spec['run_dir']), source)
     with pipeline.execution_lock(Path(spec['run_dir'])):
         runner, pipeline, evidence = adapter.build_runner(Path(spec['run_dir']), source, activate=activate)
+        repair = spec.get('record_count_repair')
+        if repair is not None:
+            helper = load_module(directory/'preprocess_count_validation.py', repair['validator_sha256'],
+                                 '_r02_repaired_record_count')
+            pipeline.validate_raw_record_count = helper.validate_raw_record_count
         activation = dict(schema=SCHEMA, source_manifest_sha256=spec['source_manifest_sha256'],
                           coordinator_sha256=spec['coordinator_sha256'], remote_chromosomes=list(range(1, 21)),
                           local_chromosomes=[22, 21], amendment_sha256=evidence['amendment_sha256'])
+        if repair is not None:
+            activation['record_count_repair'] = repair
         write_fixed(directory/'coordinator_activation.json', activation)
         try:
             runner.analyze_chromosome(22)
@@ -428,7 +458,10 @@ def run_after_boundary(spec, directory, boundary, *, activate=True):
             runner.aggregate()
             provenance = directory/'provenance'
             provenance.mkdir(exist_ok=True)
-            for name in ('manifest.json', 'coordinator_activation.json'):
+            names = ['manifest.json', 'coordinator_activation.json']
+            if repair is not None:
+                names += ['preprocess_count_validation.py', 'adoption.json']
+            for name in names:
                 source_file = directory/name
                 if source_file.is_file():
                     target = provenance/name
@@ -439,7 +472,8 @@ def run_after_boundary(spec, directory, boundary, *, activate=True):
                             handle.write(source_file.read_bytes())
             for source_file in sorted(imports.glob('*.json')):
                 write_fixed(provenance/source_file.name, load(source_file))
-            destination = ('00_datos_y_diseno/preprocess-v1/parallel'
+            destination = ('00_datos_y_diseno/preprocess-v2/parallel' if repair is not None else
+                           '00_datos_y_diseno/preprocess-v1/parallel'
                            if spec.get('operational_amendments') else '00_datos_y_diseno/parallel-v1')
             runner.publish(provenance, destination)
             pipeline.status(runner.run, 'COMPLETE_PUBLISHED', state='COMPLETE',

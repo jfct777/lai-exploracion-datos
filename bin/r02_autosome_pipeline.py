@@ -18,6 +18,7 @@ import math
 import os
 from pathlib import Path
 import re
+import runpy
 import shutil
 import signal
 import subprocess
@@ -176,21 +177,9 @@ def publication_files(folder):
                   and not p.name.startswith('.nextflow'))
 
 
-def validate_raw_record_count(folder, chrom):
-    """Check the sequential M01 record count against the source index count."""
-    counts=folder/'preprocess/02_filter'/f'dnabr.hg38.2723.chr{chrom}.counts.tsv'
-    with counts.open() as handle:
-        rows=list(csv.DictReader(handle, delimiter='\t'))
-    raw=[int(row['n_variants']) for row in rows if row['step']=='raw' and row['chr']==str(chrom)]
-    matches=[]
-    for log in (folder/'work').glob('*/*/.command.out'):
-        for match in re.finditer(r'^Annotated (\d+) records at (\d+) supplied-input sites$',
-                                 log.read_text(), re.MULTILINE):
-            matches.append((int(match.group(1)),int(match.group(2))))
-    if len(raw)!=1 or not matches or any(n!=raw[0] for n,_ in matches):
-        raise ValueError(f'chr{chrom}: source index count does not match completed sequential M01 annotation')
-    return dict(raw_index_records=raw[0], m01_records=matches[-1][0],
-                m01_original_sites=matches[-1][1], counts_sha256=sha(counts))
+def validate_raw_record_count(folder, chrom, *, source_index=None):
+    helper = runpy.run_path(str(ROOT/'bin/preprocess_count_validation.py'))
+    return helper['validate_raw_record_count'](folder, chrom, source_index=source_index)
 
 
 def preprocessing_resources(configuration, source_bytes):
@@ -573,7 +562,7 @@ process {{
             '-C',cfg,'run',self.source/'workflows/r02_preprocess_autosome.nf','-params-file',paramfile,
             '-work-dir',folder/'work','-ansi-log','false','-with-trace',folder/'trace.tsv','-resume'],
             cwd=folder,expected_outputs=expected)
-        audit=validate_raw_record_count(folder,c)
+        audit=validate_raw_record_count(folder,c,source_index=Path(str(raw_path)+'.tbi'))
         if not (folder/'sequential_input_counts.json').exists():
             write_new(folder/'sequential_input_counts.json',audit)
         if not (folder/'preprocessing_counts.tsv').exists():

@@ -5,7 +5,10 @@ Preflight is read-only. --apply pauses only the root startup shell (preventing i
 EXIT shutdown trap), installs RLIMIT_NPROC=0 only on the old unprivileged Python
 controller, and lets its existing Nextflow child finish unchanged. A genuine
 preprocessing checkpoint and the expected EAGAIN at the next stage are required
-before the separately authenticated successor is run. No scientific source,
+before the separately authenticated successor is run. Version 2 can instead
+adopt an already armed boundary, without arming again. Its only additional
+completion case is the exact legacy source-count guard failure, after a genuine
+checkpoint and a successful authenticated successor count preflight. No scientific source,
 original manifest, checkpoint or existing output is edited by this helper.
 
 Run as an independent root systemd service, Restart=no, KillMode=process,
@@ -18,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -270,7 +274,10 @@ class Boundary:
         check_file(self.path, self.expected)
         self.s = read(self.path)
         s = self.s
-        require(s.get('schema') == 'r02_optimization_boundary_v1', 'Unsupported boundary schema')
+        require(s.get('schema') in ('r02_optimization_boundary_v1', 'r02_optimization_boundary_v2'),
+                'Unsupported boundary schema')
+        require(('previous_boundary' in s) == (s['schema'] == 'r02_optimization_boundary_v2'),
+                'Boundary continuation requires an explicit version-2 predecessor')
         self.run = Path(s['run_dir'])
         require(self.run.is_absolute() and self.run.resolve() == self.run and self.run.is_dir(), 'Unsafe run directory')
         require(self.path.parent.is_relative_to(self.run / 'repairs'), 'Boundary specification must be under run/repairs')
@@ -334,7 +341,107 @@ class Boundary:
         prefix = 'gs://projects-usp/dnaBr-lai/datalake/' + str(destination.relative_to(mount))
         require(s['publication_prefix'].startswith(prefix + '/00_worker_provenance/optimization_boundary/')
                 and '..' not in s['publication_prefix'].split('/'), 'Publication escaped worker operational evidence')
+        if 'previous_boundary' in s:
+            self.validate_previous_boundary()
         return self
+
+    def validate_previous_boundary(self):
+        """Authenticate an already armed boundary; never re-arm or edit its evidence."""
+        require(self.path == self.run / 'repairs/preprocess-v2/boundary.json',
+                'Version-2 continuation requires its own immutable directory')
+        previous = self.s['previous_boundary']
+        require(isinstance(previous, dict) and set(previous) == {
+            'spec_path', 'spec_sha256', 'intent_sha256', 'armed_sha256', 'controller'},
+            'Invalid previous boundary reference')
+        old_path = regular(previous['spec_path'])
+        require(old_path.parent == self.run / 'repairs/preprocess-v1', 'Unexpected previous boundary directory')
+        check_file(old_path, previous['spec_sha256'])
+        old = read(old_path)
+        require(old.get('schema') == 'r02_optimization_boundary_v1' and 'previous_boundary' not in old,
+                'Only the original armed version-1 boundary may be adopted')
+        changed = {'schema', 'helper_sha256', 'replacement', 'publication_prefix', 'previous_boundary'}
+        require({k: v for k, v in old.items() if k not in changed}
+                == {k: v for k, v in self.s.items() if k not in changed},
+                'Continuation changed original identities, computation, resources or deadline')
+        old_directory = old_path.parent / ('boundary-' + previous['spec_sha256'][:16])
+        require(old_directory.resolve() == old_directory and old_directory.is_dir(),
+                'Unsafe previous armed evidence directory')
+        check_file(old_directory / 'spec.json', previous['spec_sha256'])
+        check_file(old_directory / 'helper.py', old['helper_sha256'])
+        for filename, field in [('intent.json', 'intent_sha256'), ('armed.json', 'armed_sha256')]:
+            check_file(old_directory / filename, previous[field])
+        intent, armed = read(old_directory / 'intent.json'), read(old_directory / 'armed.json')
+        require(intent.get('spec_sha256') == armed.get('spec_sha256') == previous['spec_sha256']
+                and armed.get('startup_paused') is True and armed.get('supervisor_fork_blocked') is True,
+                'Previous boundary was not genuinely armed')
+        baseline, limits = armed.get('checkpoint_baseline'), armed.get('child_limits')
+        require(isinstance(baseline, dict) and baseline == intent.get('checkpoint_baseline')
+                and self.stage + '.json' not in baseline
+                and all(re.fullmatch(r'[A-Za-z0-9_.-]+\.json', k)
+                        and isinstance(v, str) and re.fullmatch('[a-f0-9]{64}', v)
+                        for k, v in baseline.items()), 'Invalid inherited checkpoint baseline')
+        require(limits == intent.get('child_limits') and isinstance(limits, list) and len(limits) == 2
+                and all(type(value) is int for value in limits) and limits[0] > 0
+                and (limits[1] == -1 or limits[1] >= limits[0]), 'Invalid inherited Nextflow limits')
+        require(not any((old_directory / name).exists() for name in
+                        ('boundary_verified.json', 'successor_started.json', 'publication.json')),
+                'Previous boundary advanced beyond waiting; manual reconciliation required')
+        controller = previous['controller']
+        require(isinstance(controller, dict) and set(controller) == {'pid', 'start_ticks', 'cmdline_sha256'}
+                and type(controller['pid']) is int and controller['pid'] > 1
+                and type(controller['start_ticks']) is int and controller['start_ticks'] > 0
+                and isinstance(controller['cmdline_sha256'], str)
+                and re.fullmatch('[a-f0-9]{64}', controller['cmdline_sha256'])
+                and controller['pid'] not in {p['pid'] for p in
+                    [self.s['startup'], self.s['supervisor'], self.s['child'], *self.s['ancestors']]},
+                'Invalid previous boundary controller identity')
+        require(authenticated(controller) is None, 'Previous boundary controller is still active')
+        self.baseline, self.child_limits = baseline, limits
+        self.previous_directory = old_directory
+
+    def continuation_eligible(self):
+        """Read-only adoption check for live children or a genuine finished checkpoint."""
+        self.validate_previous_boundary()
+        self.health()
+        startup = authenticated(self.s['startup'])
+        require(startup is not None and startup['state'] == 'T' and startup['uids'] == [0] * 4,
+                'Inherited startup shutdown guard must remain stopped')
+        inventory = checkpoint_inventory(self.run)
+        require(set(self.baseline) <= set(inventory) <= set(self.baseline) | {self.stage + '.json'}
+                and all(inventory[k] == v for k, v in self.baseline.items()),
+                'Inherited checkpoint baseline changed')
+        parent, child = authenticated(self.s['supervisor']), authenticated(self.s['child'])
+        if parent is None:
+            require(child is None, 'Supervisor exited before Nextflow')
+            self.completion(allow_stopped_runuser=True)
+            return
+        require(parent['state'] != 'T' and parent['uids'] == [self.s['uid']] * 4
+                and parent['gids'] == [self.s['gid']] * 4
+                and parent['cap_eff'] == parent['cap_prm'] == 0 and parent['threads'] == 1,
+                'Inherited supervisor identity or state changed')
+        require(nproc(parent['pid']) == (0, self.s['original_limits'][1]),
+                'Inherited supervisor fork barrier disappeared')
+        current = parent
+        for ancestor_spec in [*self.s['ancestors'], self.s['startup']]:
+            ancestor = authenticated(ancestor_spec)
+            require(ancestor is not None and current['ppid'] == ancestor['pid'],
+                    'Inherited startup ancestry changed')
+            current = ancestor
+        if child is not None:
+            require(child['ppid'] == parent['pid'] and child['uids'] == parent['uids']
+                    and child['pgid'] == child['sid'] == child['pid']
+                    and list(nproc(child['pid'])) == self.child_limits, 'Inherited Nextflow identity or limits changed')
+
+    def adopt(self):
+        self.continuation_eligible()
+        # No process has been changed by this version; only now take responsibility
+        # for the inherited barrier and its original bounded failure policy.
+        write_once(self.directory / 'intent.json', dict(spec_sha256=self.expected, utc=now(),
+                   checkpoint_baseline=self.baseline, child_limits=self.child_limits,
+                   previous_boundary=self.s['previous_boundary'], existing_barrier_adopted=True))
+        self.interfered = True
+        self.event('ARMED_BOUNDARY_ADOPTED_WITHOUT_SIGNALS', previous_spec_sha256=
+                   self.s['previous_boundary']['spec_sha256'], original_deadline_preserved=True)
 
     def event(self, state, **fields):
         record = dict(state=state, utc=now(), spec_sha256=self.expected, **fields)
@@ -396,6 +503,37 @@ class Boundary:
         require(send(self.s['supervisor'], signal.SIGCONT), 'Protected supervisor exited before continuation')
         self.event('ARMED_EXISTING_NEXTFLOW_UNCHANGED')
 
+    def validate_legacy_count(self):
+        """Do not trust an error string alone: verify trace and the sealed count fix."""
+        folder = self.run / f"chr{self.s['chromosome']:02d}"
+        trace = regular(folder / 'trace.tsv')
+        with trace.open() as stream:
+            rows = list(csv.DictReader(stream, delimiter='\t'))
+        names = {f'{name} (chr{self.s["chromosome"]})' for name in (
+            'PREPROCESS_NORM_LEFTALIGN', 'PREPROCESS_FILTER_SNV_BIALLELIC_PASS', 'LAI_RARE_BIALELIC_ONLY')}
+        require(len(rows) == 3 and {row.get('name') for row in rows} == names
+                and all(row.get('status') in ('COMPLETED', 'CACHED') and row.get('exit') == '0'
+                        and re.fullmatch(r'[a-f0-9]{2}/[a-f0-9]{6,}', row.get('hash', '')) for row in rows),
+                'Legacy count recovery requires three genuine successful preprocessing trace tasks')
+        replacement = self.s['replacement']
+        check_file(replacement['script_path'], replacement['script_sha256'])
+        check_file(replacement['manifest_path'], replacement['manifest_sha256'])
+        command = [*replacement['command'][:-1], '--validate-legacy-count', str(self.s['chromosome'])]
+        require(replacement['command'][-1] == '--run', 'Unexpected successor execution command')
+        if os.geteuid() == 0:
+            command = ['/usr/sbin/runuser', '-u', self.s['user'], '--', *command]
+        else:
+            require(os.geteuid() == self.s['uid'], 'Count preflight requires the authenticated worker account')
+        # This mode validates only. It must not activate a worker or create an
+        # execution checkpoint; its command is fixed by authenticated source.
+        result = run_checked(command, timeout=60)
+        evidence = json.loads(result.stdout)
+        require(isinstance(evidence, dict) and evidence.get('legacy_count_validated') is True
+                and type(evidence.get('chromosome')) is int
+                and evidence['chromosome'] == self.s['chromosome'], 'Successor did not validate the legacy count')
+        return dict(trace_sha256=sha(trace), successor_manifest_sha256=replacement['manifest_sha256'],
+                    successor_script_sha256=replacement['script_sha256'], count_validation=evidence)
+
     def completion(self, *, allow_stopped_runuser=False):
         require(authenticated(self.s['supervisor']) is None and authenticated(self.s['child']) is None,
                 'Original processes must exit before adoption')
@@ -415,8 +553,14 @@ class Boundary:
             require(path.stat().st_size == record['bytes'], 'Output size changed')
             check_file(path, record['sha256'])
         status = read(self.run / 'status.json')
-        require(status.get('state') == 'FAILED' and status.get('failed_stage') == self.s['next_failed_stage']
-                and '[Errno 11]' in status.get('error', ''), 'Worker did not stop at expected next-stage EAGAIN')
+        expected_fork_failure = (status.get('state') == 'FAILED'
+            and status.get('failed_stage') == self.s['next_failed_stage']
+            and '[Errno 11]' in status.get('error', ''))
+        legacy_count_failure = (self.s['schema'] == 'r02_optimization_boundary_v2'
+            and status.get('state') == 'FAILED' and status.get('failed_stage') == self.stage
+            and status.get('error') == f"chr{self.s['chromosome']}: source index count does not match completed sequential M01 annotation")
+        require(expected_fork_failure or legacy_count_failure,
+                'Worker did not stop at expected next-stage EAGAIN or an explicitly validated legacy count guard')
         require(not containers(self.run_id), 'Worker containers still active at adoption boundary')
         for ancestor in self.s['ancestors']:
             current = authenticated(ancestor)
@@ -426,6 +570,8 @@ class Boundary:
                         and current['ppid'] == self.s['startup']['pid'], 'Unexpected active ancestor after preprocessing')
             else:
                 require(current is None, 'Intermediate original startup child still active')
+        if legacy_count_failure:
+            self.legacy_count_evidence = self.validate_legacy_count()
         return inventory[self.stage + '.json']
 
     def resume_stopped_runuser(self):
@@ -506,7 +652,9 @@ class Boundary:
             time.sleep(.02)
         write_once(self.directory / 'boundary_verified.json', dict(spec_sha256=self.expected, utc=now(),
                    checkpoint_sha256=checkpoint_sha256, command=self.command,
-                   replacement_manifest_sha256=self.s['replacement']['manifest_sha256']))
+                   replacement_manifest_sha256=self.s['replacement']['manifest_sha256'],
+                   legacy_count_recovery=getattr(self, 'legacy_count_evidence', None),
+                   historical_blocked_fork_status_fabricated=False))
         replacement = self.s['replacement']
         env = dict(os.environ, NXF_VER='26.04.6', NXF_OFFLINE='true', NXF_DISABLE_CHECK_LATEST='true',
                    PYTHONDONTWRITEBYTECODE='1')
@@ -648,7 +796,10 @@ class Boundary:
                     destination.flush()
                     os.fsync(destination.fileno())
             try:
-                self.arm()
+                if 'previous_boundary' in self.s:
+                    self.adopt()
+                else:
+                    self.arm()
                 checkpoint_sha256 = self.wait_boundary()
                 self.run_successor(checkpoint_sha256)
             except BaseException as error:
@@ -673,7 +824,10 @@ def main():
     args = parser.parse_args()
     os.umask(0o077)
     boundary = Boundary(args.spec, args.spec_sha256).validate()
-    boundary.eligible()
+    if 'previous_boundary' in boundary.s:
+        boundary.continuation_eligible()
+    else:
+        boundary.eligible()
     if args.apply:
         def terminate(signum, frame):
             raise RuntimeError('Boundary service termination signal ' + str(signum))
