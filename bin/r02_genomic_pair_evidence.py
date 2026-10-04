@@ -122,6 +122,42 @@ def _header_scalar(header, key):
     return values[0]
 
 
+def validate_rare_header(header, samples, expected_source_samples):
+    """Shared source-minor contract for global and interval evidence readers."""
+    source_samples = list(header.samples)
+    require(len(source_samples) == expected_source_samples, "Unexpected source sample count")
+    require(_header_scalar(header, "dnabr_original_alleles") == "v1", "Uncertified original alleles")
+    require(_header_scalar(header, "dnabr_rare_contract") == "minor_v1", "Expected M02.1 minor_v1")
+    require(int(_header_scalar(header, "dnabr_rare_cohort_n_samples")) == len(source_samples), "Source N header mismatch")
+    require(_header_scalar(header, "dnabr_rare_cohort_sha256") == sample_hash(source_samples), "Source sample identity mismatch")
+    require(set(samples) <= set(source_samples), "Analytical sample absent from VCF")
+    for key in ("RARE_ALLELE", "ORIG_NALLELES", "RARE_AC", "RARE_AN"):
+        require(key in header.info, f"Missing INFO/{key}")
+    require("RD" in header.formats and "GT" in header.formats, "Missing GT/RD")
+    return source_samples
+
+
+def validate_rare_site(record):
+    require(record.info.get("ORIG_NALLELES") == 2, "Originally multiallelic site reached evidence reader")
+    require(len(record.alleles) == 2 and all(len(a) == 1 and a in "ACGT" for a in record.alleles), "Expected biallelic SNV")
+    allele = record.info["RARE_ALLELE"]
+    require(allele in (0, 1), "Invalid selected source allele")
+    ac, an = record.info["RARE_AC"], record.info["RARE_AN"]
+    require(ac >= 2 and an > 0 and 100 * ac <= an, "Source rare criterion MAC>=2, MAF<=1% violated")
+    return allele
+
+
+def rare_dosage(call, allele):
+    """Return fixed-source dosage or None; partial GT is never a noncarrier."""
+    gt, rd = call.get("GT", ()), call.get("RD")
+    require(len(gt) == 2 and all(a in (None, 0, 1) for a in gt), "Non-diploid/non-biallelic GT")
+    if None in gt:
+        require(rd is None, "Incomplete GT must have missing RD")
+        return None
+    require(rd == sum(a == allele for a in gt), "RD disagrees with GT and fixed source allele")
+    return rd
+
+
 def rare_evidence(vcf, samples, chrom, expected_source_samples, chunk_sites=2048):
     import pysam
     require(chunk_sites > 0, "chunk-sites must be positive")
@@ -129,17 +165,8 @@ def rare_evidence(vcf, samples, chrom, expected_source_samples, chunk_sites=2048
     counter, started = Counter(), time.monotonic()
     accumulator = RareCounts(len(samples))
     with pysam.VariantFile(str(vcf)) as source:
-        source_samples = list(source.header.samples)
-        require(len(source_samples) == expected_source_samples, "Unexpected source sample count")
-        require(_header_scalar(source.header, "dnabr_original_alleles") == "v1", "Uncertified original alleles")
-        require(_header_scalar(source.header, "dnabr_rare_contract") == "minor_v1", "Expected M02.1 minor_v1")
-        require(int(_header_scalar(source.header, "dnabr_rare_cohort_n_samples")) == len(source_samples), "Source N header mismatch")
+        source_samples = validate_rare_header(source.header, samples, expected_source_samples)
         source_hash = sample_hash(source_samples)
-        require(_header_scalar(source.header, "dnabr_rare_cohort_sha256") == source_hash, "Source sample identity mismatch")
-        require(set(samples) <= set(source_samples), "Analytical sample absent from VCF")
-        for key in ("RARE_ALLELE", "ORIG_NALLELES", "RARE_AC", "RARE_AN"):
-            require(key in source.header.info, f"Missing INFO/{key}")
-        require("RD" in source.header.formats and "GT" in source.header.formats, "Missing GT/RD")
         # pysam retains input order; explicitly map to the requested analysis order.
         source.subset_samples(samples)
         current_order = list(source.header.samples)
@@ -151,23 +178,14 @@ def rare_evidence(vcf, samples, chrom, expected_source_samples, chunk_sites=2048
             require(chromosome(record.contig) == chrom, "VCF contains unexpected chromosome")
             require(record.pos > previous, "Duplicate or decreasing genomic position")
             previous = record.pos
-            require(record.info.get("ORIG_NALLELES") == 2, "Originally multiallelic site reached evidence reader")
-            require(len(record.alleles) == 2 and all(len(a) == 1 and a in "ACGT" for a in record.alleles), "Expected biallelic SNV")
-            allele = record.info["RARE_ALLELE"]
-            require(allele in (0, 1), "Invalid selected source allele")
-            ac, an = record.info["RARE_AC"], record.info["RARE_AN"]
-            require(ac >= 2 and an > 0 and 100 * ac <= an, "Source rare criterion MAC>=2, MAF<=1% violated")
+            allele = validate_rare_site(record)
             n_carriers = 0
             for i, call in zip(sample_indices, record.samples.values()):
-                gt, rd = call.get("GT", ()), call.get("RD")
-                require(len(gt) == 2 and all(a in (None, 0, 1) for a in gt), "Non-diploid/non-biallelic GT")
-                if None in gt:
-                    require(rd is None, "Incomplete GT must have missing RD")
+                rd = rare_dosage(call, allele)
+                if rd is None:
                     mr.append(i); mc.append(block_n)
                     counter["incomplete_genotypes"] += 1
                     continue
-                expected_rd = sum(a == allele for a in gt)
-                require(rd == expected_rd, "RD disagrees with GT and fixed source allele")
                 if rd > 0:
                     cr.append(i); cc.append(block_n)
                     n_carriers += 1

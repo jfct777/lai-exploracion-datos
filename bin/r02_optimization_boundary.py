@@ -31,6 +31,7 @@ from pathlib import Path
 import pwd
 import re
 import resource
+import select
 import shutil
 import signal
 import subprocess
@@ -97,7 +98,7 @@ def process_info(pid):
         status = dict(line.split(':', 1) for line in (proc / 'status').read_text().splitlines())
         command = (proc / 'cmdline').read_bytes()
         last = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return None
     require(first[19] == last[19], 'PID changed while reading identity')
     return dict(pid=int(pid), start_ticks=int(first[19]), state=last[0], ppid=int(last[1]),
@@ -111,15 +112,57 @@ def identity(info):
     return {key: info[key] for key in ('pid', 'start_ticks', 'cmdline_sha256')}
 
 
-def authenticated(spec):
+def same_incarnation(spec):
+    """Reject PID reuse even when the replacement is already a zombie."""
     current = process_info(spec['pid'])
-    if current is None:
-        return None
-    require(current['start_ticks'] == spec['start_ticks'], 'PID reused; refusing adoption or signal')
-    if current['state'] in ('Z', 'X'):
-        return None
-    require(current['cmdline_sha256'] == spec['cmdline_sha256'], 'Process command changed')
+    if current is not None:
+        require(current['start_ticks'] == spec['start_ticks'], 'PID reused; refusing adoption or signal')
     return current
+
+
+def pidfd_exited(fd, timeout_ms=0):
+    """Kernel exit notification, without reaping another controller's child."""
+    poller = select.poll()
+    poller.register(fd, select.POLLIN)
+    events = poller.poll(timeout_ms)
+    require(not any(mask & (select.POLLERR | select.POLLNVAL) for _, mask in events),
+            'Invalid process exit notification')
+    return any(mask & (select.POLLIN | select.POLLHUP) for _, mask in events)
+
+
+def authenticated(spec):
+    current = same_incarnation(spec)
+    if current is None or current['state'] in ('Z', 'X'):
+        return None
+    if current['cmdline_sha256'] == spec['cmdline_sha256']:
+        return current
+    # exit_mm() clears cmdline before exit_notify() changes the task to Z.
+    # Empty argv alone is NOT proof of exit: an exec/argv change can also
+    # alter it. Only a bounded kernel notification may resolve this ambiguity.
+    empty = hashlib.sha256(b'').hexdigest()
+    message = (f"Process command changed: pid={spec['pid']} state={current['state']} "
+               f"expected_sha256={spec['cmdline_sha256']} observed_sha256={current['cmdline_sha256']}")
+    require(current['cmdline_sha256'] == empty, message)
+    try:
+        fd = os.pidfd_open(spec['pid'])
+    except ProcessLookupError:
+        require(same_incarnation(spec) is None, 'Process reappeared after exit lookup')
+        return None
+    try:
+        # Binding a pidfd can race with exit/reuse; authenticate again before
+        # interpreting its notification. A nonempty changed command still fails.
+        current = same_incarnation(spec)
+        if current is None or current['state'] in ('Z', 'X'):
+            return None
+        require(current['cmdline_sha256'] in (empty, spec['cmdline_sha256']), message)
+        exited = pidfd_exited(fd, timeout_ms=1000)
+        current = same_incarnation(spec)
+        if current is not None and current['state'] not in ('Z', 'X'):
+            require(current['cmdline_sha256'] in (empty, spec['cmdline_sha256']), message)
+        require(exited, message + '; empty command without confirmed process exit')
+        return None
+    finally:
+        os.close(fd)
 
 
 def authenticated_runuser(spec):
@@ -136,11 +179,17 @@ def authenticated_runuser(spec):
 def send(spec, sig):
     if authenticated(spec) is None:
         return False
-    fd = os.pidfd_open(spec['pid'])
     try:
-        if authenticated(spec) is None:
+        fd = os.pidfd_open(spec['pid'])
+    except ProcessLookupError:
+        return False
+    try:
+        if authenticated(spec) is None or pidfd_exited(fd):
             return False
-        signal.pidfd_send_signal(fd, sig)
+        try:
+            signal.pidfd_send_signal(fd, sig)
+        except ProcessLookupError:
+            return False
     finally:
         os.close(fd)
     return True
@@ -669,7 +718,11 @@ class Boundary:
                        command=command, manifest_sha256=replacement['manifest_sha256']))
             while self.successor.poll() is None:
                 self.health()
-                require(authenticated(self.successor_identity) is not None, 'Successor process identity lost')
+                if authenticated(self.successor_identity) is None:
+                    # It may exit after poll() but before /proc authentication.
+                    # Reap only our own Popen child and retain its true status.
+                    self.successor.wait(timeout=5)
+                    break
                 time.sleep(10)
             require(self.successor.returncode == 0, 'Successor failed; no automatic retry')
         self.validate_successor_completion()

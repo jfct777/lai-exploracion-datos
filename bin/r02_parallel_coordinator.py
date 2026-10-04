@@ -25,6 +25,7 @@ import subprocess
 import tempfile
 import time
 import types
+from urllib.parse import quote
 
 
 ESSENTIAL = frozenset({
@@ -266,6 +267,28 @@ def validate_manifest(path, expected_sha256):
     return spec
 
 
+def missing_object_error(stderr, uri):
+    """Recognize a describe 404, never a status mentioned inside another error.
+
+    gcloud formats successful output as JSON but still emits errors as text.
+    Keep unknown or conflicting diagnostics fail-closed, and bind its current
+    URI-first error format to the object that was actually requested.
+    """
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    errors = [line for line in lines if line.startswith('ERROR:')]
+    candidates = errors or lines
+    if len(candidates) != 1:
+        return False
+    message = re.sub(r'^ERROR:\s*(?:\(gcloud\.storage\.objects\.describe\)\s*)?',
+                     '', candidates[0])
+    bucket, separator, object_name = uri.removeprefix('gs://').partition('/')
+    encoded_uri = 'gs://' + bucket + separator + quote(object_name, safe='')
+    return bool(any(re.fullmatch(re.escape(name) + r'\s+not found:\s*404\.?', message)
+                    for name in (uri, encoded_uri))
+                or re.match(r'(?:HTTPError\s+404|NOT_FOUND:\s*404|'
+                            r'ResponseError:\s*status\s*=\s*404)\b', message))
+
+
 class GCS:
     """Read-only cloud operations; all transfers are tied to object generations."""
 
@@ -273,8 +296,7 @@ class GCS:
         result = subprocess.run(['gcloud', 'storage', 'objects', 'describe', uri, '--format=json'],
                                 capture_output=True, text=True, timeout=120)
         if result.returncode:
-            if optional and any(token in result.stderr for token in (
-                    'HTTPError 404', 'NOT_FOUND: 404', 'ResponseError: status=404')):
+            if optional and missing_object_error(result.stderr, uri):
                 return None
             raise RuntimeError('Cannot authenticate cloud object: ' + uri + ': ' + result.stderr[-1000:])
         return json.loads(result.stdout)
@@ -427,7 +449,7 @@ def wait_and_import(spec, receipt_dir, state, cloud=None):
             time.sleep(min(spec.get('poll_seconds', 30), max(0, deadline-time.time())))
 
 
-def run_after_boundary(spec, directory, boundary, *, activate=True):
+def run_after_boundary(spec, directory, boundary, *, activate=True, provenance_destination=None):
     source = Path(spec['run_dir'])/'repairs/boundary-v2'
     hashes = load(source/'source.sha256.json')
     adapter = load_module(source/'source/bin/r02_apply_amendment.py',
@@ -472,7 +494,7 @@ def run_after_boundary(spec, directory, boundary, *, activate=True):
                             handle.write(source_file.read_bytes())
             for source_file in sorted(imports.glob('*.json')):
                 write_fixed(provenance/source_file.name, load(source_file))
-            destination = ('00_datos_y_diseno/preprocess-v2/parallel' if repair is not None else
+            destination = provenance_destination or ('00_datos_y_diseno/preprocess-v2/parallel' if repair is not None else
                            '00_datos_y_diseno/preprocess-v1/parallel'
                            if spec.get('operational_amendments') else '00_datos_y_diseno/parallel-v1')
             runner.publish(provenance, destination)
