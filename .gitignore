@@ -1,0 +1,21 @@
+/runs/
+# Artefactos de traza que Nextflow escribe en el directorio de lanzamiento.
+# Los resultados persistentes viven en GCS; estos solo ensucian el arbol y
+# disparan la advertencia de procedencia en la siguiente corrida.
+trace-*.txt
+report-*.html
+timeline-*.html
+
+# Material de trabajo local: conservar en disco, no publicar en el repositorio.
+/tests/
+/docs/
+/workflows/**/*.md
+
+# Instrucciones, memoria y grafo locales; no forman parte del pipeline distribuido.
+/.claude/
+/.codex/
+/.agents/
+/AGENTS.md
+/CLAUDE.md
+/graphify-out/
+/.codegraph/
