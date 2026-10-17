@@ -304,8 +304,8 @@ def prepare(run, analysis_image):
                       'local window/stratum sensitivity: not needed to compute whole-catalogue J',
                       'neural training, LAI simulation, new phasing and new kinship: outside this execution'],
                   interpretation='Full-cohort descriptive evidence for all M14 detectors and graphs; not held-out validation or certified populations',
-                  council='Auxiliary adversarial review; not qualified formal approval',
-                  notebooklm='Current access timed out; dated primary plan/settings take precedence',
+                  review_scope='Auxiliary adversarial review; not qualified formal approval',
+                  source_basis='Dated primary plan and execution settings take precedence over secondary summaries',
                   origin_commit=subprocess.check_output(['git','rev-parse','HEAD'], cwd=ROOT, text=True).strip())
     write_new(run/'run.json', config)
     write_new(run/'m14_diagnostic_settings.json',
@@ -648,52 +648,26 @@ process {{
         write_new(done,dict(completed_utc=now(),chromosome=c,outputs=files_manifest(publication_files(folder))))
 
     def cleanup_bulk(self,folder,c):
-        """Delete only exact new large files after validated publication/consumers."""
+        """Legacy deletion is disabled; derived results do not preserve M02.
+
+        Historical cleanup plans contain only paths/sizes, not authenticated
+        independent copies of the complete M02 VCF and index. Never resume
+        their deletion, even after publication of rare/common derivatives.
+        An existing completion receipt is a no-op for historical idempotence,
+        not proof of preservation and not authorization for additional cleanup.
+
+        New M02 recovery and support workers have separate publication checks
+        and cleanup implementations. This method does not call or authorize
+        those workers, migrate old receipts, upload data or remove any file.
+        """
         receipt=folder/'bulk_cleanup.json'
         if c==22 or receipt.exists(): return
-        relative=f'01_estructura/desarrollo/por_cromosoma/chr{c:02d}'
-        if not (self.run/'checkpoints'/('publish_'+relative.replace('/','_')+'.json')).exists():
-            raise ValueError('Refuse bulk cleanup before successful publication')
-        base=f'dnabr.hg38.2723.chr{c}'
-        allowed={base+'.original.bcf',base+'.norm.vcf.gz',base+'.norm.vcf.gz.tbi',base+'.norm.log',
-                 base+'.snv.bi.vcf.gz',base+'.snv.bi.vcf.gz.tbi',base+'.snv.bi.pass.vcf.gz',
-                 base+'.snv.bi.pass.vcf.gz.tbi',base+'.counts.tsv'}
-        plan_path=folder/'bulk_cleanup_plan.json'
-        if plan_path.exists():
-            plan=json.loads(plan_path.read_text())
-        else:
-            plan=[]
-            for marker in (folder/'work').glob('*/*/*.large_temp_dir.txt'):
-                d=Path(marker.read_text().strip())
-                if d.parent!=Path(self.c['bulk']) or not re.fullmatch(f'm0[12]_chr{c}\\.[A-Za-z0-9]+',d.name) or d.is_symlink():
-                    raise ValueError('Unsafe bulk cleanup target')
-                entries=[]
-                for p in sorted(d.iterdir()):
-                    if p.name not in allowed or not p.is_file() or p.is_symlink():
-                        raise ValueError('Unexpected generated file')
-                    entries.append(dict(path=str(p),
-                                        uri=uri(p) if p.is_relative_to(MOUNT) else None,
-                                        bytes=p.stat().st_size))
-                plan.append(dict(directory=str(d),files=entries))
-            if not plan: raise ValueError('No authenticated bulk-directory marker found')
-            write_new(plan_path,plan)
-        records=[]
-        for group in plan:
-            d=Path(group['directory'])
-            if d.parent!=Path(self.c['bulk']) or not re.fullmatch(f'm0[12]_chr{c}\\.[A-Za-z0-9]+',d.name) or d.is_symlink():
-                raise ValueError('Unsafe saved cleanup plan')
-            for item in group['files']:
-                p=Path(item['path'])
-                if p.parent!=d or p.name not in allowed or p.is_symlink():
-                    raise ValueError('Unsafe saved cleanup file')
-                if p.exists():
-                    if not p.is_file() or p.stat().st_size!=item['bytes']:
-                        raise ValueError('Generated intermediate changed before cleanup')
-                    p.unlink()
-                records.append(item)
-            if d.exists(): d.rmdir()
-        write_new(receipt,dict(removed_new_intermediates_only=records,utc=now(),
-                              recovery='Regenerate from immutable raw input; no historical source removed'))
+        raise ValueError(
+            'Legacy bulk cleanup is DISABLED: preserve all M01/M02 files. '
+            'Publishing derived rare/common results does not preserve the complete M02 VCF and index. '
+            'A separately authorized deletion path must verify independent persistent M02 copies first; '
+            'the new M02 recovery worker already manages its own verified publication and cleanup. '
+            'This legacy runner cannot finalize a new chromosome by deleting these files.')
 
     def aggregate(self):
         manifest={'schema_version':1,'chromosomes':[]}

@@ -25,13 +25,55 @@ import r02_autosome_pipeline as pipeline
 SCHEMA = "r02_evidence_publication_v1"
 PREFIX = ("gs://projects-usp/dnaBr-lai/datalake/refined/DNABR_QC/presentacion/"
           "biologico/R02_20260930/")
+# Read-only equivalence for the exact historical Gnomix inputs already used by
+# this project; no sibling prefix, encoded path, alternate chromosome or VCF.
+LEGACY_GNOMIX_SOURCE = re.compile(r'gs://projects-usp/dna-do-brasil/dnabr-lai-gnomix/'
+    r'persnplai_default_rephase_results/chr([1-9]|1[0-9]|2[0-2])/'
+    r'dnabr\.chr\1\.results\.(?:msp|fb)')
+
 ALLOWED_MANIFESTS = {
+    "r02_rare_ancestry_chromosome_v1": "COMPLETE_CONDITIONAL_IDENTIFICATION_NOT_FINE_STRUCTURE_VALIDATION",
+    "r02_rare_ancestry_pair_bounds_v1": "COMPLETE_CONDITIONAL_PAIR_SHARING_BOUNDS_NOT_PHASE_OR_FINE_STRUCTURE_VALIDATION",
+    "r02_rare_ancestry_autosomes_v1": "COMPLETE_AUTOSOMAL_CONDITIONAL_IDENTIFICATION_NOT_FINE_STRUCTURE_VALIDATION",
+    "r02_lai_simulate_output_v1": "COMPLETE_SIMULATED_SCENARIO_NOT_LAI_VALIDATION",
+    "r02_community_ibd_ancestry_inputs_v1": "COMPLETE_REPORTED_IBD_ANCESTRY_COMPOSITION_NOT_RARE_PHASE_VALIDATION",
+    "r02_community_ibd_ancestry_chromosome_v1": "CHROMOSOME_REPORTED_IBD_ANCESTRY_COMPOSITION",
+    "r02_community_roh_v1": "COMPLETE_DESCRIPTIVE_ROH_COMPARISON_NOT_FOUNDER_IDENTIFICATION",
+    "r02_community_validation_v1": "COMPLETE_CONDITIONAL_REPORTED_ASSOCIATIONS_NOT_POPULATION_VALIDATION",
+    "r02_lai_fold_material_v1": "COMPLETE_EXACT_DONOR_FOLDS_AND_PLANS_PENDING_SCIENTIFIC_REVIEW",
+    "r02_community_ibd_chromosome_v1": "COMPLETE_REPORTED_IBD_CHROMOSOME_DESCRIPTION",
+    "r02_community_ibd_summary_v1": "COMPLETE_REPORTED_IBD_COMPARISON_NOT_COMPLETE_BIOLOGICAL_VALIDATION",
+    "r02_community_level_presentation_v1": "COMPLETE_DESCRIPTIVE_PRESENTATION_NOT_POPULATION_VALIDATION",
+    "r02_lai_development_design_v1": "DEVELOPMENT_DESIGN_PREPARED_NOT_SIMULATION_AUTHORIZATION",
+    "r02_lai_admission_v1": "COMPLETE_CONDITIONAL_MATERIAL_ADMISSION_NOT_SIMULATION_AUTHORIZATION",
+    "r02_lai_full_chromosome_audit_v1": "COMPLETE_PRIVATE_FULL_MARKER_AUDIT_NOT_PHASE_OR_SIMULATION_VALIDATION",
+    "r02_lai_full_chromosome_audit_aggregate_v1": "COMPLETE_AUTOSOMAL_FULL_MARKER_AUDIT_NOT_SIMULATION_READY",
+    "r02_lai_donor_dependency_v1": "COMPLETE_PRIVATE_DONOR_DEPENDENCY_DIAGNOSTIC_NOT_SPLIT",
+    "r02_lai_donor_readiness_v1": "COMPLETE_PRIVATE_DONOR_READINESS_NOT_SIMULATION_READY",
+    "r02_lai_donor_readiness_aggregate_v1": "COMPLETE_AUTOSOMAL_DONOR_READINESS_NOT_SIMULATION_READY",
+    "r02_lai_panel_prepare_v1": "COMPLETE_PANEL_PREPARATION_NOT_KINSHIP_PHASE_OR_BIOLOGICAL_VALIDATION",
+    "r02_lai_panel_merge_v1": "COMPLETE_PRIVATE_AUTOSOMAL_COMMONS_NOT_KINSHIP",
+    "r02_lai_panel_gds_v1": "COMPLETE_PRIVATE_GDS_LD_NOT_KINSHIP_VALIDATION",
+    "r02_lai_panel_pcair_v1": "COMPLETE_PCAIR_CHECKPOINT_NOT_DONOR_INDEPENDENCE",
+    "r02_lai_panel_pcrelate_v1": "COMPLETE_PCRELATE_DESCRIPTIVE_NOT_DONOR_INDEPENDENCE",
+    "r02_structure_interpretation_v1": "COMPLETE_DESCRIPTIVE_INTERPRETATION_NOT_POPULATION_VALIDATION",
+    "r02_checkpoint_reported_ibd_v1": "COMPLETE_REPORTED_GEOMETRY_NOT_BIOLOGICAL_VALIDATION",
+    "r02_checkpoint_ibd_aggregate_v1": "COMPLETE_DESCRIPTIVE_REPORTED_GEOMETRY",
+    "r02_lai_simulation_material_v1": "COMPLETE_JOINT_MATERIAL_FEASIBILITY_NOT_SIMULATION_READY",
+    "r02_lai_material_decision_v1": "COMPLETE_MATERIAL_DECISION_CONDITIONAL_NOT_SIMULATION_READY",
+    "r02_lai_material_decision_aggregate_v1": "COMPLETE_AUTOSOMAL_MATERIAL_DECISION_CONDITIONAL_NOT_SIMULATION_READY",
+    "r02_lai_donor_haplotypes_v1": "COMPLETE_PRIVATE_DONOR_HAPLOTYPES_NOT_SIMULATION_READY",
+    "r02_lai_donor_haplotypes_aggregate_v1": "COMPLETE_AUTOSOMAL_PRIVATE_DONOR_PREPARATION_NOT_SIMULATION_READY",
+    "r02_ibd_local_ancestry_v1": "ANNOTATED_REPORTED_IBD_WITH_EXISTING_GNOMIX_NOT_VALIDATION",
+    "r02_lai_support_review_v1": "COMPLETE_DESCRIPTIVE_SUPPORT_REVIEW_NOT_PHASE_OR_LAI_VALIDATION",
     "r02_lai_genotype_support_v1": "COMPLETE_GENOTYPE_AUDIT_NOT_PHASE_OR_BIOLOGICAL_VALIDATION",
     "r02_biological_evaluation_v1": "BIOLOGICAL_DESCRIPTIVE_NOT_VALIDATED",
     "r02_segment_evidence_v1": "COMPLETE_DESCRIPTIVE_NOT_VALIDATED",
     "r02_community_evidence_v1": "COMPLETE_DESCRIPTIVE_COMMUNITY_EVIDENCE_NOT_VALIDATED",
     "r02_community_summary_v1": "COMPLETE_DESCRIPTIVE_COMMUNITY_SUMMARY_NOT_VALIDATED",
     "r02_lai_catalogue_correspondence_v1": "COMPLETE_CATALOGUE_CORRESPONDENCE_ONLY_NOT_SUPPORT",
+    "r02_lai_plink_catalogue_v1": "COMPLETE_CATALOGUE_ONLY_NO_GENOTYPES_NO_BUILD_CERTIFICATION",
+    "r02_lai_plink_candidate_counts_v1": "COMPLETE_CANDIDATE_CODED_ALLELE_COUNTS_NOT_HOMOLOGATED",
 }
 
 
@@ -125,14 +167,20 @@ def local_recheck(record):
             "Local source changed during publication: " + record["name"])
 
 
-def remote_metadata(uri):
-    # Reuse the established API reader; this is only its logical mount-path
-    # adapter. No FUSE lookup, stat, copy, or mount access is performed.
-    return pipeline.object_metadata(pipeline.MOUNT / uri.removeprefix(pipeline.BUCKET))
+def remote_metadata(uri, *, timeout_seconds=120):
+    # Direct API URI: the older datalake mount adapter could not represent the
+    # explicitly permitted legacy source. This operation only describes bytes.
+    require(isinstance(uri,str) and (uri.startswith(pipeline.BUCKET) or
+            LEGACY_GNOMIX_SOURCE.fullmatch(uri)) and not any(x in uri for x in '\n\r#?'),
+            'Metadata URI outside permitted data or exact read-only legacy source')
+    require(isinstance(timeout_seconds,(int,float)) and not isinstance(timeout_seconds,bool) and
+            0 < timeout_seconds <= 120, 'Metadata timeout must be positive and at most120seconds')
+    return json.loads(subprocess.check_output([
+        'gcloud','storage','objects','describe',uri,'--format=json'],text=True,timeout=timeout_seconds))
 
 
-def verify_remote(record, *, pinned=False):
-    metadata = remote_metadata(record["uri"])
+def verify_remote(record, *, pinned=False, timeout_seconds=120):
+    metadata = remote_metadata(record["uri"], timeout_seconds=timeout_seconds)
     require(isinstance(metadata, dict), "Invalid GCS object metadata")
     size, generation = metadata.get("size"), metadata.get("generation")
     require(not isinstance(size, bool) and re.fullmatch(r"[0-9]+", str(size)) and
@@ -147,6 +195,7 @@ def verify_remote(record, *, pinned=False):
 
 
 def upload_one(record):
+    require(record['uri'].startswith(pipeline.BUCKET), 'Uploads remain restricted to datalake; legacy sources are read-only')
     local_recheck(record)
     result = subprocess.run([
         "gcloud", "storage", "cp", "--if-generation-match=0",

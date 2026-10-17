@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Mechanical SOURCE_VALID projection, preserving sites and opaque selected GT.
 
+Version 2 additionally permits REF_TRAIN and an explicit autosome. Version 1
+remains the historical SOURCE_VALID/chr22 contract with its REF receipt gate.
+
 No frequencies, phase validation, simulation or SOURCE_TEST GT interpretation.
 Inherited INFO/AC/AN describe the full source and MUST NOT be used as subset AC/AN.
 """
@@ -11,6 +14,7 @@ import gzip
 import hashlib
 import itertools
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -51,21 +55,25 @@ def header(path, limit):
     raise ValueError('VCF sample header missing')
 
 
-def allowlist(roles, samples, expected, expected_ancestries):
+ALLOWED_ROLES = ('REF_TRAIN', 'SOURCE_VALID')
+
+
+def allowlist(roles, samples, expected, expected_ancestries, role='SOURCE_VALID'):
+    require(role in ALLOWED_ROLES, 'Only REF_TRAIN or SOURCE_VALID is authorized')
     with Path(roles).open(newline='') as handle:
         reader = csv.DictReader(handle, delimiter='\t')
         require({'sample_id', 'role', 'ancestry'} <= set(reader.fieldnames or []), 'Roles columns missing')
         rows = list(reader)
     require(len(samples) == len(set(samples)), 'Duplicate panel sample')
     require([r['sample_id'] for r in rows] == samples, 'Roles/panel order or membership mismatch')
-    selected = [r['sample_id'] for r in rows if r['role'] == 'SOURCE_VALID']
-    require(len(selected) == expected and len(set(selected)) == expected, 'SOURCE_VALID count mismatch')
-    require(dict(Counter(r['ancestry'] for r in rows if r['role'] == 'SOURCE_VALID')) == expected_ancestries,
-            'SOURCE_VALID ancestry counts mismatch')
+    selected = [r['sample_id'] for r in rows if r['role'] == role]
+    require(len(selected) == expected and len(set(selected)) == expected, role + ' count mismatch')
+    require(dict(Counter(r['ancestry'] for r in rows if r['role'] == role)) == expected_ancestries,
+            role + ' ancestry counts mismatch')
     return selected
 
 
-def verify_projection(source, output, selected, expected_records, limit):
+def verify_projection(source, output, selected, expected_records, limit, chromosome=None):
     samples = header(source, limit)
     require(header(output, limit) == selected, 'Output sample order differs')
     indices = [samples.index(s) + 9 for s in selected]
@@ -77,6 +85,8 @@ def verify_projection(source, output, selected, expected_records, limit):
         a, b = left.split('\t'), right.split('\t')
         require(len(a) == 9 + len(samples) and len(b) == 9 + len(selected), 'VCF width mismatch')
         require(a[:9] == b[:9], 'Site/alleles/INFO/FORMAT changed')
+        if chromosome is not None:
+            require(a[0] in (chromosome, 'chr' + chromosome), 'Unexpected source chromosome')
         # Compare selected cells as opaque text, without decoding any unselected GT.
         require([a[i] for i in indices] == b[9:], 'Selected genotype text changed')
         digest.update(('\t'.join((a[0], a[1], a[3], a[4])) + '\n').encode())
@@ -85,15 +95,43 @@ def verify_projection(source, output, selected, expected_records, limit):
     return count, digest.hexdigest()
 
 
+def validate_contract(contract):
+    schema = contract.get('schema')
+    require(schema in ('r02_lai_role_subset_contract_v1', 'r02_lai_role_subset_contract_v2'),
+            'Unknown subset contract')
+    role = contract.get('role')
+    require(role in ALLOWED_ROLES, 'Only REF_TRAIN or SOURCE_VALID is authorized')
+    if schema.endswith('_v1'):
+        require(role == 'SOURCE_VALID', 'Version 1 only authorizes SOURCE_VALID')
+        chromosome = '22'
+    else:
+        chromosome = contract.get('chromosome')
+        require(isinstance(chromosome, str) and re.fullmatch(r'([1-9]|1[0-9]|2[0-2])', chromosome),
+                'Explicit autosome 1-22 required')
+        require(set(contract['input_sha256']) == {'source_vcf', 'roles'}, 'Version 2 requires exactly source/roles hashes')
+    for field in ('expected_source_samples', 'expected_selected_samples', 'expected_records'):
+        require(type(contract.get(field)) is int and contract[field] > 0, 'Positive count required: ' + field)
+    require(isinstance(contract.get('expected_ancestries'), dict) and
+            all(isinstance(k, str) and k and type(v) is int and v > 0 for k, v in contract['expected_ancestries'].items()) and
+            sum(contract['expected_ancestries'].values()) == contract['expected_selected_samples'],
+            'Explicit ancestry totals must sum to selected samples')
+    require(all(isinstance(v, str) and re.fullmatch('[0-9a-f]{64}', v) for v in contract['input_sha256'].values()),
+            'Invalid expected SHA256')
+    return role, chromosome
+
+
 def run(args):
     contract = json.loads(Path(args.contract).read_text())
-    require(contract['schema'] == 'r02_lai_role_subset_contract_v1', 'Unknown subset contract')
-    require(contract['role'] == 'SOURCE_VALID', 'Only SOURCE_VALID is authorized')
-    inputs = {key: Path(getattr(args, key)) for key in ('source_vcf', 'roles', 'ref_receipt')}
+    role, chromosome = validate_contract(contract)
+    legacy = contract['schema'].endswith('_v1')
+    require(not legacy or getattr(args, 'ref_receipt', None), 'Version 1 requires the original REF receipt')
+    require(legacy or not getattr(args, 'ref_receipt', None), 'Version 2 does not consume an unrelated REF receipt')
+    inputs = {key: Path(getattr(args, key)) for key in (('source_vcf', 'roles', 'ref_receipt') if legacy else ('source_vcf', 'roles'))}
     for key, path in inputs.items():
         require(sha(path) == contract['input_sha256'][key], 'Input hash mismatch: ' + key)
-    ref = json.loads(inputs['ref_receipt'].read_text())
-    require(ref['schema'] == 'r02_lai_genotype_support_v1' and
+    if legacy:
+        ref = json.loads(inputs['ref_receipt'].read_text())
+        require(ref['schema'] == 'r02_lai_genotype_support_v1' and
             ref['status'] == 'COMPLETE_GENOTYPE_AUDIT_NOT_PHASE_OR_BIOLOGICAL_VALIDATION' and
             ref['role_validation']['role'] == 'REF_TRAIN' and
             ref['role_validation']['n_role_members'] == contract['expected_ref_samples'] and
@@ -103,21 +141,21 @@ def run(args):
     require(shutil.disk_usage(output.parent).free >= args.min_free_gib * 1024**3, 'Insufficient free disk reserve')
     samples = header(inputs['source_vcf'], args.max_line_bytes)
     require(len(samples) == contract['expected_source_samples'], 'Source sample count mismatch')
-    selected = allowlist(inputs['roles'], samples, contract['expected_selected_samples'], contract['expected_ancestries'])
+    selected = allowlist(inputs['roles'], samples, contract['expected_selected_samples'], contract['expected_ancestries'], role)
     version = subprocess.check_output([args.bcftools, '--version'], text=True).splitlines()[0]
     require(version == contract['bcftools_version'], 'Unexpected bcftools version')
     output.mkdir(mode=0o700)
     keep = output / 'samples.private.txt'
     keep.write_text('\n'.join(selected) + '\n'); keep.chmod(0o600)
-    vcf = output / 'source_valid.chr22.vcf.gz'
+    vcf = output / f'{role.lower()}.chr{chromosome}.vcf.gz'
     command = [args.bcftools, 'view', '-S', str(keep), '-I', '--no-version', '-Oz', '-o', str(vcf), str(inputs['source_vcf'])]
     subprocess.run(command, check=True, capture_output=True, timeout=args.timeout_seconds)
-    count, digest = verify_projection(inputs['source_vcf'], vcf, selected, contract['expected_records'], args.max_line_bytes)
+    count, digest = verify_projection(inputs['source_vcf'], vcf, selected, contract['expected_records'], args.max_line_bytes, chromosome)
     subprocess.run([args.bcftools, 'index', '--csi', str(vcf)], check=True, capture_output=True, timeout=args.timeout_seconds)
     for key, path in inputs.items():
         require(sha(path) == contract['input_sha256'][key], 'Input changed during projection')
     receipt = dict(schema='r02_lai_role_subset_v1', status='COMPLETE_MECHANICAL_SUBSET_NOT_BUILD_QC_OR_PHASE_VALIDATION',
-                   role='SOURCE_VALID', source_samples=len(samples), selected_samples=len(selected), records=count,
+                   role=role, chromosome=chromosome, source_samples=len(samples), selected_samples=len(selected), records=count,
                    ancestry_counts=contract['expected_ancestries'], variant_key_order_sha256=digest,
                    sample_order_sha256=axis_hash(selected), sample_members_sha256=axis_hash(sorted(selected)),
                    input_sha256=contract['input_sha256'], contract_sha256=sha(args.contract), code_sha256=sha(__file__),
@@ -128,7 +166,7 @@ def run(args):
                    source_panel_parsed_by_bcftools=True, source_test_genotype_statistics_computed=False,
                    unselected_cells_in_python_audit='Opaque tab-delimited text only; no genotype interpretation',
                    selected_genotype_text_preserved=True, phase_reliability='UNKNOWN', allele_representation='UNKNOWN',
-                   command_template='bcftools view -S <SOURCE_VALID_in_source_order> -I --no-version -Oz -o <output> <source>',
+                   command_template='bcftools view -S <authorized_role_in_source_order> -I --no-version -Oz -o <output> <source>',
                    contains_sample_identifiers=False)
     (output/'manifest.json').write_text(json.dumps(receipt, indent=2) + '\n')
     return receipt
@@ -136,8 +174,9 @@ def run(args):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    for name in ('source-vcf', 'roles', 'ref-receipt', 'contract', 'outdir'):
+    for name in ('source-vcf', 'roles', 'contract', 'outdir'):
         p.add_argument('--'+name, required=True)
+    p.add_argument('--ref-receipt')
     p.add_argument('--bcftools', default='bcftools')
     p.add_argument('--min-free-gib', type=float, required=True)
     p.add_argument('--max-line-bytes', type=int, required=True)

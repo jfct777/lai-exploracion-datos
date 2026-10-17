@@ -29,6 +29,7 @@ from optuna.trial import TrialState
 
 SCHEMA = "genomic-adaptive-search/1"
 CONTEXTUAL_SCHEMA = "genomic-adaptive-search/2"
+CONTROLLED_SCHEMA = "genomic-adaptive-search/3"
 CONTEXTUAL_FAMILIES = {
     "structure": ("structure_deep_sets", "structure_local_attention"),
     "lai": ("lai_cnn", "lai_local_attention"),
@@ -39,6 +40,7 @@ CONTEXTUAL_FIELDS = {
 OPTUNA_VERSION = "4.9.0"
 HARD_MAX_RECIPES = 24
 ARMS = ("NONE", "RARE")
+CONTROLLED_ARMS = ("NONE", "COUNTS", "RARE")
 HASH = re.compile(r"[0-9a-f]{64}\Z")
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\Z")
 
@@ -102,10 +104,15 @@ def load_json(path, expected_sha256=None):
 def validate_plan(plan):
     keys(plan, ("schema", "campaign_id", "scope", "max_recipes", "startup_trials",
                 "sampler_seed", "training_seeds", "search_space", "objectives",
-                "provenance", "pruning"), "plan")
-    require(plan["schema"] in (SCHEMA, CONTEXTUAL_SCHEMA) and plan["scope"] == "DEVELOPMENT",
+                "provenance", "pruning") + (("actual_data_scope",) if plan.get("schema") == CONTROLLED_SCHEMA else ()), "plan")
+    require(plan["schema"] in (SCHEMA, CONTEXTUAL_SCHEMA, CONTROLLED_SCHEMA) and plan["scope"] == "DEVELOPMENT",
             "supported versioned development plan required")
-    contextual = plan["schema"] == CONTEXTUAL_SCHEMA
+    contextual = plan["schema"] != SCHEMA
+    controlled = plan["schema"] == CONTROLLED_SCHEMA
+    if controlled:
+        require(plan.get("actual_data_scope") in ("SYNTHETIC_CODE_TEST", "DEVELOPMENT"),
+                "v3 must freeze the actual data scope, separately from selection stage")
+    arms = CONTROLLED_ARMS if controlled else ARMS
     require(isinstance(plan["campaign_id"], str) and IDENTIFIER.fullmatch(plan["campaign_id"]),
             "invalid campaign_id")
     require(integer(plan["max_recipes"], 1) and plan["max_recipes"] <= HARD_MAX_RECIPES,
@@ -153,8 +160,9 @@ def validate_plan(plan):
             and set(plan["objectives"]) <= {"structure", "lai"},
             "freeze a nonempty subset of structure/lai objectives")
     for name, spec in plan["objectives"].items():
-        keys(spec, ("families", "primary_metric", "secondary_metrics", "folds", "fixed_config",
-                    "checkpoint_step", "arm_input_sha256", "range_rationale", "evaluation_unit"), name)
+        expected = ("families", "primary_metric", "secondary_metrics", "folds", "fixed_config",
+                    "checkpoint_step", "arm_input_sha256", "range_rationale", "evaluation_unit")
+        keys(spec, (*expected, "harm_limits") if controlled else expected, name)
         require(isinstance(spec["families"], list) and len(spec["families"]) == 2
                 and len(set(spec["families"])) == 2
                 and all(isinstance(f, str) and IDENTIFIER.fullmatch(f) for f in spec["families"]),
@@ -177,9 +185,15 @@ def validate_plan(plan):
                 "freeze a dependence-aware evaluation unit per objective")
         require(isinstance(spec["range_rationale"], str) and len(spec["range_rationale"].strip()) >= 20,
                 "record the dataset-specific rationale; ranges are not established optima")
-        keys(spec["arm_input_sha256"], ARMS, "arm input manifests")
+        keys(spec["arm_input_sha256"], arms, "arm input manifests")
         require(all(valid_hash(v) for v in spec["arm_input_sha256"].values()), "arm input hashes required")
         require(spec["arm_input_sha256"]["NONE"] != spec["arm_input_sha256"]["RARE"], "distinct arm manifests required")
+        if controlled:
+            require(len(set(spec["arm_input_sha256"].values())) == len(arms), "distinct arm manifests required")
+            require(isinstance(spec["harm_limits"], dict) and spec["harm_limits"],
+                    "v3 requires explicit development harm limits; no scientific tolerance defaults")
+            require(set(spec["harm_limits"]) <= set(metrics)
+                    and all(finite(v) for v in spec["harm_limits"].values()), "invalid harm limits")
         folds = spec["folds"]
         require(isinstance(folds, list) and len(folds) >= 2, "at least two development folds required")
         ids = []
@@ -224,7 +238,7 @@ class SearchController:
         sampler = TPESampler(seed=seed, n_startup_trials=self.plan["startup_trials"])
         if trial_number < self.plan["startup_trials"]:
             spec, space = self.plan["objectives"][objective], self.plan["search_space"]
-            radius_name = "common_radius_cm" if self.plan["schema"] == CONTEXTUAL_SCHEMA else "radius_cm"
+            radius_name = "common_radius_cm" if self.plan["schema"] != SCHEMA else "radius_cm"
             grid = list(itertools.product(space[radius_name], space["width"], spec["families"]))
             radius, width, family = grid[trial_number]
             with warnings.catch_warnings():
@@ -275,7 +289,7 @@ class SearchController:
             trial = study.ask()
             require(trial.number == number, "unexpected trial numbering")
             spec, space = self.plan["objectives"][objective], self.plan["search_space"]
-            contextual = self.plan["schema"] == CONTEXTUAL_SCHEMA
+            contextual = self.plan["schema"] != SCHEMA
             radius_name = "common_radius_cm" if contextual else "radius_cm"
             params = {
                 "family": trial.suggest_categorical("family", spec["families"]),
@@ -295,7 +309,8 @@ class SearchController:
                 })
             config = {**spec["fixed_config"], **params}
             tasks = []
-            for fold, seed, arm in itertools.product(spec["folds"], self.plan["training_seeds"], ARMS):
+            arms = CONTROLLED_ARMS if self.plan["schema"] == CONTROLLED_SCHEMA else ARMS
+            for fold, seed, arm in itertools.product(spec["folds"], self.plan["training_seeds"], arms):
                 tasks.append({"fold": fold["id"], "seed": seed, "arm": arm,
                               "fold_contract": fold, "input_sha256": spec["arm_input_sha256"][arm],
                               "config_sha256": digest(config), "checkpoint_step": spec["checkpoint_step"],
@@ -307,16 +322,21 @@ class SearchController:
                       "provenance": self.plan["provenance"], "config": config, "tasks": tasks,
                       "primary_metric": spec["primary_metric"], "secondary_metrics": spec["secondary_metrics"],
                       "selection_loss": "equal_fold_seed_arm_mean_absolute_loss", "pruning": "none"}
+            if self.plan["schema"] == CONTROLLED_SCHEMA:
+                recipe["actual_data_scope"] = self.plan["actual_data_scope"]
             recipe["recipe_sha256"] = digest(recipe)
             trial.set_user_attr("recipe", recipe)
             return copy.deepcopy(recipe)
 
     def validate_receipt(self, receipt, recipe):
         keys(receipt, ("schema", "scope", "objective", "trial_number", "recipe_sha256",
-                       "plan_sha256", "provenance", "records"), "receipt")
+                       "plan_sha256", "provenance", "records") + (("actual_data_scope",) if self.plan["schema"] == CONTROLLED_SCHEMA else ()), "receipt")
         for key in ("schema", "scope", "objective", "trial_number", "recipe_sha256", "plan_sha256", "provenance"):
             require(canonical(receipt[key]) == canonical(recipe[key]), f"receipt {key} does not match the proposal")
         require(receipt["scope"] == "DEVELOPMENT", "only development metrics accepted")
+        if self.plan["schema"] == CONTROLLED_SCHEMA:
+            require(receipt.get("actual_data_scope") == recipe["actual_data_scope"] == self.plan["actual_data_scope"],
+                    "receipt actual data scope differs from frozen plan")
         expected = {(task["fold"], task["seed"], task["arm"]): task for task in recipe["tasks"]}
         records = receipt["records"]
         require(isinstance(records, list) and len(records) == len(expected), "complete paired folds/seeds/arms required")
@@ -345,14 +365,27 @@ class SearchController:
             require(paired["NONE"]["n_evaluated"] == paired["RARE"]["n_evaluated"]
                     and paired["NONE"]["evaluation_unit"] == paired["RARE"]["evaluation_unit"],
                     "paired evaluation populations/units differ")
+        arms = CONTROLLED_ARMS if self.plan["schema"] == CONTROLLED_SCHEMA else ARMS
         means = {arm: {name: math.fsum(row["metrics"][name] for row in records if row["arm"] == arm)
-                      / len(groups) for name in names} for arm in ARMS}
+                      / len(groups) for name in names} for arm in arms}
         primary = recipe["primary_metric"]
-        value = (means["NONE"][primary] + means["RARE"][primary]) / 2
+        value = math.fsum(means[arm][primary] for arm in arms) / len(arms)
         require(math.isfinite(value), "aggregated loss overflow")
-        return {"selection_loss": value, "arm_macro_losses": means,
+        summary = {"selection_loss": value, "arm_macro_losses": means,
                 "delta_rare_minus_none": {name: means["RARE"][name] - means["NONE"][name] for name in names},
                 "paired_groups": len(groups), "records": len(records), "scope": "DEVELOPMENT_EXPLORATORY"}
+        if self.plan["schema"] == CONTROLLED_SCHEMA:
+            summary["actual_data_scope"] = self.plan["actual_data_scope"]
+            limits = self.plan["objectives"][recipe["objective"]]["harm_limits"]
+            summary["delta_rare_minus_counts"] = {name: means["RARE"][name] - means["COUNTS"][name] for name in names}
+            summary["development_harm_checks"] = {
+                comparator: {name: means["RARE"][name] - means[comparator][name] <= limit
+                             for name, limit in limits.items()}
+                for comparator in ("NONE", "COUNTS")}
+            summary["eligible_development_selection"] = all(
+                all(checks.values()) for checks in summary["development_harm_checks"].values())
+            summary["harm_check_scope"] = "point_estimates_only_not_confirmatory_uncertainty"
+        return summary
 
     def tell(self, objective, receipt_path, receipt_sha256):
         receipt, observed = load_json(receipt_path, receipt_sha256)
@@ -408,7 +441,7 @@ class SearchController:
                                 "value": t.value, "summary": entries.get(str(t.number), {}).get("summary")}
                                for t in trials],
                     "selection": study.user_attrs.get("frozen_selection"),
-                    "training_integration": "NOT_IMPLEMENTED", "pruning": "none"}
+                    "training_integration": ("BOUNDED_THREE_ARM_ADAPTER_AVAILABLE" if self.plan["schema"] == CONTROLLED_SCHEMA else "NOT_IMPLEMENTED"), "pruning": "none"}
 
     def freeze(self, objective):
         """Freeze a development choice, never refit or access final evaluation."""
@@ -418,12 +451,22 @@ class SearchController:
             require(len(trials) == self.plan["max_recipes"] and all(t.state.is_finished() for t in trials),
                     "finish the declared recipe budget before freezing selection")
             require(any(t.state == TrialState.COMPLETE for t in trials), "no completed recipe")
-            best = study.best_trial
+            eligible = [t for t in trials if t.state == TrialState.COMPLETE]
+            if self.plan["schema"] == CONTROLLED_SCHEMA:
+                journal = study.user_attrs.get("receipts", {})
+                eligible = [t for t in eligible if journal[str(t.number)]["summary"]["eligible_development_selection"]]
+                require(eligible, "no recipe satisfies the prespecified development harm limits")
+            best = min(eligible, key=lambda t: (t.value, t.number))
             selection = {"schema": self.plan["schema"], "objective": objective, "plan_sha256": self.plan_sha256,
                          "selected_trial": best.number, "recipe": best.user_attrs["recipe"],
                          "selection_loss": best.value, "scope": "DEVELOPMENT_SELECTION_NOT_CONFIRMATORY",
                          "refit": "SEPARATE_PLAN_AND_AUTHORIZATION_REQUIRED",
                          "final_evaluation": "NOT_ACCESSED", "training_launched": False}
+            if self.plan["schema"] == CONTROLLED_SCHEMA:
+                selection["actual_data_scope"] = self.plan["actual_data_scope"]
+                if self.plan["actual_data_scope"] == "SYNTHETIC_CODE_TEST":
+                    selection["scope"] = "SYNTHETIC_CODE_TEST_ONLY"
+                    selection["refit"] = "SCIENTIFIC_REUSE_FORBIDDEN"
             existing = study.user_attrs.get("frozen_selection")
             require(existing is None or existing == selection, "frozen selection mismatch")
             study.set_user_attr("frozen_selection", selection)

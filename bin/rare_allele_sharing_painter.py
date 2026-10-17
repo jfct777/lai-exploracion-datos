@@ -24,6 +24,7 @@ import scipy.sparse as sp
 from joblib import Parallel, delayed
 
 from rare_allele_orientation import SiteOrientation
+from r02_m14_chains import StreamingPairChains
 
 
 # ---------------------------------------------------------------------------
@@ -879,36 +880,14 @@ def _detect_segments_for_pair(shared_positions, max_gap_bp, min_segment_bp,
     larger than ``max_gap_bp``.  Detection is vectorised with ``np.diff``
     + ``np.where`` so it stays O(|shared_positions|) in numpy-level work.
     """
-    n = shared_positions.size
-    if n < min_shared_variants:
-        return
-
-    if n == 1:
-        # Cannot form a multi-variant segment unless min_shared_variants == 1.
-        if min_shared_variants <= 1:
-            pos = int(shared_positions[0])
-            if 1 >= min_segment_bp:
-                yield pos, pos, 1, 1
-        return
-
-    break_pts = np.where(np.diff(shared_positions) > max_gap_bp)[0]
-    if break_pts.size == 0:
-        starts_idx = (0,)
-        ends_idx = (n - 1,)
-    else:
-        starts_idx = np.concatenate([[0], break_pts + 1])
-        ends_idx = np.concatenate([break_pts, [n - 1]])
-
-    for s, e in zip(starts_idx, ends_idx):
-        n_shared = int(e - s + 1)
-        if n_shared < min_shared_variants:
-            continue
-        seg_start = int(shared_positions[s])
-        seg_end = int(shared_positions[e])
-        length_bp = seg_end - seg_start + 1
-        if length_bp < min_segment_bp:
-            continue
-        yield seg_start, seg_end, length_bp, n_shared
+    state = StreamingPairChains(max_gap_bp, min_segment_bp, min_shared_variants)
+    for value in shared_positions:
+        closed = state.push(int(value))
+        if closed is not None:
+            yield closed
+    closed = state.finish()
+    if closed is not None:
+        yield closed
 
 
 def _segments_for_pair_batch(pair_chunk, pair_a, pair_b, indptr, indices,

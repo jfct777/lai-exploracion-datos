@@ -19,3 +19,13 @@ timeline-*.html
 /CLAUDE.md
 /graphify-out/
 /.codegraph/
+
+# Presentaciones y guías personales: conservar localmente, fuera del código.
+/PRESENTACION_*/
+/PRESENTACION_*.zip
+/INSTRUCCIONES_EXPLICACION_PROYECTO.md
+
+# Estado de ejecución y archivos temporales generados.
+/.runtime/
+/nxf-tmp.*
+/dag-*.html

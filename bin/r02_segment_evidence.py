@@ -20,6 +20,15 @@ Optional JSON contracts (all require genome_build and coordinate_system):
   are deliberately collapsed to a territorial union, NOT summed copy lengths.
   Paths are relative to the contract, unless absolute. Callability is pairwise;
   a pair absent from it is not evaluable. A PC-Relate kinship table is not IBD.
+* r02_segment_ibd_v2: semantics='ANY_COPY_REPORTED',
+  evidence_scope='reported_call_geometry_only',
+  absence_semantics='no_reported_call_not_biological_absence',
+  callset_scope='complete_reported_calls_for_declared_chromosome_and_samples',
+  chromosome, analytical_samples_sha256, caller={name,version}, and
+  intervals={path,sha256}. TSV coordinates/pairs are as above, but ibd_state
+  must be ANY_COPY_REPORTED. No callability or biological negative is inferred.
+  This opt-in schema adds explicit reported-geometry columns; legacy callable
+  IBD fields remain NA. Neither overlap fraction is biological precision/recall.
 
 NA is explicit; zero union does not imply perfect similarity. Counts and
 synthetic tests establish technical properties, not biological validity.
@@ -65,6 +74,11 @@ EVIDENCE_COLUMNS = CHAIN_COLUMNS + (
     "ibd_first_overlap_pos", "ibd_last_overlap_pos", "ibd_left_uncovered_bp",
     "ibd_right_uncovered_bp")
 IBD_PAIR_COLUMNS = ("chrom", "sample_a", "sample_b", "callable_bp", "ibd_union_bp", "ibd_pieces", "ibd_status")
+IBD_GEOMETRY_COLUMNS = ("ibd_reported_overlap_bp", "m14_union_bp", "ibd_reported_union_bp",
+                        "m14_fraction_overlapping_reported_ibd", "reported_ibd_fraction_overlapping_m14",
+                        "ibd_geometry_status")
+IBD_REPORTED_PAIR_COLUMNS = ("ibd_reported_union_bp", "ibd_reported_pieces", "ibd_geometry_status")
+IBD_REPORTED_SEMANTICS = "ANY_COPY_REPORTED"
 COMMON_CRITERIA = ("min_maf", "max_missing", "frequency_scope", "site_filter",
                    "original_biallelic", "mask")
 RESOURCE_PARAMETERS = ("max_db_mb", "min_free_disk_mb", "resource_check_rows",
@@ -220,7 +234,8 @@ def indexed_input(path, inputs, key):
 def checked_contract(path, schema, build, inputs, key):
     inputs[key] = input_record(path)
     result = json.loads(Path(path).read_text())
-    require(result.get("schema") == schema, f"Wrong {key} schema")
+    schemas = (schema,) if isinstance(schema, str) else schema
+    require(result.get("schema") in schemas, f"Wrong {key} schema")
     require(result.get("genome_build") == build, f"Wrong {key} genome build")
     require(result.get("coordinate_system") == COORDINATES, f"Wrong {key} coordinates")
     return result
@@ -347,19 +362,35 @@ class GeneticMap:
 
 
 def load_ibd(db, contract_path, contract, samples, chrom, inputs, monitor=None):
-    require(contract.get("semantics") == "any_copy_ibd_territory", "IBD copy/haplotype semantics must be explicit territorial union")
-    require(contract.get("absence_means_no_called_ibd_within_callable") is True, "IBD absence semantics not declared")
+    reported_only = contract.get("schema") == "r02_segment_ibd_v2"
+    if reported_only:
+        require(isinstance(contract.get("genome_build"), str) and contract["genome_build"].strip() and
+                contract.get("coordinate_system") == COORDINATES, "IBD v2 explicit build/inclusive coordinates required")
+        require(contract.get("semantics") == IBD_REPORTED_SEMANTICS and
+                contract.get("evidence_scope") == "reported_call_geometry_only", "IBD v2 reported geometry semantics required")
+        require(contract.get("absence_semantics") == "no_reported_call_not_biological_absence" and
+                contract.get("callset_scope") == "complete_reported_calls_for_declared_chromosome_and_samples",
+                "IBD v2 complete callset and nonbiological absence semantics required")
+        require("callability" not in contract and "absence_means_no_called_ibd_within_callable" not in contract,
+                "IBD v2 must not mix callable-territory or biological-negative semantics")
+        require(contract.get("chromosome") == chrom, "IBD v2 declared chromosome mismatch")
+        require(contract.get("analytical_samples_sha256") == sample_hash(samples), "IBD v2 analytical cohort/order mismatch")
+        db.execute("CREATE TABLE ibd_sample_order(sample TEXT PRIMARY KEY,ordinal INTEGER UNIQUE)")
+        db.executemany("INSERT INTO ibd_sample_order VALUES(?,?)", ((s, i) for i, s in enumerate(samples)))
+    else:
+        require(contract.get("semantics") == "any_copy_ibd_territory", "IBD copy/haplotype semantics must be explicit territorial union")
+        require(contract.get("absence_means_no_called_ibd_within_callable") is True, "IBD absence semantics not declared")
     caller = contract.get("caller", {})
     require(caller.get("name") and caller.get("version"), "IBD caller and version required")
     order = {name: i for i, name in enumerate(samples)}
-    for kind in ("intervals", "callability"):
+    for kind in (("intervals",) if reported_only else ("intervals", "callability")):
         item = contract.get(kind, {})
         require(item.get("path") and item.get("sha256"), "IBD intervals and pair callability with hashes are required")
         path = Path(contract_path).parent / item["path"]
         inputs["ibd_" + kind] = input_record(path)
         require(inputs["ibd_" + kind]["sha256"] == item["sha256"], "IBD table hash mismatch")
         db.execute(f"CREATE TABLE {kind}(sample_a TEXT,sample_b TEXT,start_pos INTEGER,end_pos INTEGER,ibd_state TEXT)")
-        db.execute(f"CREATE INDEX {kind}_pair ON {kind}(sample_a,sample_b,start_pos,end_pos)")
+        db.execute(f"CREATE {'UNIQUE ' if reported_only else ''}INDEX {kind}_pair ON {kind}(sample_a,sample_b,start_pos,end_pos)")
         required = ("chrom", "sample_a", "sample_b", "start_pos", "end_pos")
         for number, row in enumerate(table_rows(path, required + (("ibd_state",) if kind == "intervals" else ())), 1):
             if monitor and number % monitor.args.resource_check_rows == 0:
@@ -371,14 +402,63 @@ def load_ibd(db, contract_path, contract, samples, chrom, inputs, monitor=None):
             lo, hi = int(row["start_pos"]), int(row["end_pos"])
             require(1 <= lo <= hi, "Invalid IBD/callability interval")
             state = row.get("ibd_state", "callable")
-            require(kind != "intervals" or state in ("IBD1", "IBD2"), "Unsupported IBD state; do not infer copy semantics")
-            db.execute(f"INSERT INTO {kind} VALUES(?,?,?,?,?)", (a, b, lo, hi, state))
+            states = (IBD_REPORTED_SEMANTICS,) if reported_only else ("IBD1", "IBD2")
+            require(kind != "intervals" or state in states, "Unsupported IBD state; do not infer copy semantics")
+            db.execute(f"INSERT {'OR IGNORE ' if reported_only else ''}INTO {kind} VALUES(?,?,?,?,?)", (a, b, lo, hi, state))
     db.commit()
     if monitor:
         monitor.check("ibd_ready", monitor.counts)
 
 
-def ibd_evidence(db, row, limit):
+def reported_overlap_geometry(m14_intervals, reported_intervals):
+    """Inclusive geometric unions, not sensitivity/precision or ancestry proof.
+
+    Empty lists mean no reported intervals in the explicitly complete input;
+    None is not an empty callset. Keep both denominators, including zero, while
+    an undefined fraction is NA. Persons/pairs and source provenance are the
+    caller's responsibility when this pure helper is used without the loader.
+    """
+    require(m14_intervals is not None and reported_intervals is not None, "Missing interval collection is not an empty reported callset")
+    m14, reported = merge_intervals(m14_intervals), merge_intervals(reported_intervals)
+    overlap = interval_bp(intersect_intervals(m14, reported))
+    m_bp, b_bp = interval_bp(m14), interval_bp(reported)
+    require(0 <= overlap <= min(m_bp, b_bp), "Invalid reported geometry denominator")
+    status = "REPORTED_GEOMETRY_ONLY"
+    if not m_bp or not b_bp:
+        status += ":" + ("no_m14_intervals_and_no_reported_calls" if not m_bp and not b_bp else
+                         "no_m14_intervals" if not m_bp else "no_reported_calls")
+    return dict(ibd_reported_overlap_bp=overlap, m14_union_bp=m_bp, ibd_reported_union_bp=b_bp,
+                m14_fraction_overlapping_reported_ibd=overlap / m_bp if m_bp else "NA",
+                reported_ibd_fraction_overlapping_m14=overlap / b_bp if b_bp else "NA",
+                ibd_geometry_status=status)
+
+
+def reported_ibd_geometry(db, pair, m14_intervals, limit):
+    """Geometry for one analytical pair in a database loaded with IBD v2.
+
+    The second denominator covers ALL reported calls for the pair/chromosome,
+    not just those touching M14. No rare VCF is read. Reversed pairs are safe.
+    """
+    require(len(pair) == 2 and pair[0] != pair[1] and limit > 0, "Invalid reported IBD pair/resource limit")
+    members = db.execute("SELECT sample FROM ibd_sample_order WHERE sample IN (?,?) ORDER BY ordinal", pair).fetchall()
+    require(len(members) == 2, "Unknown reported IBD pair; missing cohort membership is not zero")
+    a, b = (r[0] for r in members)
+    rows = db.execute("SELECT start_pos,end_pos FROM intervals WHERE sample_a=? AND sample_b=?", (a, b)).fetchmany(limit + 1)
+    require(len(rows) <= limit, "IBD pair territory resource limit exceeded")
+    return reported_overlap_geometry(m14_intervals, [(int(r[0]), int(r[1])) for r in rows])
+
+
+def ibd_evidence(db, row, limit, reported_only=False):
+    if reported_only:
+        # Deliberately do not populate callable/legacy fractions from geometry.
+        # Existing consumers must opt in to the new, explicitly named columns.
+        result = dict(callable_bp="NA", ibd_union_bp="NA", ibd_fraction="NA",
+                      ibd_status="NO_EVALUABLE:reported_geometry_only",
+                      **{key: "NA" for key in ("ibd_overlap_pieces", "ibd_first_overlap_pos", "ibd_last_overlap_pos",
+                                               "ibd_left_uncovered_bp", "ibd_right_uncovered_bp")})
+        result.update(reported_ibd_geometry(db, (row["sample_a"], row["sample_b"]),
+                                           [(row["start_pos"], row["end_pos"])], limit))
+        return result
     pieces = {}
     for kind in ("intervals", "callability"):
         values = db.execute(f"SELECT start_pos,end_pos FROM {kind} WHERE sample_a=? AND sample_b=? AND start_pos<=? AND end_pos>=?",
@@ -401,8 +481,17 @@ def ibd_evidence(db, row, limit):
     return dict(callable_bp=callable_bp, ibd_union_bp=overlap, ibd_fraction=overlap / callable_bp, ibd_status="OK", **boundaries)
 
 
-def ibd_pair_territories(db, chrom, limit):
+def ibd_pair_territories(db, chrom, limit, reported_only=False):
     """All declared pair territories, including pairs never represented by M14."""
+    if reported_only:
+        for a, b in db.execute("SELECT DISTINCT sample_a,sample_b FROM intervals ORDER BY sample_a,sample_b"):
+            rows = db.execute("SELECT start_pos,end_pos FROM intervals WHERE sample_a=? AND sample_b=?", (a, b)).fetchmany(limit + 1)
+            require(len(rows) <= limit, "IBD pair territory resource limit exceeded")
+            reported = merge_intervals([(int(r[0]), int(r[1])) for r in rows])
+            yield dict(chrom=chrom, sample_a=a, sample_b=b, callable_bp="NA", ibd_union_bp="NA", ibd_pieces="NA",
+                       ibd_status="NO_EVALUABLE:reported_geometry_only", ibd_reported_union_bp=interval_bp(reported),
+                       ibd_reported_pieces=len(reported), ibd_geometry_status="REPORTED_GEOMETRY_ONLY")
+        return
     for a, b in db.execute("SELECT sample_a,sample_b FROM callability UNION SELECT sample_a,sample_b FROM intervals"):
         pieces = {}
         for kind in ("intervals", "callability"):
@@ -677,7 +766,9 @@ def run(args):
         require(map_contract.get("sha256") == inputs["genetic_map"]["sha256"] and map_contract.get("units") == "cM" and map_contract.get("format") == "tsv_chrom_pos_cm", "Map hash/units/format mismatch")
         genetic_map = GeneticMap(args.genetic_map, chrom, args.max_map_knots)
     if args.ibd_contract:
-        ibd_contract = checked_contract(args.ibd_contract, "r02_segment_ibd_v1", args.genome_build, inputs, "ibd_contract")
+        ibd_contract = checked_contract(args.ibd_contract, ("r02_segment_ibd_v1", "r02_segment_ibd_v2"),
+                                        args.genome_build, inputs, "ibd_contract")
+    reported_only = bool(ibd_contract and ibd_contract.get("schema") == "r02_segment_ibd_v2")
     output.mkdir(parents=True, exist_ok=False)
     with ExitStack() as stack:
         monitor = stack.enter_context(ResourceProgress(output, args))
@@ -701,13 +792,15 @@ def run(args):
             annotate_vcf_blocks(db, common, common_contig, samples, args.block_bp, args.chunk_sites, args.max_active_intervals, "common", counts, common_contract, monitor)
         if ibd_contract:
             load_ibd(db, args.ibd_contract, ibd_contract, samples, chrom, inputs, monitor)
-            territories = write_table(stack, output / "ibd_pair_territory.tsv.gz", IBD_PAIR_COLUMNS)
-            for row in ibd_pair_territories(db, chrom, args.max_active_intervals):
+            territories = write_table(stack, output / "ibd_pair_territory.tsv.gz",
+                                      IBD_PAIR_COLUMNS + (IBD_REPORTED_PAIR_COLUMNS if reported_only else ()))
+            for row in ibd_pair_territories(db, chrom, args.max_active_intervals, reported_only):
                 territories.writerow(row)
                 counts["ibd_pair_territory_rows"] += 1
                 if counts["ibd_pair_territory_rows"] % args.resource_check_rows == 0:
                     monitor.check("write_ibd_territory", counts)
-        evidence = write_table(stack, output / "segment_evidence.tsv.gz", EVIDENCE_COLUMNS)
+        evidence = write_table(stack, output / "segment_evidence.tsv.gz",
+                               EVIDENCE_COLUMNS + (IBD_GEOMETRY_COLUMNS if reported_only else ()))
         monitor.check("write_segment_evidence", counts)
         for row in db.execute("SELECT * FROM chains ORDER BY start_pos,end_pos,sample_a,sample_b,max_gap_bp"):
             row = dict(row)
@@ -719,7 +812,7 @@ def run(args):
             value.update(O=row["O"] if common_contract else "NA", Q_C=row["Q_C"] if common_contract else "NA", common_status=("OK" if row["Q_C"] else "NO_EVALUABLE:no_joint_common_calls") if common_contract else "NO_EVALUABLE:no_common_catalogue")
             cm = genetic_map.length(row["start_pos"], row["end_pos"]) if genetic_map else None
             value.update(length_cm=cm if cm is not None else "NA", map_status="OK" if cm is not None else "NO_EVALUABLE:outside_map_support" if genetic_map else "NO_EVALUABLE:no_map")
-            value.update(ibd_evidence(db, row, args.max_active_intervals) if ibd_contract else dict(callable_bp="NA", ibd_union_bp="NA", ibd_fraction="NA", ibd_status="NO_EVALUABLE:no_ibd_contract",
+            value.update(ibd_evidence(db, row, args.max_active_intervals, reported_only) if ibd_contract else dict(callable_bp="NA", ibd_union_bp="NA", ibd_fraction="NA", ibd_status="NO_EVALUABLE:no_ibd_contract",
                 **{k: "NA" for k in ("ibd_overlap_pieces", "ibd_first_overlap_pos", "ibd_last_overlap_pos", "ibd_left_uncovered_bp", "ibd_right_uncovered_bp")}))
             evidence.writerow(value)
             counts["evidence_rows"] += 1
@@ -736,7 +829,7 @@ def run(args):
         monitor.check("outputs_written", counts)
     # Manifest is the completion marker; partial files without it are unusable.
     unchanged_inputs(inputs)
-    manifest = dict(schema=SCHEMA, status="COMPLETE_DESCRIPTIVE_NOT_VALIDATED", chrom=chrom,
+    manifest = dict(schema="r02_segment_evidence_v2" if reported_only else SCHEMA, status="COMPLETE_DESCRIPTIVE_NOT_VALIDATED", chrom=chrom,
         genome_build=args.genome_build, coordinate_system=COORDINATES,
         n_samples=len(samples), sample_ids_sha256=inputs["samples"]["sha256"],
         analytical_samples_sha256=sample_hash(samples), analytical_members_sha256=sample_hash(sorted(samples)),
@@ -744,7 +837,7 @@ def run(args):
         inputs=inputs, parameters={key: getattr(args, key) for key in ("block_bp", "chunk_sites", "max_active_intervals", "max_map_knots", "expected_source_samples") + RESOURCE_PARAMETERS},
         evidence_criteria=dict(rare_allele="fixed_source_minor_minor_v1", rare_gt="complete_diploid_GT_RD_validated",
             rare_missingness="joint_complete_calls_no_imputation", common_criteria={k: common_contract[k] for k in COMMON_CRITERIA} if common_contract else None,
-            ibd_quantity="any_copy_ibd_territory" if ibd_contract else None,
+            ibd_quantity=IBD_REPORTED_SEMANTICS if reported_only else "any_copy_ibd_territory" if ibd_contract else None,
             ibd_criteria={k: v for k, v in ibd_contract.items() if k not in ("schema", "genome_build", "coordinate_system", "intervals", "callability")} if ibd_contract else None,
             coordinate_system=COORDINATES, quality_filters="new_DP_GQ_filters_not_applied"),
         checks=dict(counts=counts, chain_shared_sites_and_endpoints_match=True, within_pair_gap_chains_disjoint=True,
@@ -767,6 +860,17 @@ def run(args):
         versions=dict(python=sys.version.split()[0], pysam=pysam.__version__, numpy=np.__version__),
         outputs_sha256={name: sha256(output / name) for name in ("segment_evidence.tsv.gz", "segment_configuration_links.tsv.gz", "configurations.tsv") + (("ibd_pair_territory.tsv.gz",) if ibd_contract else ())},
         elapsed_seconds=time.monotonic() - started)
+    if reported_only:
+        manifest["semantics"].update(
+            ibd="geometric union of reported calls across any homolog; no IBD1/IBD2 state, callability, ancestry or biological absence inferred",
+            ibd_recall="NOT_BIOLOGICAL_RECALL: new explicit fractions compare reported interval unions; legacy fractions remain NA",
+            ibd_overlap_pieces="legacy fields NA; reported pair components in ibd_reported_pieces",
+            ibd_terminal_spans="NA; reported geometry does not establish true breakpoints",
+            ibd_geometry="|M intersect B| in bp; M=union of supplied M14 intervals, B=whole-chromosome union of reported calls for this pair, including outside M",
+            ibd_geometry_denominators="m14_union_bp and ibd_reported_union_bp; fraction is NA when its own denominator is zero; zero reported overlap is not proof of no biological IBD",
+            ibd_geometry_row_scope="segment_evidence rows supply ONE M14 chain, not all chains of a configuration; B is repeated per chain and MUST NOT be summed across those rows; configuration-level geometry requires union of all applicable M intervals before comparison",
+            ibd_pair_territory="only pairs with reported calls; absent pair has empty reported geometry only under this complete-callset contract, never inferred callable exposure",
+            ibd_dependency="pair and segment rows share people and genomic regions; not independent statistical replicates")
     monitor.emit("COMPLETE_DESCRIPTIVE_NOT_VALIDATED")
     manifest["operational_outputs_sha256"] = {name: sha256(output / name)
                                                for name in ("progress.json", "progress.jsonl")}

@@ -16,6 +16,8 @@ from pathlib import Path
 import subprocess
 import tarfile
 
+import r02_resource_labels as resource_labels
+
 PROJECT = 'uspbr-242713'
 ZONE = 'us-central1-a'
 SERVICE_ACCOUNT = '653458115080-compute@developer.gserviceaccount.com'
@@ -134,6 +136,16 @@ def launch(spec, indices, folder):
             response=json.loads(result.stdout) if result.returncode==0 else None,
             stderr=result.stderr))
         if result.returncode: raise RuntimeError(worker['name']+': '+result.stderr)
+        # Instance labels do not imply disk labels. Preserve every existing
+        # label/configuration and verify only the just-created VM and its disks.
+        # Failure here reports unfinished labelling; it never interrupts jobs.
+        created = json.loads(result.stdout)
+        if not isinstance(created,list) or len(created) != 1 or created[0].get('name') != worker['name']:
+            raise ValueError('Creation response does not identify exactly one expected VM')
+        label_plan = resource_labels.capture_targets(created[0],project=PROJECT,zone=ZONE,account=SERVICE_ACCOUNT)
+        write_new(folder/(worker['worker']+'.labels-plan.json'),label_plan)
+        label_receipt = resource_labels.ensure_team_labels(label_plan,apply=True)
+        write_new(folder/(worker['worker']+'.labels.json'),label_receipt)
         return worker['name']
     with ThreadPoolExecutor(max_workers=3) as pool:
         for result in pool.map(one,indices): print(result,flush=True)
