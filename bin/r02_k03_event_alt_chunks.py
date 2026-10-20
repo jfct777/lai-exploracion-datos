@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Recover exact outer-FIT ALT dosages for K03 from pinned rare events and tails.
+"""Recover exact outer-FIT source-minor dosages for K03 from rare events and tails.
 
 The source archives store dosage of the source cohort's minor allele.  This
-producer uses ``counted_allele`` only to reconstruct ALT dosage: a source-minor
-REF dosage becomes ``2 - dosage`` on observed diploid calls.  Source frequencies
-never determine an INNER_FIT frequency, minor allele, transformation or edge.
-The target block plus LD margin is removed before any reusable chunk is written.
+producer preserves that dosage and the catalogue identity fixed in 2,723 source
+people.  ``counted_allele`` is checked against REF/ALT provenance, but the dosage
+is never reoriented from the genotypes of an INNER_FIT subset.  Source frequencies
+never become an INNER_FIT estimate.
+The requested, predeclared target territory is removed before any reusable chunk
+is written.
 """
 from __future__ import annotations
 
@@ -24,7 +26,9 @@ import numpy as np
 
 import r02_genomic_event_inputs as events
 import r02_k03_inner_fit_affinities as affinities
+import r02_k03_inner_fit_contract as contract
 import r02_structure_materialize as material
+import r02_structure_input_plan as input_plan
 import r02_structure_rare_inputs as rare_inputs
 
 
@@ -56,7 +60,8 @@ def implementation_sha256() -> dict[str, str]:
     root = Path(__file__).resolve().parent
     names = ("r02_k03_event_alt_chunks.py", "r02_k03_inner_fit_affinities.py",
              "r02_genomic_event_inputs.py", "r02_structure_rare_inputs.py",
-             "r02_structure_materialize.py")
+             "r02_structure_materialize.py", "r02_structure_input_plan.py",
+             "r02_k03_inner_fit_contract.py")
     return {name: sha256(root / name) for name in sorted(names)}
 
 
@@ -79,10 +84,10 @@ def _ordered_ids_sha256(values: list[str]) -> str:
     return hashlib.sha256(("\n".join(values) + "\n").encode()).hexdigest()
 
 
-def source_minor_to_alt(dosage: np.ndarray, observed: np.ndarray,
-                        counted_allele: np.ndarray,
-                        sample_indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Select people and reconstruct exact ALT dosage without using frequency."""
+def select_source_minor_dosage(dosage: np.ndarray, observed: np.ndarray,
+                               counted_allele: np.ndarray,
+                               sample_indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Select people while preserving the source-minor dosage and missingness."""
     require(dosage.ndim == 2 and dosage.shape == observed.shape
             and dosage.dtype == np.uint8 and observed.dtype == np.bool_
             and np.array_equal(dosage == 255, ~observed)
@@ -96,16 +101,12 @@ def source_minor_to_alt(dosage: np.ndarray, observed: np.ndarray,
             and len(sample_indices) and len(set(map(int, sample_indices))) == len(sample_indices)
             and int(sample_indices.min()) >= 0 and int(sample_indices.max()) < dosage.shape[0],
             "Unique in-range outer-FIT sample indices required")
-    chosen_observed = observed[sample_indices]
-    chosen_minor = dosage[sample_indices]
-    is_alt = counted_allele.astype(bool)[None, :]
-    alt = np.full(chosen_minor.shape, 255, np.uint8)
-    converted = np.where(is_alt, chosen_minor, 2 - chosen_minor)
-    alt[chosen_observed] = converted[chosen_observed]
-    require(np.array_equal(alt == 255, ~chosen_observed)
-            and np.all(alt[chosen_observed] <= 2),
-            "ALT reconstruction changed missingness or diploid dosage")
-    return alt, chosen_observed.copy()
+    chosen_observed = observed[sample_indices].copy()
+    chosen_minor = dosage[sample_indices].copy()
+    require(np.array_equal(chosen_minor == 255, ~chosen_observed)
+            and np.all(chosen_minor[chosen_observed] <= 2),
+            "Selecting people changed source-minor missingness or dosage")
+    return chosen_minor, chosen_observed
 
 
 def _read_roster(path: Path) -> tuple[list[dict[str, str]], list[int], list[str]]:
@@ -119,24 +120,39 @@ def _read_roster(path: Path) -> tuple[list[dict[str, str]], list[int], list[str]
     return rows, fit, [row["sample_id"] for row in rows]
 
 
-def _territory(blocks_path: Path, requested: Any) -> dict[str, Any]:
+def _territory(blocks_path: Path, source: dict[str, Any],
+               requested: Any) -> dict[str, Any]:
+    scope, block_id, _ = contract.validate_territory_descriptor(
+        requested,
+        "FIXED_SOURCE_COHORT_RARE_CANDIDATES_PRESERVED_NO_INNER_ROLE_FILTER")
+    with blocks_path.open(newline="") as stream:
+        reader = csv.DictReader(stream, delimiter="\t")
+        require(reader.fieldnames == input_plan.BLOCK_COLUMNS,
+                "Frozen block table columns differ")
+        blocks = list(reader)
+    sources = source.get("sources")
+    require(isinstance(sources, dict) and set(sources) == {str(c) for c in range(1, 23)},
+            "Frozen source contract must define all 22 autosomes")
+    lengths = {}
+    for chromosome, descriptor in sources.items():
+        require(isinstance(descriptor, dict)
+                and type(descriptor.get("length_bp")) is int
+                and descriptor["length_bp"] > 0,
+                "Frozen source chromosome length differs")
+        lengths[chromosome] = descriptor["length_bp"]
+    planned = {item["block_id"]: item
+               for item in input_plan.plan_regions(blocks, lengths, scope)}
+    require(block_id in planned, "Territory block is absent from the frozen block table")
+    chromosome, start_bp, end_bp = planned[block_id]["excluded"]
     expected = {
-        "view_id": "BLOCK_AND_LD_MARGIN:chr01_part01",
-        "excluded_intervals": [{"chromosome": 1, "start_bp": 1,
-                                "end_bp": 115064116}],
+        "view_id": f"{scope}:{block_id}",
+        "excluded_intervals": [{"chromosome": int(chromosome),
+                                "start_bp": start_bp, "end_bp": end_bp}],
         "target_locus_policy": "EXCLUDED_BEFORE_OUTPUT",
         "source_candidate_rule": "FIXED_SOURCE_COHORT_RARE_CANDIDATES_PRESERVED_NO_INNER_ROLE_FILTER",
     }
-    require(requested == expected, "Only the admitted R target-exclusion territory is accepted")
-    with blocks_path.open(newline="") as stream:
-        rows = {row["block_id"]: row for row in csv.DictReader(stream, delimiter="\t")}
-    row = rows.get("chr01_part01")
-    require(row is not None and
-            {k: int(row[k]) for k in ("chromosome", "start_bp", "end_bp",
-                                      "excluded_start_bp", "excluded_end_bp")} == {
-                "chromosome": 1, "start_bp": 55550, "end_bp": 112860447,
-                "excluded_start_bp": 1, "excluded_end_bp": 115064116,
-            }, "Frozen chr01_part01 block or LD margin differs")
+    require(requested == expected,
+            "Requested exclusion differs from the frozen block/source-derived territory")
     return expected
 
 
@@ -161,7 +177,7 @@ def _campaign(path: Path) -> tuple[dict[str, Any], dict[str, Any], Path, Path, l
     _, fit, all_ids = _read_roster(roster_path)
     require(sha256(roster_path) == source.get("metadata_sha256", {}).get("persons.tsv"),
             "Roster authentication differs from the frozen source contract")
-    _territory(blocks_path, value["territory"])
+    value["territory"] = _territory(blocks_path, source, value["territory"])
     require(value["consumer_implementation_sha256"] == affinities.implementation_sha256(),
             "Pinned INNER_FIT consumer implementation changed")
     require(value["converter_implementation_sha256"] == implementation_sha256(),
@@ -186,8 +202,44 @@ def _campaign(path: Path) -> tuple[dict[str, Any], dict[str, Any], Path, Path, l
     return value, source, roster_path, blocks_path, fit, all_ids
 
 
-def _excluded(chromosome: int, positions: np.ndarray) -> np.ndarray:
-    return (chromosome == 1) & (positions >= 1) & (positions <= 115064116)
+def _excluded(chromosome: int, positions: np.ndarray,
+              territory: dict[str, Any]) -> np.ndarray:
+    interval = territory["excluded_intervals"][0]
+    return ((chromosome == interval["chromosome"])
+            & (positions >= interval["start_bp"])
+            & (positions <= interval["end_bp"]))
+
+
+def chromosome_identity(campaign: dict[str, Any], chromosome: int) -> dict[str, Any]:
+    """Bind a reusable chromosome to its effective exclusion and exact inputs.
+
+    Different target views may reuse a chromosome only when they remove exactly
+    the same coordinates from it. File names and chronological proximity do not
+    establish that equivalence.
+    """
+    item = campaign["chromosomes"][chromosome - 1]
+    require(item["chromosome"] == chromosome, "Chromosome source order differs")
+    return {
+        "source_contract_sha256": campaign["source_contract"]["sha256"],
+        "roster_sha256": campaign["roster"]["sha256"],
+        "sources_sha256": {k: item[k]["sha256"] for k in
+                           ("event_archive", "event_manifest", "tail_vcf", "tail_manifest")},
+        "excluded_intervals": [dict(i) for i in campaign["territory"]["excluded_intervals"]
+                               if i["chromosome"] == chromosome],
+        "dosage_allele": "SOURCE_MINOR",
+    }
+
+
+def validate_chromosome_binding(record: dict[str, Any], campaign: dict[str, Any],
+                                chromosome: int, fit_ids: list[str]) -> None:
+    require(record.get("input_identity") == chromosome_identity(campaign, chromosome),
+            "Chromosome product belongs to different sources, people or target exclusion")
+    require(record.get("sample_ids_sha256") == _ordered_ids_sha256(fit_ids)
+            and record.get("outer_fit_people") == len(fit_ids),
+            "Chromosome product FIT people/order differs")
+    require(record["source_sites"] == record["included_sites"] + record["excluded_target_sites"]
+            and sum(c["n_sites"] for c in record["chunks"]) == record["included_sites"],
+            "Chromosome retained/excluded counts differ")
 
 
 class ChunkWriter:
@@ -202,17 +254,18 @@ class ChunkWriter:
         (output / "chunks").mkdir()
 
     def add(self, positions: np.ndarray, ref: np.ndarray, alt: np.ndarray,
-            dosage: np.ndarray, observed: np.ndarray) -> None:
+            source_minor_dosage: np.ndarray, observed: np.ndarray) -> None:
         n = len(positions)
         require(n and positions.shape == ref.shape == alt.shape == (n,)
-                and dosage.shape == observed.shape == (len(self.fit_ids), n),
-                "ALT chunk input shapes differ")
+                and source_minor_dosage.shape == observed.shape == (len(self.fit_ids), n),
+                "Source-minor chunk input shapes differ")
         start = 0
         while start < n:
             take = min(n - start, self.sites_per_chunk - self.pending)
             sl = slice(start, start + take)
             self.parts.append({"position_bp": positions[sl].copy(), "ref": ref[sl].copy(),
-                               "alt": alt[sl].copy(), "dosage": dosage[:, sl].copy(),
+                               "alt": alt[sl].copy(),
+                               "genotype_code": source_minor_dosage[:, sl].copy(),
                                "observed": observed[:, sl].copy()})
             self.pending += take; start += take
             if self.pending == self.sites_per_chunk:
@@ -224,8 +277,10 @@ class ChunkWriter:
         positions = np.concatenate([p["position_bp"] for p in self.parts])
         ref = np.concatenate([p["ref"] for p in self.parts]).astype("U1")
         alt = np.concatenate([p["alt"] for p in self.parts]).astype("U1")
-        dosage = np.concatenate([p["dosage"] for p in self.parts], axis=1)
+        genotype_code = np.concatenate([p["genotype_code"] for p in self.parts], axis=1)
         observed = np.concatenate([p["observed"] for p in self.parts], axis=1)
+        require(np.array_equal(genotype_code == 255, ~observed),
+                "Source-minor chunk missingness changed before writing")
         require(np.all(positions[1:] > positions[:-1]),
                 "Source rare rows are not coordinate-unique and sorted")
         variant_id = np.asarray([f"{self.chromosome}:{p}:{r}:{a}"
@@ -237,7 +292,7 @@ class ChunkWriter:
         np.savez_compressed(path, sample_ids=np.asarray(self.fit_ids), variant_id=variant_id,
                             chromosome=np.full(len(positions), self.chromosome, np.int16),
                             position_bp=positions.astype(np.int64), ref=ref, alt=alt,
-                            dosage=dosage, observed=observed)
+                            genotype_code=genotype_code)
         size = path.stat().st_size; self.total_bytes += size
         require(self.total_bytes <= self.max_output_bytes,
                 "Compressed ALT chunks exceed declared output bound")
@@ -306,11 +361,14 @@ def _query_tail(tool: str, path: Path, source: dict[str, Any], all_ids: list[str
 
 def _write_source(writer: ChunkWriter, chromosome: int, positions: np.ndarray,
                   ref: np.ndarray, alt: np.ndarray, source_minor: np.ndarray,
-                  observed: np.ndarray, counted: np.ndarray, fit: np.ndarray) -> tuple[int, int]:
-    alt_dose, fit_observed = source_minor_to_alt(source_minor, observed, counted, fit)
-    remove = _excluded(chromosome, positions); keep = ~remove
+                  observed: np.ndarray, counted: np.ndarray, fit: np.ndarray,
+                  territory: dict[str, Any]) -> tuple[int, int]:
+    source_minor_dose, fit_observed = select_source_minor_dosage(
+        source_minor, observed, counted, fit)
+    remove = _excluded(chromosome, positions, territory); keep = ~remove
     if np.any(keep):
-        writer.add(positions[keep], ref[keep], alt[keep], alt_dose[:, keep], fit_observed[:, keep])
+        writer.add(positions[keep], ref[keep], alt[keep],
+                   source_minor_dose[:, keep], fit_observed[:, keep])
     return int(keep.sum()), int(remove.sum())
 
 
@@ -350,6 +408,15 @@ def convert_chromosome(campaign_path: Path, chromosome: int, output: Path) -> di
             and tail_manifest.get("output_sha256") == item["tail_vcf"]["sha256"],
             "Tail slice identity or non-FIT provenance differs")
     src = source["sources"][str(chromosome)]
+    interval = campaign["territory"]["excluded_intervals"][0]
+    if (interval["chromosome"] == chromosome and interval["start_bp"] == 1
+            and interval["end_bp"] == src["length_bp"]):
+        # All source identities were checked above. There are no eligible sites
+        # to read when this entire chromosome is the prediction target.
+        writer = ChunkWriter(output, chromosome, fit_ids, r["output_chunk_sites"],
+                             r["max_output_bytes"], r["min_free_bytes"])
+        return _finish_chromosome(campaign, chromosome, output, item, event, fit_ids,
+                                  writer, 0, int(event["audit"]["rare"]["source_rows"]))
     tool = material.checked_tool("bcftools", source["tools"]["bcftools"])
     tails = _query_tail(tool, tail_vcf, src, all_ids,
                         event["audit"]["rare"].get("outside_map", 0),
@@ -366,7 +433,8 @@ def convert_chromosome(campaign_path: Path, chromosome: int, output: Path) -> di
             a, b = _write_source(writer, chromosome, tails["position_bp"][selection],
                                  tails["ref"][selection], tails["alt"][selection],
                                  tails["dosage"][:, selection], tails["observed"][:, selection],
-                                 tails["counted_allele"][selection], fit)
+                                 tails["counted_allele"][selection], fit,
+                                 campaign["territory"])
             included += a; excluded += b
     deadline = started + r["timeout_seconds"]
     for array in rare_inputs.iter_archive(archive, event, n_people=len(all_ids),
@@ -375,34 +443,43 @@ def convert_chromosome(campaign_path: Path, chromosome: int, output: Path) -> di
         require(time.monotonic() < deadline, "Chromosome conversion deadline exhausted")
         a, b = _write_source(writer, chromosome, array["position_bp"],
                              BASES[array["ref"]], BASES[array["alt"]], array["dosage"],
-                             array["observed"], array["counted_allele"], fit)
+                             array["observed"], array["counted_allele"], fit,
+                             campaign["territory"])
         included += a; excluded += b
     selection = tails["position_bp"] > upper
     if np.any(selection):
         a, b = _write_source(writer, chromosome, tails["position_bp"][selection],
                              tails["ref"][selection], tails["alt"][selection],
                              tails["dosage"][:, selection], tails["observed"][:, selection],
-                             tails["counted_allele"][selection], fit)
+                             tails["counted_allele"][selection], fit,
+                             campaign["territory"])
         included += a; excluded += b
     writer.flush()
+    return _finish_chromosome(campaign, chromosome, output, item, event, fit_ids,
+                              writer, included, excluded)
+
+
+def _finish_chromosome(campaign, chromosome, output, item, event, fit_ids,
+                       writer, included, excluded):
     source_sites = int(event["audit"]["rare"]["source_rows"])
     require(included + excluded == source_sites and writer.total_sites == included,
             "Source, target-exclusion and emitted-site counts do not reconcile")
     result = {
         "schema": CHROMOSOME_SCHEMA, "chromosome": chromosome,
-        "status": "OUTER_FIT_ALT_DOSAGE_COMPLETE_TARGET_EXCLUDED",
+        "status": "OUTER_FIT_SOURCE_MINOR_DOSAGE_COMPLETE_TARGET_EXCLUDED",
         "source_sites": source_sites, "included_sites": included,
         "excluded_target_sites": excluded,
         "mapped_event_sites": int(event["audit"]["rare"]["retained_sites"]),
         "recovered_outside_map_sites": int(event["audit"]["rare"].get("outside_map", 0)),
         "outer_fit_people": len(fit_ids), "sample_ids_sha256": _ordered_ids_sha256(fit_ids),
         "source_frequency_used_as_inner_estimate": False,
-        "conversion": "ALT=SOURCE_MINOR_DOSE_IF_COUNTED_ALLELE_IS_ALT_ELSE_2_MINUS_SOURCE_MINOR_DOSE_ON_OBSERVED_CALLS",
+        "conversion": "SOURCE_MINOR_DOSAGE_PRESERVED_WITHOUT_INNER_SUBSET_REORIENTATION",
         "missingness": "OBSERVED_MASK_AND_UINT8_255_SENTINEL_PRESERVED",
         "event_archive_sha256": item["event_archive"]["sha256"],
         "event_manifest_sha256": item["event_manifest"]["sha256"],
         "tail_vcf_sha256": item["tail_vcf"]["sha256"],
         "tail_manifest_sha256": item["tail_manifest"]["sha256"],
+        "input_identity": chromosome_identity(campaign, chromosome),
         "chunks": writer.chunks, "compressed_chunk_bytes": writer.total_bytes,
         "implementation_sha256": implementation_sha256(),
         "biological_validation": False,
@@ -426,7 +503,9 @@ def assemble_shared(campaign_path: Path, chromosome_outputs: list[Path], output:
                 and record.get("chromosome") == expected_chromosome
                 and record.get("implementation_sha256") == implementation_sha256()
                 and record.get("source_frequency_used_as_inner_estimate") is False,
-                "Chromosome ALT product order, implementation or learning scope differs")
+                "Chromosome source-minor product order, implementation or learning scope differs")
+        validate_chromosome_binding(record, campaign, expected_chromosome,
+                                    [all_ids[i] for i in fit_list])
         target = output / "chunks" / f"chr{expected_chromosome:02d}"
         target.mkdir()
         for item in record["chunks"]:
@@ -454,24 +533,29 @@ def assemble_shared(campaign_path: Path, chromosome_outputs: list[Path], output:
         "schema": SHARED_SCHEMA,
         "roster": {"path": "persons.tsv", "sha256": sha256(output / "persons.tsv")},
         "sample_scope": "OUTER_FIT_GENOTYPES_ONLY",
-        "sample_ids_sha256": _ordered_ids_sha256(fit_ids), "dosage_allele": "ALT",
-        "variant_universe": "PINNED_SOURCE_RARE_BLOCK_AND_LD_MARGIN_TARGET_EXCLUDED_NO_INNER_ROLE_SELECTION",
-        "candidate_ascertainment": affinities.FIXED_PANEL_PENDING,
+        "sample_ids_sha256": _ordered_ids_sha256(fit_ids),
+        "dosage_allele": "SOURCE_MINOR",
+        "genotype_encoding": contract.FIXED_SOURCE_MINOR_ENCODING,
+        "variant_universe": (
+            "PINNED_SOURCE_RARE_BLOCK_AND_LD_MARGIN_TARGET_EXCLUDED_NO_INNER_ROLE_SELECTION"
+            if campaign["territory"]["view_id"].startswith("BLOCK_AND_LD_MARGIN:")
+            else "PINNED_SOURCE_RARE_WHOLE_CHROMOSOME_TARGET_EXCLUDED_NO_INNER_ROLE_SELECTION"),
+        "candidate_ascertainment": contract.FIXED_SOURCE_MINOR_CATALOG,
         "territory": campaign["territory"],
-        "learning_scope": "RAW_GENOTYPES_NO_LEARNED_TRANSFORMATIONS",
+        "learning_scope": "FIXED_SOURCE_MINOR_DOSAGE_NO_INNER_TRANSFORMATIONS",
         "outer_fit_learned_inputs": False, "chunks": descriptors,
         "resources": campaign["consumer_resources"],
         "producer": {"implementation_sha256": implementation_sha256(),
                      "source_contract_sha256": campaign["source_contract"]["sha256"],
                      "source_frequency_use": "ORIENTATION_VALIDATION_ONLY_NOT_AN_INNER_ESTIMATE",
-                     "source_minor_dose_use": "RECONSTRUCT_ALT_DOSAGE_ONLY",
+                     "source_minor_dose_use": "PRESERVE_FIXED_CATALOG_ORIENTATION",
                      "tail_recovery": "ALL_OUTSIDE_MAP_SOURCE_RARE_ROWS_RECOVERED",
                      "all_autosomes_complete": True},
         "consumer_implementation_sha256": campaign["consumer_implementation_sha256"],
     }
     write_json(output / "manifest.json", manifest)
     summary = {"schema": "r02_k03_outer_fit_alt_shared_summary_v1",
-               "status": "TECHNICAL_ALT_RECONSTRUCTION_ONLY_FIXED_PANEL_ADMISSION_PENDING",
+               "status": "FIXED_SOURCE_MINOR_CATALOG_READY_FOR_INNER_FIT_CALIBRATION",
                "source_sites": source_sites, "included_sites": included_sites,
                "excluded_target_sites": excluded_sites,
                "recovered_outside_map_sites": recovered,

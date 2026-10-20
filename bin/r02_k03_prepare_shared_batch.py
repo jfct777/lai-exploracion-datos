@@ -8,14 +8,7 @@ import json
 from pathlib import Path
 import re
 
-STRICT_INNER_FIT_ASCERTAINMENT = {
-    "scope": "INNER_FIT_ONLY_FROM_PRE_FREQUENCY_ORIGINALLY_BIALLELIC_PASS",
-    "min_mac_inclusive": 2, "max_maf_inclusive": "0.01",
-    "frequency_denominator": "CALLED_ALLELES_INCLUDING_KNOWN_ALLELE_OF_PARTIAL_DIPLOID_GT",
-    "inner_fit_reselection": True, "inner_project_used_for_eligibility": False,
-    "select_evaluate_used_for_eligibility": False,
-    "protocol_admission": "STRICT_INNER_FIT_ELIGIBILITY_REQUIRED",
-}
+import r02_k03_inner_fit_contract as contract
 
 
 def require(condition: bool, message: str) -> None:
@@ -52,11 +45,17 @@ def main() -> None:
             "Pinned container and positive explicit resources required")
     manifest_path = args.shared_bundle / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
+    fixed_catalog = (manifest.get("dosage_allele") == "SOURCE_MINOR"
+        and manifest.get("genotype_encoding") == contract.FIXED_SOURCE_MINOR_ENCODING
+        and manifest.get("candidate_ascertainment") == contract.FIXED_SOURCE_MINOR_CATALOG)
+    new_catalog = (manifest.get("dosage_allele") == "ALT"
+        and manifest.get("genotype_encoding") == contract.GT_CODE_ENCODING
+        and manifest.get("candidate_ascertainment") == contract.STRICT_INNER_FIT_ASCERTAINMENT)
     require(manifest.get("schema") == "r02_k03_outer_fit_alt_chunks_v1"
             and manifest.get("producer", {}).get("all_autosomes_complete") is True
             and manifest.get("outer_fit_learned_inputs") is False
-            and manifest.get("candidate_ascertainment") == STRICT_INNER_FIT_ASCERTAINMENT,
-            "Complete pre-frequency bundle with strict INNER_FIT candidate selection required")
+            and fixed_catalog != new_catalog,
+            "Complete fixed-catalogue or INNER_FIT catalogue-learning bundle required")
     implementation = manifest.get("consumer_implementation_sha256")
     require(isinstance(implementation, dict) and implementation,
             "Pinned INNER_FIT implementation map required")

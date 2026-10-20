@@ -12,10 +12,20 @@ import math
 
 import torch
 from torch import Tensor, nn
+from torch.nn import functional as F
+from r02_local_attention_blocks import (LOCAL_MEAN_PREFIX_RANGE_V1, ContextExecution,
+                                         blocked_attention, blocked_local_mean,
+                                         prefix_range_mean)
+from r02_context_autosomal_pool import (RARE_POOLING_POLICIES, RARE_POOLING_SUM,
+                                         finalize_rare_sum)
 
 
 FAMILIES = {"structure_deep_sets", "structure_local_attention", "lai_cnn", "lai_local_attention"}
 FIELDS = ("family", "common_radius_cm", "rare_radius_cm", "width", "depth", "dropout", "heads", "learning_rate")
+LOCUS_DESCRIPTOR_LEGACY = "ALLELE_POSITION_12_V0"
+LOCUS_DESCRIPTOR_CHROM22 = "ALLELE_POSITION_CHROM22_V1"
+LOCUS_DESCRIPTORS = frozenset((LOCUS_DESCRIPTOR_LEGACY, LOCUS_DESCRIPTOR_CHROM22))
+AUTOSOME_COUNT = 22
 
 
 def require(condition, message):
@@ -33,6 +43,8 @@ class ContextConfig:
     dropout: float
     heads: int | None
     learning_rate: float
+    rare_pooling: str = RARE_POOLING_SUM
+    locus_descriptor: str = LOCUS_DESCRIPTOR_LEGACY
 
     def __post_init__(self):
         require(self.family in FAMILIES, "unknown contextual family")
@@ -43,6 +55,12 @@ class ContextConfig:
             require(type(getattr(self, key)) is int and getattr(self, key) > 0, f"invalid {key}")
         require(type(self.dropout) in (float, int) and math.isfinite(self.dropout)
                 and 0 <= self.dropout < 1, "invalid dropout")
+        require(self.rare_pooling in RARE_POOLING_POLICIES, "unknown rare pooling policy")
+        require(self.family.startswith("structure_") or self.rare_pooling == RARE_POOLING_SUM,
+                "rare pooling applies only to structure families")
+        require(self.locus_descriptor in LOCUS_DESCRIPTORS, "unknown locus descriptor")
+        require(self.family.startswith("structure_") or self.locus_descriptor == LOCUS_DESCRIPTOR_LEGACY,
+                "chromosome-aware locus descriptor applies only to structure families")
         if self.family == "structure_deep_sets":
             require(self.rare_radius_cm is None, "Deep Sets has no rare-neighbor radius")
         else:
@@ -59,7 +77,10 @@ class ContextConfig:
         """Read explicit resolved fields, not legacy radius_cm defaults."""
         require(all(k in resolved for k in FIELDS), "incomplete v2 resolved configuration")
         require("radius_cm" not in resolved, "legacy radius has no implicit v2 mapping")
-        return cls(**{key: resolved[key] for key in FIELDS})
+        values = {key: resolved[key] for key in FIELDS}
+        values["rare_pooling"] = resolved.get("rare_pooling", RARE_POOLING_SUM)
+        values["locus_descriptor"] = resolved.get("locus_descriptor", LOCUS_DESCRIPTOR_LEGACY)
+        return cls(**values)
 
 
 @dataclass
@@ -105,8 +126,13 @@ def masked_mean(values: Tensor, mask: Tensor) -> Tensor:
     return clean.sum(1) / mask.sum(1).clamp_min(1)[:, None]
 
 
-def local_mean(values: Tensor, query: Sites, source: Sites, radius_cm: float, chunk_size: int = 32):
+def local_mean(values: Tensor, query: Sites, source: Sites, radius_cm: float, chunk_size: int = 32,
+               execution: ContextExecution | None = None):
     """Mean and count over jointly eligible neighbors; bounded query chunks."""
+    if execution is not None:
+        if execution.local_mean_mode == LOCAL_MEAN_PREFIX_RANGE_V1:
+            return prefix_range_mean(values, query, source, radius_cm, execution)
+        return blocked_local_mean(values, query, source, radius_cm, execution)
     pooled, counts = [], []
     values = torch.where(source.valid[..., None], values, 0.)
     for start in range(0, query.cm.shape[1], chunk_size):
@@ -120,11 +146,44 @@ def local_mean(values: Tensor, query: Sites, source: Sites, radius_cm: float, ch
     return torch.cat(pooled, 1), torch.cat(counts, 1)
 
 
-def mlp(input_dim, width, depth, dropout):
+class ChromosomeAwareMLP(nn.Sequential):
+    """First affine map with implicit chromosome one-hot columns.
+
+    One complete ``Linear(input_dim + 22, width)`` owns initialization and
+    checkpoint state. Forward selects its chromosome column instead of
+    allocating a dense ``[batch, loci, 22]`` tensor. Invalid padding receives a
+    safe index and is erased by the caller's validity mask.
+    """
+    def __init__(self, base_input_dim, *layers):
+        super().__init__(*layers)
+        self.base_input_dim = base_input_dim
+
+    def forward(self, values, chromosomes, valid):
+        require(values.shape[:-1] == chromosomes.shape == valid.shape,
+                "chromosome-aware MLP axes differ")
+        require(chromosomes.dtype in (torch.int32, torch.int64) and valid.dtype == torch.bool,
+                "chromosome-aware MLP requires integer chromosomes and boolean validity")
+        require(bool(((chromosomes[valid] >= 1) & (chromosomes[valid] <= AUTOSOME_COUNT)).all()),
+                "valid chromosome-aware loci must be autosomes 1..22")
+        first = self[0]
+        require(isinstance(first, nn.Linear) and first.in_features == self.base_input_dim + AUTOSOME_COUNT,
+                "chromosome-aware first Linear differs")
+        safe_index = torch.where(valid, chromosomes - 1, torch.zeros_like(chromosomes))
+        output = F.linear(values, first.weight[:, :self.base_input_dim], first.bias)
+        output = output + F.embedding(safe_index, first.weight[:, self.base_input_dim:].t())
+        for layer in list(self)[1:]:
+            output = layer(output)
+        return output
+
+
+def mlp(input_dim, width, depth, dropout, chromosome_aware=False):
     layers = []
     for level in range(depth):
-        layers.extend((nn.Linear(input_dim if level == 0 else width, width), nn.GELU(), nn.Dropout(dropout)))
-    return nn.Sequential(*layers)
+        first_width = input_dim + (AUTOSOME_COUNT if chromosome_aware else 0)
+        layers.extend((nn.Linear(first_width if level == 0 else width, width),
+                       nn.GELU(), nn.Dropout(dropout)))
+    return (ChromosomeAwareMLP(input_dim, *layers) if chromosome_aware
+            else nn.Sequential(*layers))
 
 
 class LocalAttention(nn.Module):
@@ -134,26 +193,37 @@ class LocalAttention(nn.Module):
     Dense key products are bounded by max_events; no whole-genome scalability
     claim is made by this small-block runtime.
     """
-    def __init__(self, config):
+    def __init__(self, config, execution: ContextExecution | None = None):
         super().__init__()
         self.radius = config.rare_radius_cm
         self.heads = config.heads
+        self.execution = execution
+        require(execution is None or config.dropout == 0,
+                "exact block execution requires the frozen dropout=0")
         self.attention = nn.MultiheadAttention(config.width, config.heads, dropout=config.dropout, batch_first=True)
         self.norm = nn.LayerNorm(config.width)
         self.ff = mlp(config.width, config.width, 1, config.dropout)
 
     def forward(self, values, sites):
+        clean = torch.where(sites.valid[..., None], values, 0.)
+        if self.execution is not None:
+            attended = blocked_attention(self.attention, clean, sites.cm, sites.chrom,
+                                         sites.valid, self.radius, self.execution)
+        else:
+            attended = self._dense_attention(clean, sites)
+        out = self.norm(clean + attended)
+        out = out + self.ff(out)
+        return torch.where(sites.valid[..., None], out, 0.)
+
+    def _dense_attention(self, clean, sites):
         allowed = genetic_neighbors(sites, sites, self.radius)
         # Padding queries need one numerical sentinel to avoid softmax(-inf).
         # Its output is erased; no measured query attends missing events.
         safe = allowed.clone()
         safe[:, :, 0] |= ~sites.valid
         blocked = ~safe.repeat_interleave(self.heads, dim=0)
-        clean = torch.where(sites.valid[..., None], values, 0.)
         attended, _ = self.attention(clean, clean, clean, attn_mask=blocked, need_weights=False)
-        out = self.norm(clean + attended)
-        out = out + self.ff(out)
-        return torch.where(sites.valid[..., None], out, 0.)
+        return attended
 
 
 class ContextualModel(nn.Module):
@@ -166,7 +236,8 @@ class ContextualModel(nn.Module):
     """
     def __init__(self, config: ContextConfig, common_features: int, event_features: int,
                  max_common_sites=100000, max_events=2048, max_queries=2048,
-                 query_max_gap_cm: float | None = None):
+                 query_max_gap_cm: float | None = None,
+                 context_execution: dict | None = None):
         super().__init__()
         require(common_features > 0 and event_features > 0, "positive feature dimensions required")
         if config.family == "lai_cnn":
@@ -179,13 +250,18 @@ class ContextualModel(nn.Module):
         self.event_features = event_features
         self.limits = (max_common_sites, max_events, max_queries)
         self.query_max_gap_cm = query_max_gap_cm
-        self.common_encoder = mlp(common_features, config.width, 1, config.dropout)
+        execution = None if context_execution is None else ContextExecution(**context_execution)
+        self.context_execution = execution
+        self.chromosome_aware = config.locus_descriptor == LOCUS_DESCRIPTOR_CHROM22
+        self.common_encoder = mlp(common_features, config.width, 1, config.dropout,
+                                  self.chromosome_aware)
         # Event metadata must retain actual allele identity/position definitions.
         # log1p(number of common neighbors) distinguishes no context from mean zero.
         self.event_encoder = mlp(event_features + config.width + 1, config.width,
-                                 config.depth if config.family == "structure_deep_sets" else 1, config.dropout)
+                                 config.depth if config.family == "structure_deep_sets" else 1,
+                                 config.dropout, self.chromosome_aware)
         self.event_attention = nn.ModuleList(
-            LocalAttention(config) for _ in range(config.depth)
+            LocalAttention(config, execution) for _ in range(config.depth)
         ) if config.family.endswith("local_attention") else nn.ModuleList()
         is_structure = config.family.startswith("structure_")
         self.person_rho = mlp(config.width, config.width, 1, config.dropout) if is_structure else None
@@ -199,14 +275,19 @@ class ContextualModel(nn.Module):
 
     def common_values(self, common):
         common.check(self.common_features, self.limits[0])
-        return torch.where(common.valid[..., None], self.common_encoder(common.cleaned()), 0.)
+        values = (self.common_encoder(common.cleaned(), common.chrom, common.valid)
+                  if self.chromosome_aware else self.common_encoder(common.cleaned()))
+        return torch.where(common.valid[..., None], values, 0.)
 
     def event_values(self, common, encoded_common, events):
         events.check(self.event_features, self.limits[1])
         require(common.features.shape[0] == events.features.shape[0], "batch mismatch")
-        context, count = local_mean(encoded_common, events, common, self.config.common_radius_cm)
-        values = self.event_encoder(torch.cat((events.cleaned(), context,
-                                               torch.log1p(count.to(context.dtype))[..., None]), -1))
+        context, count = local_mean(encoded_common, events, common, self.config.common_radius_cm,
+                                    execution=self.context_execution)
+        inputs = torch.cat((events.cleaned(), context,
+                            torch.log1p(count.to(context.dtype))[..., None]), -1)
+        values = (self.event_encoder(inputs, events.chrom, events.valid)
+                  if self.chromosome_aware else self.event_encoder(inputs))
         values = torch.where(events.valid[..., None], values, 0.)
         for block in self.event_attention:
             values = block(values, events)
@@ -221,8 +302,8 @@ class ContextualModel(nn.Module):
         require(events is not None, "events required for rare-enabled arm")
         values = self.event_values(common, encoded, events)
         # Shared pooling convention; this alone does not match model capacity.
-        rare = self.person_rho(values.sum(1))
-        rare = torch.where(events.valid.any(1)[:, None], rare, 0.)
+        rare = finalize_rare_sum(values.sum(1), events.valid.sum(1), self.person_rho,
+                                 self.config.rare_pooling)
         return baseline + rare
 
     @staticmethod
@@ -289,13 +370,15 @@ class ContextualModel(nn.Module):
         require(torch.allclose(p.sum(-1)[queries.valid], torch.ones_like(p.sum(-1)[queries.valid]),
                                atol=1e-5, rtol=1e-5), "probabilities must sum to one")
         p = torch.where(queries.valid[..., None], p, 1 / 6)
-        c, nc = local_mean(encoded, queries, common, self.config.common_radius_cm)
+        c, nc = local_mean(encoded, queries, common, self.config.common_radius_cm,
+                           execution=self.context_execution)
         rare = torch.zeros_like(c)
         nr = torch.zeros_like(nc)
         if include_rare:
             require(events is not None, "events required for rare-enabled arm")
             values = self.event_values(common, encoded, events)
-            rare, nr = local_mean(values, queries, events, self.config.rare_radius_cm)
+            rare, nr = local_mean(values, queries, events, self.config.rare_radius_cm,
+                                 execution=self.context_execution)
         x = self.query_fusion(torch.cat((c, rare, p, torch.log1p(nc.to(c.dtype))[..., None],
                                          torch.log1p(nr.to(c.dtype))[..., None]), -1))
         if self.query_convs:

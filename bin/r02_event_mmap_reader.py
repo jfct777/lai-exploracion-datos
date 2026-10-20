@@ -114,8 +114,13 @@ class VerifiedChunkCache:
 
 
 class MappedEventChromosome(original.EventChromosome):
-    def __init__(self, directory, manifest_sha256, *, cache):
+    def __init__(self, directory, manifest_sha256, *, cache, max_window_sites=None):
         super().__init__(directory, manifest_sha256)
+        if max_window_sites is not None:
+            require(type(max_window_sites) is int and
+                    max_window_sites >= self.r['max_window_sites'],
+                    'external preparation row limit differs')
+            self.r = {**self.r, 'max_window_sites': max_window_sites}
         require(isinstance(cache, VerifiedChunkCache), 'Explicit verified-source cache required')
         self.cache = cache
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stage one of the 88 authenticated FIT/SELECT target bundles for the trainer."""
 from __future__ import annotations
-import argparse, base64, hashlib, json, re, shutil, subprocess, tarfile
+import argparse, base64, fcntl, hashlib, json, re, shutil, subprocess, tarfile
 from pathlib import Path, PurePosixPath
 
 
@@ -19,9 +19,16 @@ def sha(path):
 def download(descriptor, target):
     require(str(descriptor['uri']).startswith('gs://projects-usp/dnaBr-lai/datalake/') and
             re.fullmatch(r'[1-9][0-9]*',str(descriptor['generation'])), 'unpinned target object')
-    subprocess.run(['gcloud','storage','cp',descriptor['uri']+'#'+str(descriptor['generation']),str(target)],check=True)
-    require(target.stat().st_size==descriptor['bytes'] and sha(target)==descriptor['sha256'],
-            'downloaded target object differs')
+    def matches(path):
+        return path.is_file() and path.stat().st_size==descriptor['bytes'] and sha(path)==descriptor['sha256']
+    if target.exists():
+        require(matches(target), 'existing target differs; do not overwrite a completed file')
+        return
+    partial=target.with_name(target.name+'.partial')
+    if not matches(partial):
+        subprocess.run(['gcloud','storage','cp',descriptor['uri']+'#'+str(descriptor['generation']),str(partial)],check=True)
+    require(matches(partial), 'downloaded target object differs')
+    partial.rename(target)
 
 
 def validate_bundle(folder, view_id):
@@ -51,7 +58,15 @@ def run(catalogue_path,catalogue_sha,view_id,out):
     catalogue=json.loads(Path(catalogue_path).read_text())
     matches=[x for x in catalogue['targets'] if x['view_id']==view_id]
     require(len(matches)==1,'unknown/duplicate target view')
-    out=Path(out);out.mkdir(parents=True,exist_ok=False); target=matches[0]
+    out=Path(out);out.mkdir(parents=True,exist_ok=True); target=matches[0]
+    # Persist completed objects through Nextflow retries; only one writer may
+    # operate on this view. A receipt's mere existence never skips validation.
+    with (out/'.stage.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        return stage_locked(target,out,view_id)
+
+
+def stage_locked(target,out,view_id):
     if target['source']=='common88_direct_objects':
         for name,descriptor in target['objects'].items():
             require(PurePosixPath(name).name==name,'unsafe target file name')
@@ -67,12 +82,23 @@ def run(catalogue_path,catalogue_sha,view_id,out):
                         and not members[name].islnk() for name in expected),'archive target inventory differs')
             for name in expected:
                 stream=source.extractfile(members[name]); require(stream is not None,'cannot extract target')
-                with (out/name.name).open('xb') as sink: shutil.copyfileobj(stream,sink,8*1024*1024)
-        archive.unlink()
+                destination=out/name.name
+                if destination.exists():
+                    require(destination.stat().st_size==members[name].size and
+                            sha(destination)==hashlib.file_digest(stream,'sha256').hexdigest(),
+                            'existing extracted target differs')
+                    continue
+                partial=out/(name.name+'.partial')
+                with partial.open('wb') as sink: shutil.copyfileobj(stream,sink,8*1024*1024)
+                require(partial.stat().st_size==members[name].size,'incomplete extracted target')
+                partial.rename(destination)
         local_manifest=Path(target['manifest']['path'])
         require(sha(out/'manifest.json')==target['manifest']['sha256']==sha(local_manifest),
                 'archived target manifest differs')
-    return validate_bundle(out,view_id)
+    result=validate_bundle(out,view_id)
+    # The small verified archive is retained: interrupted/repeated staging can
+    # reauthenticate its members without downloading it again.
+    return result
 
 
 if __name__=='__main__':

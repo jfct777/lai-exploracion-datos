@@ -403,14 +403,15 @@ def validate_pair_complete_calendar(roster_path: Path, frozen_plan_path: Path) -
 def exercise_inner_graph_path(roster_path: Path, fold_plan_path: Path,
                               affinity_path: Path, source_sha256: str,
                               max_memory_bytes: int,
-                              producer_manifest_path: Path | None = None) -> dict[str, Any]:
+                              producer_manifest_path: Path | None = None,
+                              *, artifact_directory: Path | None = None) -> dict[str, Any]:
     """Exercise the real spectrum/projection code on one declared inner split.
 
     A legacy table contains the complete outer-FIT eligible pair universe.  An
     authenticated INNER_FIT producer instead contains exactly train--train and
-    project--train rows; this is the admitted route for calibration because it
-    proves that frequencies, minor-allele orientation and affinities were
-    rebuilt from raw genotypes.  Project--project rows never enter this path.
+    project--train rows.  A fixed-catalogue manifest preserves source_minor from
+    2,723 source people; a distinct pre-frequency manifest learns selection and
+    orientation in INNER_FIT.  Project--project rows never enter this path.
     """
     from r02_structure_continuous import FitRareGraphSpectrum
 
@@ -436,19 +437,30 @@ def exercise_inner_graph_path(roster_path: Path, fold_plan_path: Path,
         raw_name = raw.get("path") if isinstance(raw, dict) else None
         raw_path = (producer_manifest_path.parent / raw_name
                     if isinstance(raw_name, str) else producer_manifest_path.parent / "__invalid__")
-        transform_path = producer_manifest_path.parent / "inner_fit_transformations.private.bin"
+        fixed_output = (producer.get("status") == "INNER_FIT_FIXED_SOURCE_MINOR_AFFINITIES_COMPLETE"
+            and producer.get("frequency_scope") == "INNER_FIT_DESCRIPTIVE_COUNTS_ONLY"
+            and producer.get("minor_allele_scope") == "FIXED_SOURCE_COHORT_2723"
+            and producer.get("transformation_scope") == "FIXED_SOURCE_MINOR_IDENTITY_NO_REORIENTATION"
+            and producer.get("candidate_ascertainment") == inner_producer.FIXED_SOURCE_MINOR_CATALOG
+            and producer.get("genotype_encoding") == inner_producer.FIXED_SOURCE_MINOR_ENCODING
+            and producer.get("fixed_source_catalog_used") is True)
+        new_output = (producer.get("status") ==
+                "INNER_FIT_FREQUENCIES_ORIENTATION_TRANSFORMATION_AND_AFFINITIES_COMPLETE"
+            and producer.get("frequency_scope") == "INNER_FIT_ONLY"
+            and producer.get("minor_allele_scope") == "INNER_FIT_ONLY"
+            and producer.get("transformation_scope") == "INNER_FIT_ONLY"
+            and producer.get("candidate_ascertainment") == inner_producer.STRICT_INNER_FIT_ASCERTAINMENT
+            and producer.get("genotype_encoding") == inner_producer.GT_CODE_ENCODING
+            and producer.get("fixed_source_catalog_used") is False)
+        transform_name = ("inner_fit_source_minor_counts.private.bin" if fixed_output else
+                          "inner_fit_transformations.private.bin")
+        transform_path = producer_manifest_path.parent / transform_name
         require(producer.get("schema") == "r02_k03_inner_fit_rare_affinities_v1"
-                and producer.get("status") ==
-                    "INNER_FIT_FREQUENCIES_ORIENTATION_TRANSFORMATION_AND_AFFINITIES_COMPLETE"
+                and fixed_output != new_output
                 and producer.get("roster_sha256") == sha256(roster_path)
                 and producer.get("fold_plan_sha256") == sha256(fold_plan_path)
                 and producer.get("learning_indices") == sorted(train)
                 and producer.get("projection_indices") == sorted(project)
-                and producer.get("frequency_scope") == "INNER_FIT_ONLY"
-                and producer.get("minor_allele_scope") == "INNER_FIT_ONLY"
-                and producer.get("transformation_scope") == "INNER_FIT_ONLY"
-                and producer.get("candidate_ascertainment") == inner_producer.STRICT_INNER_FIT_ASCERTAINMENT
-                and producer.get("genotype_encoding") == inner_producer.GT_CODE_ENCODING
                 and producer.get("outer_fit_learned_inputs_used") is False
                 and producer.get("select_evaluate_genotypes_read") is False
                 and source_sha256 == sha256(producer_manifest_path)
@@ -461,7 +473,7 @@ def exercise_inner_graph_path(roster_path: Path, fold_plan_path: Path,
                 "Authenticated raw-genotype INNER_FIT producer required")
         require(transform_path.is_file()
                 and producer["files_sha256"].get(transform_path.name) == sha256(transform_path),
-                "INNER_FIT transformation evidence is absent or changed")
+                "INNER_FIT source-minor count evidence is absent or changed")
         train_sizes = Counter(people[i]["component"] for i in train)
         expected = (len(train) * (len(train) - 1) // 2
                     - sum(n * (n - 1) // 2 for n in train_sizes.values())
@@ -505,7 +517,9 @@ def exercise_inner_graph_path(roster_path: Path, fold_plan_path: Path,
                 projected[j][i] = value
         elif producer is not None:
             require(False, "Authenticated producer included a project--project row")
-    semantics = (dict(family="R", measure="INNER_FIT_MINOR_CARRIER_JACCARD",
+    semantics = (dict(family="R", measure=("FIXED_SOURCE_MINOR_CARRIER_JACCARD"
+                                            if producer.get("fixed_source_catalog_used") else
+                                            "INNER_FIT_MINOR_CARRIER_JACCARD"),
                       units="DIMENSIONLESS_INTERSECTION_OVER_UNION",
                       minimum=0.0, maximum=1.0)
                  if producer is not None else None)
@@ -520,6 +534,12 @@ def exercise_inner_graph_path(roster_path: Path, fold_plan_path: Path,
     if producer is None:
         require(all(row["observed_fit_count"] == len(train) for row in outputs),
                 "Projection references do not equal exact inner FIT")
+    artifacts = None
+    if artifact_directory is not None:
+        from r02_k03_spectrum_artifacts import save_spectrum
+        artifacts = save_spectrum(graph, outputs, Path(artifact_directory),
+                                  source_sha256=source_sha256,
+                                  fold_plan_sha256=sha256(fold_plan_path))
     return {
         "status": "INNER_FIT_GRAPH_AND_EXACT_REFERENCE_PROJECTION_EXECUTED",
         "fold_id": plan["fold_id"], "inner_fit_people": len(train),
@@ -534,6 +554,7 @@ def exercise_inner_graph_path(roster_path: Path, fold_plan_path: Path,
         "project_project_edges_used": False,
         "select_evaluate_access_allowed": False,
         "target_read": False, "biological_validation": False,
+        "reusable_spectrum_artifacts": artifacts,
     }
 
 

@@ -100,14 +100,50 @@ def structure_branch(spec):
 
 
 def lai_branch(spec):
-    require(set(spec) == {"kind", "separation_request", "responses_opened"}
-            and spec["kind"] == "LAI_PERSON_DONOR_MOSAIC_SEPARATION_AUDIT",
-            "invalid LAI eligibility specification")
+    kinds = {"LAI_PERSON_DONOR_MOSAIC_SEPARATION_AUDIT",
+             "LAI_DIRECTIONAL_FIT_SELECT_DEVELOPMENT_AUDIT"}
+    require(spec.get("kind") in kinds, "invalid LAI eligibility specification")
     require(spec["responses_opened"] == {"FIT": True, "SELECT": True, "EVALUATE": False},
             "LAI response roles differ or EVALUATE was opened")
     path = descriptor(spec["separation_request"], "LAI separation request")
     from r02_lai_separation import audit
     result = audit(path, spec["separation_request"]["sha256"])
+    if spec["kind"] == "LAI_DIRECTIONAL_FIT_SELECT_DEVELOPMENT_AUDIT":
+        require(set(spec) == {"kind", "separation_request", "development_scope", "responses_opened"},
+                "invalid explicit directional LAI eligibility specification")
+        scope_path = descriptor(spec["development_scope"], "LAI directional development scope")
+        from r02_lai_separation import audit_directional_development
+        directional = audit_directional_development(result, read_json(scope_path))
+        allowed = directional["development_training_separation_allowed"]
+        return {
+            "status": ("ELIGIBLE_FOR_DIRECTIONAL_FIT_SELECT_TRAINING_EVALUATE_CLOSED" if allowed
+                       else "DIRECTIONAL_SEPARATION_AUDITED_INPUTS_INCOMPLETE"),
+            "eligibility_gate_passed": allowed,
+            "development_separation_gate_passed": directional["development_separation_passed"],
+            "protocol_id": directional["protocol_id"],
+            "pooled_collision_counts": result["pooled_collision_counts"],
+            "protocols": {directional["protocol_id"]: directional["collision_counts"]},
+            "donor_separation": ("VERIFIED_WITHIN_DECLARED_DIRECTION" if
+                                 directional["development_separation_passed"] else "NOT_VERIFIED"),
+            "evaluate_metadata_present": False,
+            "evaluate_responses_opened": False,
+            "reserved_performance_claimed": False,
+            "development_claim": directional["development_claim"],
+            "actual_uses": directional["actual_uses"],
+            "reserve_protection": directional["reserve_protection"],
+            "reference_dependency": directional["reference_dependency"],
+            "assignment_identity_sha256": directional["assignment_identity_sha256"],
+            "authenticated_batches": directional["authenticated_batches"],
+            "source": spec["separation_request"],
+            "development_scope": spec["development_scope"],
+            "separation_audit_request_sha256": result["request_sha256"],
+            "allowed_claim": directional["allowed_claim"],
+            "forbidden_claims": directional["forbidden_claims"],
+            "remaining_scientific_dependencies": directional["remaining_scientific_dependencies"],
+            "blockers": directional["blockers"],
+        }
+    require(set(spec) == {"kind", "separation_request", "responses_opened"},
+            "invalid strict LAI eligibility specification")
     blockers = set(result["blockers"])
     collisions = result["pooled_collision_counts"]
     if collisions.get("donor") or collisions.get("family") or collisions.get("atomic_unit"):
@@ -174,6 +210,13 @@ def require_contract_eligibility(contract):
                 for person, value in contract["persons"].items()]
         require(identity_sha256(rows) == branch.get("development_identity_sha256"),
                 "structure FIT/SELECT identities differ from eligibility receipt")
+    if objective == "lai":
+        scope = contract.get("lai_development_scope")
+        require(isinstance(scope, dict) and set(scope) == {"path", "sha256"},
+                "LAI training requires the pinned directional development scope")
+        require(scope == branch.get("development_scope")
+                and contract.get("lai_separation_request") == branch.get("source"),
+                "LAI directional scope or separation source differs from eligibility receipt")
     return receipt
 
 

@@ -24,6 +24,8 @@ timeline-*.html
 /PRESENTACION_*/
 /PRESENTACION_*.zip
 /INSTRUCCIONES_EXPLICACION_PROYECTO.md
+/AUDITORIA_RECURSOS_*.md
+/AUDITORIA_RECURSOS_*_EVIDENCIA.json
 
 # Estado de ejecución y archivos temporales generados.
 /.runtime/

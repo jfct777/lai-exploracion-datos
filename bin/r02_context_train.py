@@ -26,9 +26,11 @@ import numpy as np
 import torch
 from torch import nn
 
-from genomic_context_runtime import ContextConfig, ContextualModel, Sites, require
+from genomic_context_runtime import (ContextConfig, ContextualModel, LOCUS_DESCRIPTOR_CHROM22,
+                                     LOCUS_DESCRIPTOR_LEGACY, Sites, require)
 from r02_context_autosomal_pool import (AutosomalPool, AutosomalPoolResult,
-                                         AutosomalSufficientStatistics, finalize_statistics)
+    AutosomalSufficientStatistics, RARE_POOLING_MEAN_WITH_EXPLICIT_BURDEN,
+    RARE_POOLING_SUM, finalize_rare_sum, finalize_statistics)
 from r02_context_checkpoint import CheckpointStore, identity_digest
 
 
@@ -46,6 +48,14 @@ def sha(path):
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             result.update(chunk)
     return result.hexdigest()
+
+
+def configure_torch_cache(path):
+    """Set PyTorch's cache without consulting a passwd entry for the host UID."""
+    value = os.fspath(path)
+    require(bool(value), "nonempty PyTorch cache path required")
+    os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", value)
+    return os.environ["TORCHINDUCTOR_CACHE_DIR"]
 
 
 def read_json(path, expected):
@@ -320,12 +330,15 @@ def open_autosomal_entry(entry, contract, stage, resolved, authenticate_windows=
             tuple(target.get("role", np.full(len(dataset.ids), stage)).astype(str)) == dataset.roles,
             "autosomal request and target person/role/component order differ")
     config = ContextConfig.from_recipe(resolved)
-    require(contract["objective"] == "structure" and config.family == "structure_deep_sets",
-            "AUTOSOMAL_POOL_V1 supports only the existing structure_deep_sets route")
+    require(contract["objective"] == "structure" and config.family in
+            ("structure_deep_sets", "structure_local_attention"),
+            "autosomal inputs require a structure model")
     request = dataset.request
+    expected_depth = config.depth if config.family == "structure_local_attention" else 0
     require(request["common_radius_cm"] == config.common_radius_cm and
-            request["rare_radius_cm"] is None and request["attention_depth"] == 0,
-            "autosomal request radii/depth differ from structure_deep_sets configuration")
+            request["rare_radius_cm"] == config.rare_radius_cm and
+            request["attention_depth"] == expected_depth,
+            "autosomal request radii/depth differ from resolved structure configuration")
     if dataset_mode(contract) != AUTOSOMAL_PERSON_BATCHES and all(entry.get(key) for key in ("receipt_path", "receipt_sha256")):
         receipt = read_json(entry["receipt_path"], entry["receipt_sha256"])
         lineage = receipt.get("input_lineage", {})
@@ -333,6 +346,11 @@ def open_autosomal_entry(entry, contract, stage, resolved, authenticate_windows=
                 receipt.get("exclusion_scope") == request["exclusion_scope"] and
                 (lineage.get("event_contract_sha256"), lineage.get("source_contract_sha256")) == dataset.lineage,
                 "autosomal request and supervised target lineage/block/exclusion differ")
+    if contract.get("dose_relocation"):
+        from r02_structure_identity import RelocatedAutosomalDataset
+        record = contract["dose_relocation"]["maps_by_request"][entry["autosomal_request_sha256"]]
+        dataset = RelocatedAutosomalDataset(dataset, entry["autosomal_request_sha256"],
+                                             record["path"], record["sha256"])
     if authenticate_windows:
         seen = 0
         for batch_index in range(_dataset_batch_count(dataset)):
@@ -405,7 +423,8 @@ class TaskModel(nn.Module):
         limits = contract["limits"]
         self.encoder = ContextualModel(config, contract["common_features"], contract["event_metadata_features"] + 4,
             max_common_sites=limits["max_common_sites"], max_events=limits["max_event_sites"],
-            max_queries=limits["max_targets"], query_max_gap_cm=contract.get("query_max_gap_cm"))
+            max_queries=limits["max_targets"], query_max_gap_cm=contract.get("query_max_gap_cm"),
+            context_execution=contract.get("context_execution"))
         self.head = nn.Linear(2 * config.width, 1) if self.objective == "structure" else None
 
     def structure_prediction(self, embedding, data):
@@ -422,8 +441,10 @@ class TaskModel(nn.Module):
             baseline = torch.where(common_core[..., None], encoded, 0).sum(1) / common_core.sum(1).clamp_min(1)[:, None]
             values = self.encoder.event_values(common, encoded, events)
             event_core = torch.from_numpy(data["event_core"]) & events.valid
-            rare = self.encoder.person_rho(torch.where(event_core[..., None], values, 0).sum(1))
-            z = baseline + torch.where(event_core.any(1)[:, None], rare, 0)
+            rare = finalize_rare_sum(torch.where(event_core[..., None], values, 0).sum(1),
+                                     event_core.sum(1), self.encoder.person_rho,
+                                     self.encoder.config.rare_pooling)
+            z = baseline + rare
             return self.structure_prediction(z, data)
         return self.encoder.predict_lai(common, tensor_sites(data, "query"),
             torch.from_numpy(data["baseline_probabilities"]).float(), events, include_rare=True)
@@ -435,8 +456,9 @@ class TaskModel(nn.Module):
         every owned event locus. The second pass builds the ordinary reference
         graph. Training uses ``backward_autosomal`` below to bound that graph.
         """
-        require(self.objective == "structure" and self.encoder.config.family == "structure_deep_sets",
-                "autosomal pooling currently supports only structure_deep_sets")
+        require(self.objective == "structure" and self.encoder.config.family in
+                ("structure_deep_sets", "structure_local_attention"),
+                "autosomal pooling requires a structure model")
         results = []
         for batch_index in range(_dataset_batch_count(dataset)):
             ids, roles, _ = _dataset_batch_axis(dataset, batch_index)
@@ -453,7 +475,8 @@ class TaskModel(nn.Module):
                          torch.from_numpy(tile["event_dosage"]),
                          tile_index=view["autosomal_tile_index"], last_tile=view["autosomal_last_tile"],
                          core_bp=view["core_bp"])
-            results.append((ids, pool.finalize(self.encoder.person_rho)))
+            results.append((ids, pool.finalize(self.encoder.person_rho,
+                                               self.encoder.config.rare_pooling)))
         result = _concatenate_pool_results(results, dataset.ids)
         return self.structure_prediction(result.embedding, target_data), result
 
@@ -494,9 +517,9 @@ class TaskModel(nn.Module):
         this trajectory identical to the ordinary reference forward, including
         dropout, while releasing every tile graph before reading the next tile.
         """
-        require(self.training and self.objective == "structure" and
-                self.encoder.config.family == "structure_deep_sets",
-                "bounded autosomal backward requires training structure_deep_sets")
+        require(self.training and self.objective == "structure" and self.encoder.config.family in
+                ("structure_deep_sets", "structure_local_attention"),
+                "bounded autosomal backward requires a training structure model")
         records=[]
         with torch.no_grad():
             for batch_index in range(_dataset_batch_count(dataset)):
@@ -520,7 +543,8 @@ class TaskModel(nn.Module):
         require(all(record[4].chromosomes==statistics.chromosomes for record in records),
                 "person batches cover different autosomes")
         common_sum=statistics.common_sum.detach().requires_grad_(True);rare_sum=statistics.rare_sum.detach().requires_grad_(True)
-        pooled=finalize_statistics(replace(statistics,common_sum=common_sum,rare_sum=rare_sum),self.encoder.person_rho)
+        pooled=finalize_statistics(replace(statistics,common_sum=common_sum,rare_sum=rare_sum),
+                                   self.encoder.person_rho,self.encoder.config.rare_pooling)
         prediction = self.structure_prediction(pooled.embedding, target_data)
         value = training_loss(prediction, target_data, self.objective)
         post_forward_rng = torch.get_rng_state().clone()
@@ -671,6 +695,7 @@ def validate_contract(contract):
                 and review.get("dataset_mode", SINGLE_CHROMOSOME) == mode
                 and review.get("purpose") == contract.get("purpose")
                 and review.get("pair_loss_policy") == contract.get("pair_loss_policy")
+                and review.get("dose_relocation") == contract.get("dose_relocation")
                 and review.get("eligibility_manifest") == contract.get("eligibility_manifest")
                 and review["excluded_intervals"] == contract.get("excluded_intervals", []),
                 "review does not admit these exact people, features, exclusions and batches")
@@ -708,8 +733,48 @@ def build_optimizer(parameters, learning_rate, adam_state_precision="fp32"):
     return AdamFP64State(parameters, lr=learning_rate, foreach=False)
 
 
+def aggregate_norm_diagnostics(model, prediction, pooled, before):
+    """Return module/person-vector norm summaries without person-level rows."""
+    require(isinstance(before, dict), "diagnostic parameter snapshot required")
+    groups = {}
+    for name, parameter in model.named_parameters():
+        prefix = ("common_encoder" if name.startswith("encoder.common_encoder") else
+                  "event_encoder" if name.startswith("encoder.event_encoder") else
+                  "event_attention" if name.startswith("encoder.event_attention") else
+                  "person_rho" if name.startswith("encoder.person_rho") else
+                  "pair_head" if name.startswith("head") else "other")
+        values = groups.setdefault(prefix, {"parameter_sq": 0.0, "gradient_sq": 0.0, "update_sq": 0.0})
+        values["parameter_sq"] += float(parameter.detach().double().square().sum())
+        if parameter.grad is not None:
+            values["gradient_sq"] += float(parameter.grad.detach().double().square().sum())
+        values["update_sq"] += float((parameter.detach() - before[name]).double().square().sum())
+    modules = {name: {key.replace("_sq", "_l2"): math.sqrt(value)
+                      for key, value in values.items()} for name, values in sorted(groups.items())}
+
+    def summary(values):
+        values = values.detach().double().reshape(-1)
+        require(bool(values.numel()) and bool(torch.isfinite(values).all()),
+                "nonfinite/empty aggregate norm diagnostic")
+        quantiles = torch.quantile(values, torch.tensor((0.0, 0.25, 0.5, 0.75, 1.0), dtype=torch.float64))
+        return {"count": int(values.numel()), "mean": float(values.mean()),
+                "min": float(quantiles[0]), "q25": float(quantiles[1]),
+                "median": float(quantiles[2]), "q75": float(quantiles[3]),
+                "max": float(quantiles[4])}
+
+    result = {"modules": modules, "prediction": summary(prediction),
+              "person_level_rows_emitted": False}
+    if pooled is not None:
+        common = torch.linalg.vector_norm(pooled.common_mean.detach().double(), dim=-1)
+        rare = torch.linalg.vector_norm(pooled.rare_embedding.detach().double(), dim=-1)
+        ratio = rare / common.clamp_min(torch.finfo(torch.float64).tiny)
+        result["representation"] = {"common_l2": summary(common), "rare_l2": summary(rare),
+                                    "rare_to_common_l2": summary(ratio)}
+    return result
+
+
 def checkpoint_identity(contract, contract_sha256, resolved_sha256, arm, seed,
-                        adam_state_precision="fp32"):
+                        adam_state_precision="fp32", rare_pooling=RARE_POOLING_SUM,
+                        locus_descriptor=LOCUS_DESCRIPTOR_LEGACY):
     """Bind resumable state to exact inputs, configuration, code and arm."""
     source = Path(__file__)
     inputs = []
@@ -720,87 +785,127 @@ def checkpoint_identity(contract, contract_sha256, resolved_sha256, arm, seed,
                            "autosomal_request_sha256": entry.get("autosomal_request_sha256")})
     code = {name: sha(source.with_name(name)) for name in (
         "r02_context_train.py", "r02_context_checkpoint.py", "r02_adam_fp64_state.py",
-        "genomic_context_runtime.py",
+        "genomic_context_runtime.py", "r02_local_attention_blocks.py",
         "r02_context_autosomal_dataset.py", "r02_context_autosomal_pool.py",
         "r02_neural_training_eligibility.py", "r02_lai_separation.py",
         "r02_lai_target_dependencies.py")}
     if dataset_mode(contract) == AUTOSOMAL_PERSON_BATCHES:
         code["r02_event_mmap_reader.py"] = sha(source.with_name("r02_event_mmap_reader.py"))
         code["r02_k03_neural_target.py"] = sha(source.with_name("r02_k03_neural_target.py"))
+    if contract.get("dose_relocation"):
+        code["r02_structure_identity.py"] = sha(source.with_name("r02_structure_identity.py"))
+    require(rare_pooling in (RARE_POOLING_SUM, RARE_POOLING_MEAN_WITH_EXPLICIT_BURDEN),
+            "unknown rare pooling checkpoint identity")
+    require(locus_descriptor in (LOCUS_DESCRIPTOR_LEGACY, LOCUS_DESCRIPTOR_CHROM22),
+            "unknown locus descriptor checkpoint identity")
     return {"schema": "r02_context_checkpoint_identity_v1", "contract_sha256": contract_sha256,
             "resolved_sha256": resolved_sha256, "objective": contract["objective"],
             "dataset_mode": dataset_mode(contract), "arm": arm, "seed": seed,
             "steps": contract["steps"], "adam_state_precision": adam_state_precision,
+            "rare_pooling": rare_pooling,
+            "locus_descriptor": locus_descriptor,
             "inputs": inputs, "code_sha256": code,
             "torch_version": torch.__version__, "numpy_version": np.__version__, "device": "cpu"}
 
 
 def train(contract_path, contract_sha256, resolved_path, resolved_sha256, arm, seed, output,
-          checkpoint_dir=None, checkpoint_every_steps=1, adam_state_precision="fp32"):
+          checkpoint_dir=None, checkpoint_every_steps=1, adam_state_precision="fp32",
+          fit_only=False, stop_after_steps=None, record_aggregate_norms=False):
+    output = Path(output)
+    configure_torch_cache(output.parent / f".{output.name}.torch-cache")
+    # Force any PyTorch startup/import failure before opening genotype batches.
+    torch.use_deterministic_algorithms(True)
     contract = validate_contract(read_json(contract_path, contract_sha256))
     resolved = read_json(resolved_path, resolved_sha256)
+    if contract.get("dose_relocation"):
+        from r02_structure_identity import validate_selected_control
+        require(dataset_mode(contract) == AUTOSOMAL_PERSON_BATCHES,
+                "dose relocation requires the authenticated 22-autosome reader")
+        validate_selected_control(contract["dose_relocation"], contract, resolved_sha256, arm, seed)
     require(arm in ARMS and type(seed) is int and seed >= 0, "invalid arm/seed")
     require(type(checkpoint_every_steps) is int and checkpoint_every_steps >= 1,
             "checkpoint frequency must be a positive number of completed optimizer steps")
     require(adam_state_precision in ADAM_STATE_PRECISIONS,
             "unsupported Adam state precision")
+    require(type(fit_only) is bool and (stop_after_steps is None or fit_only),
+            "partial training requires FIT_ONLY; SELECT cannot score an unfinished budget")
+    require(type(record_aggregate_norms) is bool, "aggregate norm diagnostic flag must be boolean")
+    final_step = contract["steps"] if stop_after_steps is None else stop_after_steps
+    require(type(final_step) is int and 1 <= final_step <= contract["steps"],
+            "FIT stop must lie inside the frozen training ceiling")
     # Authenticate all data before any optimizer step. Load one bounded batch at a time.
     for stage, batches in contract["batches"].items():
+        if fit_only and stage != "FIT":
+            continue
         for entry in batches:
             validate_training_entry(entry, contract, stage, resolved,
                                     authenticate_windows=dataset_mode(contract) in (AUTOSOMAL_POOL,AUTOSOMAL_PERSON_BATCHES))
-    output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
-    # Containers can run under a host UID absent from /etc/passwd. PyTorch's
-    # default compiler cache consults that account even without compilation.
-    os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", str(output / "torch-cache"))
     random.seed(seed)
     np.random.seed(seed % (2**32))
     torch.manual_seed(seed)
     torch.set_num_threads(contract["threads"])
-    torch.use_deterministic_algorithms(True)
     model = TaskModel(resolved, contract)
     require(resolved.get("optimizer", "Adam") == "Adam", "unsupported optimizer; no silent substitution")
     optimizer = build_optimizer(model.parameters(), model.encoder.config.learning_rate,
                                 adam_state_precision)
     identity = checkpoint_identity(contract, contract_sha256, resolved_sha256, arm, seed,
-                                   adam_state_precision)
+                                   adam_state_precision, model.encoder.config.rare_pooling,
+                                   model.encoder.config.locus_descriptor)
     checkpoint_dir = (Path(checkpoint_dir) if checkpoint_dir is not None
                       else output.parent / f".{output.name}.internal-checkpoints")
     store = CheckpointStore(checkpoint_dir, identity)
+    norm_diagnostics = []
     try:
         start_step, history = store.restore(model, optimizer)
-        require(start_step <= contract["steps"], "checkpoint is beyond the fixed training budget")
-        for step in range(start_step, contract["steps"]):
+        require(start_step <= final_step, "checkpoint is beyond the requested safe stopping point")
+        for step in range(start_step, final_step):
             model.train()
             entry = contract["batches"]["FIT"][step % len(contract["batches"]["FIT"])]
             optimizer.zero_grad(set_to_none=True)
+            before = ({name: parameter.detach().clone()
+                       for name, parameter in model.named_parameters()}
+                      if record_aggregate_norms else None)
             data, dataset = validate_training_entry(entry, contract, "FIT", resolved)
             if dataset is None:
                 prediction = model(data, arm)
+                pooled = None
                 value = training_loss(prediction, data, contract["objective"])
                 require(bool(torch.isfinite(value)), "nonfinite training loss")
                 value.backward()
             else:
-                value, _, _, _ = model.backward_autosomal(dataset, data, arm)
+                value, prediction, pooled, _ = model.backward_autosomal(dataset, data, arm)
             require(all(p.grad is None or bool(torch.isfinite(p.grad).all()) for p in model.parameters()), "nonfinite gradient")
             optimizer.step()
+            if record_aggregate_norms:
+                diagnostic = aggregate_norm_diagnostics(model, prediction, pooled, before)
+                diagnostic.update(completed_step=step + 1, loss=float(value.detach()))
+                norm_diagnostics.append(diagnostic)
             history.append(float(value.detach()))
             completed = step + 1
-            if completed % checkpoint_every_steps == 0 or completed == contract["steps"]:
+            if completed % checkpoint_every_steps == 0 or completed == final_step:
                 store.save(model, optimizer, completed, history)
     finally:
         store.close()
-    metric, errors, components = score_batches(model, contract, "SELECT", resolved, arm, output)
+    score_role = "FIT" if fit_only else "SELECT"
+    metric, errors, components = score_batches(model, contract, score_role, resolved, arm, output)
     checkpoint = output / "weights.npz"
     np.savez(checkpoint, **{k: v.detach().numpy() for k, v in model.state_dict().items()})
     metric_name = ("k03_component_pair_weighted_mse"
                    if dataset_mode(contract) == AUTOSOMAL_PERSON_BATCHES else
                    ("component_mse" if contract["objective"] == "structure" else "component_log_loss"))
-    receipt = {"schema": SCHEMA, "status": "COMPLETE", "scope": contract["scope"], "arm": arm, "seed": seed,
+    receipt = {"schema": SCHEMA, "status": "FIT_CHECKPOINT" if fit_only else "COMPLETE",
+        "score_role": score_role, "select_accessed": not fit_only,
+        "frozen_training_ceiling_steps": contract["steps"],
+        "scope": contract["scope"], "arm": arm, "seed": seed,
         "contract_sha256": contract_sha256, "resolved_sha256": resolved_sha256,
         "dataset_declared_scope": contract.get("dataset_declared_scope", "SYNTHETIC_UNSPECIFIED"),
         "dataset_mode": dataset_mode(contract),
+        "rare_pooling": model.encoder.config.rare_pooling,
+        "locus_descriptor": model.encoder.config.locus_descriptor,
+        **({"dose_relocation": contract["dose_relocation"],
+            "comparison_use": "POST_SELECTION_MECHANISTIC_ABLATION_NOT_INDEPENDENT_CONFIRMATION"}
+           if contract.get("dose_relocation") else {}),
         "eligibility_manifest_sha256": contract.get("eligibility_manifest", {}).get("sha256"),
         "trainer_sha256": sha(__file__), "runtime_sha256": sha(Path(__file__).with_name("genomic_context_runtime.py")),
         "autosomal_dataset_sha256": sha(Path(__file__).with_name("r02_context_autosomal_dataset.py")),
@@ -810,18 +915,19 @@ def train(contract_path, contract_sha256, resolved_path, resolved_sha256, arm, s
         "k03_neural_target_sha256": (sha(Path(__file__).with_name("r02_k03_neural_target.py"))
                                       if dataset_mode(contract) == AUTOSOMAL_PERSON_BATCHES else None),
         "metrics": {metric_name: metric}, "training_losses": history,
-        "steps": contract["steps"], "persons_evaluated": len(errors), "n_evaluated": len(components),
+        "steps": final_step, "persons_evaluated": len(errors), "n_evaluated": len(components),
         "internal_checkpoint": {"schema": "r02_context_internal_checkpoint_v1",
                                 "identity_sha256": identity_digest(identity),
                                 "adam_state_precision": adam_state_precision,
                                 "restored_steps": start_step,
                                 "frequency_completed_steps": checkpoint_every_steps,
-                                "final_confirmed_step": contract["steps"]},
+                                "final_confirmed_step": final_step},
         "evaluation_unit": ("authenticated_k03_component_pair_weights"
                             if dataset_mode(contract) == AUTOSOMAL_PERSON_BATCHES else "component_macro"),
         "parameter_count": sum(p.numel() for p in model.parameters()),
         "checkpoint_sha256": sha(checkpoint), "prediction_sha256": sha(output / "predictions.json"),
         "torch_version": torch.__version__, "device": "cpu", "scientific_conclusion": "NOT_AUTOMATICALLY_ESTABLISHED",
+        **({"aggregate_norm_diagnostics": norm_diagnostics} if record_aggregate_norms else {}),
         "limitations": (["autosomal_training_reads_authenticated_tiles_three_times_for_global_counts_aggregation_and_recomputation",
                          "autosomal_backward_retains_one_tile_encoder_graph_plus_pooled_head"] +
                         (["person_partition_is_technical_only_complete_pair_loss_is_global",
@@ -889,6 +995,10 @@ def validate_reserved(plan_path, plan_sha256):
         require(trained["status"] == "COMPLETE" and trained["scope"] == dev["scope"] and
                 trained["contract_sha256"] == development["sha256"] and
                 trained["resolved_sha256"] == plan["resolved"]["sha256"] and
+                trained.get("rare_pooling", RARE_POOLING_SUM) ==
+                resolved.get("rare_pooling", RARE_POOLING_SUM) and
+                trained.get("locus_descriptor", LOCUS_DESCRIPTOR_LEGACY) ==
+                resolved.get("locus_descriptor", LOCUS_DESCRIPTOR_LEGACY) and
                 trained["steps"] == tasks[key]["checkpoint_step"] and
                 (trained["arm"], trained["seed"]) == (item["arm"], item["seed"]) and
                 trained["trainer_sha256"] == sha(__file__) and
@@ -957,8 +1067,18 @@ def main():
     parser.add_argument("--checkpoint-dir")
     parser.add_argument("--checkpoint-every-steps", type=int, default=1)
     parser.add_argument("--adam-state-precision", choices=ADAM_STATE_PRECISIONS, default="fp32")
+    parser.add_argument("--fit-only", action="store_true",
+                        help="Train/score FIT only; receipt cannot enter SELECT model selection")
+    parser.add_argument("--stop-after-steps", type=int,
+                        help="Absolute safe stopping point within the immutable training ceiling")
+    parser.add_argument("--record-aggregate-norms", action="store_true",
+                        help="Record aggregate module/representation norms; never person rows")
     args = parser.parse_args()
     if args.stage in ("evaluate", "verify-evaluation"):
+        require(not args.fit_only and args.stop_after_steps is None,
+                "FIT continuation options do not apply to reserved evaluation")
+        require(not args.record_aggregate_norms,
+                "training norm diagnostics do not apply to reserved evaluation")
         require(args.evaluation_plan and args.evaluation_plan_sha256 and
                 all(getattr(args, x) is None for x in ("contract", "contract_sha256", "resolved", "resolved_sha256", "arm", "seed",
                                                        "checkpoint_dir")),
@@ -977,7 +1097,8 @@ def main():
                 and args.evaluation_plan is None and args.evaluation_plan_sha256 is None, "complete training arguments required")
         result = train(args.contract, args.contract_sha256, args.resolved, args.resolved_sha256,
                        args.arm, args.seed, args.output, args.checkpoint_dir,
-                       args.checkpoint_every_steps, args.adam_state_precision)
+                       args.checkpoint_every_steps, args.adam_state_precision,
+                       args.fit_only, args.stop_after_steps, args.record_aggregate_norms)
     print(json.dumps(result, sort_keys=True, allow_nan=False))
 
 

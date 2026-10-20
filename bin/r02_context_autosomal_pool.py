@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Exact 22-autosome pooling for the existing structure DeepSets path.
+"""Exact 22-autosome pooling for both admitted structure model families.
 
 This component accepts already encoded common values and rare ``event_values``.
-It can expose their exact autosomal sufficient sums before ``person_rho`` so a
+It can expose their exact autosomal sufficient statistics before ``person_rho`` so a
 trainer may recompute one tile at a time during backward instead of retaining
 22 chromosome graphs. It does not enable AUTOSOMAL_22 admission, choose blocks,
 average losses, or access EVALUATE.
@@ -11,6 +11,9 @@ from dataclasses import dataclass
 import torch
 
 AUTOSOMES = tuple(range(1, 23))
+RARE_POOLING_SUM = "SUM"
+RARE_POOLING_MEAN_WITH_EXPLICIT_BURDEN = "MEAN_WITH_EXPLICIT_BURDEN"
+RARE_POOLING_POLICIES = frozenset((RARE_POOLING_SUM, RARE_POOLING_MEAN_WITH_EXPLICIT_BURDEN))
 
 def require(condition, message):
     if not condition:
@@ -39,12 +42,30 @@ class AutosomalSufficientStatistics:
     rare_valid_zero_dose_loci: torch.Tensor
     chromosomes: tuple
 
-def finalize_statistics(statistics, person_rho):
+def finalize_rare_sum(rare_sum, rare_valid_loci, person_rho, policy=RARE_POOLING_SUM):
+    """Apply one versioned rare-locus aggregation before the person map.
+
+    ``SUM`` is the historical behavior. ``MEAN_WITH_EXPLICIT_BURDEN`` removes
+    the direct observed-locus multiplier; callers retain carrier, copy and
+    exposure totals as explicit event features. Neither policy is a biological
+    optimum, and missing people remain exact zero after ``person_rho``.
+    """
+    require(policy in RARE_POOLING_POLICIES, "unknown rare pooling policy")
+    require(torch.is_tensor(rare_sum) and rare_sum.ndim == 2 and
+            torch.is_tensor(rare_valid_loci) and rare_valid_loci.ndim == 1 and
+            rare_sum.shape[0] == rare_valid_loci.shape[0], "rare pooling shape differs")
+    pooled = rare_sum
+    if policy == RARE_POOLING_MEAN_WITH_EXPLICIT_BURDEN:
+        pooled = pooled / rare_valid_loci.clamp_min(1).to(rare_sum.dtype)[:, None]
+    rare = person_rho(pooled)
+    return torch.where((rare_valid_loci > 0)[:, None], rare, 0)
+
+
+def finalize_statistics(statistics, person_rho, rare_pooling=RARE_POOLING_SUM):
     """Apply the downstream person map once to exact autosomal sums."""
     denominator=statistics.common_valid_loci.clamp_min(1).to(statistics.common_sum.dtype)[:,None]
     common=statistics.common_sum/denominator
-    rare=person_rho(statistics.rare_sum)
-    rare=torch.where((statistics.rare_valid_loci>0)[:,None],rare,0)
+    rare=finalize_rare_sum(statistics.rare_sum,statistics.rare_valid_loci,person_rho,rare_pooling)
     return AutosomalPoolResult(common+rare,common,rare,
         statistics.common_valid_loci,statistics.common_missing_loci,
         statistics.rare_valid_loci,statistics.rare_missing_loci,
@@ -123,5 +144,5 @@ class AutosomalPool:
             self.common_valid,self.common_missing,self.rare_valid,self.rare_missing,
             self.rare_zero,tuple(self.seen))
 
-    def finalize(self, person_rho):
-        return finalize_statistics(self.finalize_sums(),person_rho)
+    def finalize(self, person_rho, rare_pooling=RARE_POOLING_SUM):
+        return finalize_statistics(self.finalize_sums(),person_rho,rare_pooling)

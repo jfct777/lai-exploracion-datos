@@ -88,22 +88,33 @@ workflow {
     if (!shared.toFile().isDirectory()) error 'Shared K03 ALT bundle must be a directory'
     def manifestPath = pinnedFile(batch.shared_bundle + '/manifest.json', batch.shared_manifest_sha256)
     def manifest = readJson(manifestPath)
-    if (manifest.schema != 'r02_k03_outer_fit_alt_chunks_v1' ||
-        manifest.consumer_implementation_sha256 != batch.implementation_sha256 ||
-        manifest.sample_scope != 'OUTER_FIT_GENOTYPES_ONLY' ||
-        manifest.learning_scope != 'RAW_GENOTYPES_NO_LEARNED_TRANSFORMATIONS' ||
-        manifest.outer_fit_learned_inputs != false || manifest.roster?.path != 'persons.tsv' ||
-        manifest.candidate_ascertainment != [
+    def fixedCatalogue = manifest.learning_scope == 'FIXED_SOURCE_MINOR_DOSAGE_NO_INNER_TRANSFORMATIONS' &&
+        manifest.dosage_allele == 'SOURCE_MINOR' &&
+        manifest.genotype_encoding == 'DIPLOID_SOURCE_MINOR_DOSAGE_UINT8_0_1_2_MISSING_255' &&
+        manifest.candidate_ascertainment == [
+            scope: 'FIXED_SOURCE_COHORT_2723_MAC_GE_2_MAF_LE_0_01',
+            source_cohort_people: 2723, source_minor_redefinition: false,
+            inner_fit_reselection: false, inner_project_used_for_catalog: false,
+            protocol_admission: 'TECHNICAL_FIXED_CATALOGUE_MODE_SCIENTIFIC_ADMISSION_REQUIRED']
+    def newCatalogue = manifest.learning_scope == 'RAW_GENOTYPES_NO_LEARNED_TRANSFORMATIONS' &&
+        manifest.dosage_allele == 'ALT' &&
+        manifest.genotype_encoding == 'DIPLOID_GT_CODE_V1_PRESERVES_PARTIAL_CALLED_ALLELES' &&
+        manifest.candidate_ascertainment == [
             scope: 'INNER_FIT_ONLY_FROM_PRE_FREQUENCY_ORIGINALLY_BIALLELIC_PASS',
             min_mac_inclusive: 2, max_maf_inclusive: '0.01',
             frequency_denominator: 'CALLED_ALLELES_INCLUDING_KNOWN_ALLELE_OF_PARTIAL_DIPLOID_GT',
             inner_fit_reselection: true, inner_project_used_for_eligibility: false,
             select_evaluate_used_for_eligibility: false,
-            protocol_admission: 'STRICT_INNER_FIT_ELIGIBILITY_REQUIRED'] ||
-        manifest.genotype_encoding != 'DIPLOID_GT_CODE_V1_PRESERVES_PARTIAL_CALLED_ALLELES' ||
+            protocol_admission: 'TECHNICAL_NEW_CATALOGUE_MODE_SCIENTIFIC_ADMISSION_REQUIRED']
+    if (manifest.schema != 'r02_k03_outer_fit_alt_chunks_v1' ||
+        manifest.consumer_implementation_sha256 != batch.implementation_sha256 ||
+        manifest.sample_scope != 'OUTER_FIT_GENOTYPES_ONLY' ||
+        manifest.outer_fit_learned_inputs != false || manifest.roster?.path != 'persons.tsv' ||
+        fixedCatalogue == newCatalogue ||
         manifest.producer?.all_autosomes_complete != true || !manifest.chunks ||
         manifest.chunks.collect { it.path }.toSet().size() != manifest.chunks.size())
-        error 'Shared K03 genotype manifest is incomplete, frequency-filtered before INNER_FIT, or duplicated'
+        error 'Shared K03 manifest must declare exactly one fixed or INNER_FIT-learned catalogue mode'
+    error 'K03 human execution is not scientifically admitted for either catalogue question; technical manifests alone cannot launch it'
     def descriptors = [manifest.roster] + manifest.chunks
     descriptors.each { descriptor ->
         if (!(descriptor instanceof Map) || descriptor.keySet() != (['path', 'sha256'] as Set) ||

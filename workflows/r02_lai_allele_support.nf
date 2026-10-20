@@ -96,6 +96,7 @@ workflow {
     // Directory inputs are not recursively content-hashed by all Nextflow
     // versions. Stage the exact import closure as explicit deep-cache inputs.
     def sourceFiles = ['r02_lai_allele_support.py','r02_lai_genotype_support.py',
+                       'r02_lai_call_provenance.py',
                        'r02_lai_build_verification.py','r02_genomic_pair_evidence.py','preprocess_storage_guard.py'].collect { name ->
         file("${params.source_bin}/${name}", checkIfExists:true)
     }

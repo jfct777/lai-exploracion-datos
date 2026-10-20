@@ -381,6 +381,7 @@ def parser():
     value.add_argument("--genotype-contract", help="Required authenticated sample/quality contract in genotype_support mode")
     value.add_argument("--source-build-verification", help="Explicit staged source-build proof in genotype_support mode")
     value.add_argument("--panel-build-verification", help="Explicit staged panel-build proof in genotype_support mode")
+    value.add_argument("--call-provenance-manifest", help="Optional authenticated REF cell-provenance manifest in genotype_support mode")
     value.add_argument("--input-hashes", help="Expected SHA256 for every named input; mandatory for genotype_support")
     value.add_argument("--panel-role", required=True)
     value.add_argument("--chromosome", required=True)

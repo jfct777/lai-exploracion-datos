@@ -19,7 +19,9 @@ params.trial_number = null
 // This local/shared directory remains stable across Nextflow retry work hashes.
 params.checkpoint_dir = null
 params.checkpoint_every_steps = 1
-params.adam_state_precision = 'fp32'
+// 'auto' reads the precision frozen in a prospective resolved recipe. Historical
+// plans retain their original fp32 behavior.
+params.adam_state_precision = 'auto'
 params.task_retries = 1
 
 def absoluteCheckpointRoot(value) {
@@ -127,7 +129,7 @@ workflow {
     def checkpointRoot = absoluteCheckpointRoot(checkpointSetting)
     if (!java.nio.file.Paths.get(checkpointRoot).isAbsolute()) error 'Resolved checkpoint storage must be absolute'
     if (!(params.checkpoint_every_steps instanceof Number) || params.checkpoint_every_steps < 1) error 'Invalid checkpoint step frequency'
-    if (!(params.adam_state_precision in ['fp32','fp64'])) error 'Invalid Adam state precision'
+    if (!(params.adam_state_precision in ['auto','fp32','fp64'])) error 'Invalid Adam state precision'
     if (!(params.task_retries instanceof Number) || params.task_retries < 0) error 'Invalid retry count'
     def plan = Channel.value(file(params.plan, checkIfExists:true))
     def binding = Channel.value(file(params.binding, checkIfExists:true))

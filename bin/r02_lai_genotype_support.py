@@ -52,6 +52,10 @@ FIELDS = (*base.FIELDS, "panel_ancestry", "panel_allele_index", "n_gt_missing", 
           "n_site_filter_failed", "n_quality_missing", "n_quality_failed", "called_call_rate",
           "quality_call_rate", "af_counted_called", "af_counted_evaluable", "n_phased_gt_complete",
           "n_phased_carriers_called", "n_phased_carriers_evaluable", "n_homozygous_carriers_evaluable",
+          "n_original_observed_gt_complete", "ac_counted_original_observed", "an_original_observed",
+          "n_carriers_original_observed", "n_missing_before_called_after_gt_complete",
+          "ac_counted_missing_before_called_after", "an_missing_before_called_after",
+          "n_carriers_missing_before_called_after",
           "quality_status", "phase_status")
 COUNTERS = ("n_gt_complete", "ac_counted_called", "an_called", "n_carriers_called", "n_gt_missing",
             "n_gt_non_diploid", "n_site_filter_failed", "n_quality_missing", "n_quality_failed",
@@ -61,6 +65,12 @@ COUNTERS = ("n_gt_complete", "ac_counted_called", "an_called", "n_carriers_calle
 QC_COUNTERS = ("n_quality_missing", "n_quality_failed", "n_quality_evaluable", "ac_counted_evaluable",
                "an_evaluable", "n_carriers_evaluable", "n_phased_carriers_evaluable",
                "n_homozygous_carriers_evaluable")
+PROVENANCE_COUNTERS = (
+    "n_original_observed_gt_complete", "ac_counted_original_observed", "an_original_observed",
+    "n_carriers_original_observed", "n_missing_before_called_after_gt_complete",
+    "ac_counted_missing_before_called_after", "an_missing_before_called_after",
+    "n_carriers_missing_before_called_after",
+)
 
 
 def genotype_contract(args, samples):
@@ -209,7 +219,7 @@ def quality_state(call, quality):
     return "failed" if failed else "pass"
 
 
-def count_record(record, allele_index, samples, contract):
+def count_record(record, allele_index, samples, contract, cell_provenance=None, locus_key=None):
     """One call is inspected once, then summed into role and ancestry strata."""
     counts = []
     allowed = site_allowed(record, contract["site_filter_policy"])
@@ -227,6 +237,12 @@ def count_record(record, allele_index, samples, contract):
             dose = sum(a == allele_index for a in gt)
             c.update(n_gt_complete=1, ac_counted_called=dose, an_called=2, n_carriers_called=int(dose > 0),
                      n_phased_gt_complete=int(call.phased), n_phased_carriers_called=int(call.phased and dose > 0))
+            if cell_provenance is not None:
+                state = cell_provenance.classify(locus_key, sample, tuple(gt), call.phased)
+                prefix = ("original_observed" if state == "ORIGINAL_OBSERVED"
+                          else "missing_before_called_after")
+                c.update({f"n_{prefix}_gt_complete": 1, f"ac_counted_{prefix}": dose,
+                          f"an_{prefix}": 2, f"n_carriers_{prefix}": int(dose > 0)})
             if not allowed:
                 c["n_site_filter_failed"] = 1
             elif quality["mode"] == "DP_GQ":
@@ -241,12 +257,16 @@ def count_record(record, allele_index, samples, contract):
     return counts
 
 
-def group_support(individual_counts, indices, contract):
+def group_support(individual_counts, indices, contract, provenance_enabled=False):
     n = len(indices)
     c = Counter()
     for index in indices:
         c.update(individual_counts[index])
     result = {key: c[key] for key in COUNTERS}
+    if provenance_enabled:
+        result.update({key: c[key] for key in PROVENANCE_COUNTERS})
+    else:
+        result.update(dict.fromkeys(PROVENANCE_COUNTERS, "NA"))
     if not c["an_called"]:
         result["ac_counted_called"] = "NA"
     result.update(n_role_members=n, called_call_rate=c["n_gt_complete"] / n,
@@ -282,12 +302,22 @@ def run(args):
     output = Path(args.outdir)
     base.require(not output.exists() and output.parent.is_dir(), "Output exists or parent directory is absent")
     base.require(Path(args.panel_vcf).stat().st_size <= args.max_panel_bytes, "Panel exceeds max-panel-bytes")
-    receipts = base.input_receipts(args, INPUTS)
+    provenance_manifest = getattr(args, "call_provenance_manifest", None)
+    input_names = INPUTS + (("call_provenance_manifest",) if provenance_manifest else ())
+    receipts = base.input_receipts(args, input_names)
     builds, build_status, build_receipts = verified_build(args, receipts)
     source_contract = base.read_json(args.rare_contract)
     mapping = base.contig_mapping(args.contig_map, args.chromosome)
     base.free_disk(output.parent, args.min_free_gib)
     samples, role_summary, contract, panel_counts = panel_preflight(args, mapping)
+    cell_provenance = None
+    if provenance_manifest:
+        # Donor/export packages without this optional input retain their
+        # dependency set. Provenance is required only for the annotated route.
+        import r02_lai_call_provenance as call_provenance
+        cell_provenance = call_provenance.load_call_provenance(
+            provenance_manifest, panel_vcf_sha256=receipts["panel_vcf"]["sha256"],
+            panel_role=args.panel_role, chromosome=args.chromosome, samples=samples)
     for proof_path, expected in ((args.source_build_verification, args.expected_rare_sites),
                                  (args.panel_build_verification, panel_counts["records"])):
         base.require(base.read_json(proof_path)["reference_audit"]["records_checked"] == expected,
@@ -317,13 +347,24 @@ def run(args):
                     current = next(grouped, None)
                 records = list(current[1]) if current is not None and current[0] == key[1] else []
                 record, status = choose_record(records, key)
+                provenance_for_row = None
                 if record is not None and selected == 0 and contract["allele_representation"]["status"] == "UNKNOWN":
-                    record, status = None, "UNKNOWN_REF_DOSAGE_ALLELE_REPRESENTATION"
+                    if (cell_provenance is not None
+                            and cell_provenance.proves_literal_key(key, record.alleles)):
+                        status = "REF_IDENTITY_VERIFIED_WITH_CELL_PROVENANCE"
+                        provenance_for_row = cell_provenance
+                    else:
+                        record, status = None, "UNKNOWN_REF_DOSAGE_ALLELE_REPRESENTATION"
                 elif record is not None and selected == 0 and len(records) > 1 and contract["allele_representation"]["status"] == "ORIGINAL_UNSPLIT":
                     record, status = None, "UNKNOWN_REF_DOSAGE_MULTIPLE_RECORDS"
+                elif (record is not None and selected == 0 and cell_provenance is not None
+                      and cell_provenance.proves_literal_key(key, record.alleles)):
+                    provenance_for_row = cell_provenance
                 allele = (key[2], key[3])[selected]
                 panel_index = record.alleles.index(allele) if record is not None else "NA"
-                individual_counts = count_record(record, panel_index, samples, contract) if record is not None else None
+                individual_counts = (count_record(record, panel_index, samples, contract,
+                                                   provenance_for_row, key)
+                                     if record is not None else None)
                 if record is not None:
                     decoded += len(samples)
                 row = dict.fromkeys(FIELDS, "NA")
@@ -341,7 +382,8 @@ def run(args):
                 for ancestry, indices in groups.items():
                     result = dict(row, panel_ancestry=ancestry, n_role_members=len(indices), n_unresolved=len(indices))
                     if individual_counts is not None:
-                        result.update(group_support(individual_counts, indices, contract))
+                        result.update(group_support(individual_counts, indices, contract,
+                                                    provenance_for_row is not None))
                     writer.writerow(result)
                     counts["output_rows"] += 1
                 counts["source_rows"] += 1
@@ -360,6 +402,8 @@ def run(args):
             base.require(source_contract["counts"].get(source_name, 0) == counts[counter], "Source REF/ALT counts differ")
     base.verify_inputs_unchanged(receipts)
     base.verify_inputs_unchanged(build_receipts)
+    if cell_provenance is not None:
+        base.verify_inputs_unchanged(cell_provenance.receipts)
     base.free_disk(output, args.min_free_gib)
     table = output / "soporte_alelos_dnabr.tsv.gz"
     part.rename(table)
@@ -368,11 +412,20 @@ def run(args):
                     contains_sample_identifiers=False, contains_individual_genotypes=False, genotype_fields_decoded=decoded,
                     input_files=receipts, build_evidence=builds, build_status=build_status, build_verification_files=build_receipts,
                     genotype_contract=contract, role_validation=role_summary, ancestry_strata={k: len(v) for k, v in groups.items()},
-                    allele_representation_scope="REF dosage requires supplied representation provenance; UNKNOWN is never interpreted as REF support, including single surviving split records. Provenance is authenticated, not independently reconstructed from GT.",
+                    call_provenance=(None if cell_provenance is None else {
+                        "status": "ANNOTATED_REF_CELLS_NO_FILTER_OR_SCIENTIFIC_ADMISSION",
+                        "input_files": cell_provenance.receipts,
+                        "limitations": call_provenance.LIMITATIONS,
+                        "audited_locus_count": len(cell_provenance.loci),
+                        "missing_before_called_after_cells": len(cell_provenance.completed),
+                    }),
+                    allele_representation_scope="REF dosage requires supplied representation provenance. UNKNOWN remains blocked outside an exact cell-provenance domain and for nonliteral or non-biallelic panel rows; the optional proof does not relabel the panel ORIGINAL_UNSPLIT. Provenance is authenticated, not independently reconstructed from GT.",
                     strata_are_overlapping="ALL is the role total; ancestry strata partition that same role, not additional people",
                     counts=dict(counts), panel_counts=panel_counts, chromosome=args.chromosome, contig_mapping=mapping,
                     source_cohort_n=args.expected_source_samples, source_frequency_unchanged=True, source_catalogue_all_records_preserved=True,
                     genotype_support="CALLED_GT_COUNTS", quality_support="NOT_EVALUATED_GT_ONLY" if contract["quality"]["mode"] == "GT_ONLY" else "EVALUATED_UNDER_SUPPLIED_FILTERS",
+                    cell_provenance_support=("NOT_SUPPLIED" if cell_provenance is None else
+                                             "REF_ONLY_ORIGINAL_OBSERVED_VS_MISSING_BEFORE_CALLED_AFTER_ANNOTATION"),
                     donor_phase_support="OBSERVED_PHASE_ONLY_NOT_CERTIFIED", map_coverage="NOT_EVALUATED",
                     denominator_scope="called: complete diploid GT before site/DP/GQ filters; evaluable: complete diploid GT passing all supplied filters; AN=0 yields AC=AF=NA",
                     unresolved_scope="Quality-unresolved role members: n_role_members minus n_quality_evaluable; all are unresolved in GT_ONLY or without a compatible record",
@@ -382,7 +435,9 @@ def run(args):
                     limits={name: getattr(args, name) for name in ("max_panel_records", "max_panel_bytes", "max_panel_index_bytes", "max_line_bytes", "min_free_gib", "resource_check_rows")},
                     elapsed_seconds=time.monotonic()-started, peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
                     package_versions={"pysam": pysam.__version__}, output_rows=counts["output_rows"],
-                    code_sha256={name: base.sha256(Path(__file__).with_name(name)) for name in ("r02_lai_genotype_support.py", "r02_lai_allele_support.py", "r02_lai_build_verification.py", "r02_genomic_pair_evidence.py")},
+                    code_sha256={name: base.sha256(Path(__file__).with_name(name)) for name in
+                                 ("r02_lai_genotype_support.py", "r02_lai_allele_support.py", "r02_lai_build_verification.py", "r02_genomic_pair_evidence.py")
+                                 + (("r02_lai_call_provenance.py",) if cell_provenance is not None else ())},
                     outputs_sha256={table.name: base.sha256(table)})
     with (output / "manifest.json").open("x") as handle:
         json.dump(manifest, handle, indent=2, allow_nan=False)

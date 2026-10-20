@@ -15,6 +15,7 @@ SCHEMA="r02_context_autosomal_dataset_request_v1"
 PERSON_BATCH_SCHEMA="r02_context_autosomal_person_batches_v1"
 PERSON_PARTITION_SCHEMA="r02_context_person_partition_v1"
 READER_BACKEND_SCHEMA="r02_context_reader_backend_v1"
+READER_BACKEND_LIMIT_SCHEMA="r02_context_reader_backend_v2"
 MMAP_READER_BACKEND="ZIP_STORED_MMAP_V1"
 AUTOSOMES=tuple(str(x)for x in range(1,23))
 require=events.require
@@ -43,6 +44,7 @@ class AutosomalDataset:
     """Reopens one authenticated chromosome and materializes one tile per step."""
     def __init__(self,request_path,request_sha256):
         r=_json(request_path,request_sha256)
+        self.request_sha256=request_sha256
         required={"schema","stage","person_ids","roles","component_ids","stores","block_id","exclusion_scope",
                   "common_radius_cm","rare_radius_cm","attention_depth","tiles"}
         require(r.get("schema")in(SCHEMA,PERSON_BATCH_SCHEMA),"Autosomal request schema differs")
@@ -66,8 +68,20 @@ class AutosomalDataset:
                     "Person partition lineage/method differs")
             self.person_batches=partition_people(self.ids,self.roles,self.components,p["max_people"])
             backend=r["reader_backend"]
-            require(set(backend)=={"schema","name","max_verified_chunks"}and
-                    backend["schema"]==READER_BACKEND_SCHEMA and backend["name"]==MMAP_READER_BACKEND and
+            if backend.get("schema")==READER_BACKEND_SCHEMA:
+                require(set(backend)=={"schema","name","max_verified_chunks"},
+                        "Legacy reader backend fields differ")
+                self.max_window_sites=None
+            else:
+                require(set(backend)=={"schema","name","max_verified_chunks","max_window_sites",
+                                      "reader_limits_sha256","context_sha256"}and
+                        backend.get("schema")==READER_BACKEND_LIMIT_SCHEMA and
+                        type(backend.get("max_window_sites"))is int and backend["max_window_sites"]>=100000 and
+                        re.fullmatch(r"[0-9a-f]{64}",backend.get("reader_limits_sha256","") or "")and
+                        re.fullmatch(r"[0-9a-f]{64}",backend.get("context_sha256","") or ""),
+                        "Versioned external reader row limit differs")
+                self.max_window_sites=backend["max_window_sites"]
+            require(backend["name"]==MMAP_READER_BACKEND and
                     type(backend["max_verified_chunks"])is int and backend["max_verified_chunks"]>0,
                     "Explicit v2 reader backend/bound differs")
         else:self.person_batches=((self.ids,self.roles,self.components),)
@@ -113,7 +127,8 @@ class AutosomalDataset:
         descriptor=self.stores[chrom]
         if self.request["schema"]==PERSON_BATCH_SCHEMA:
             from r02_event_mmap_reader import MappedEventChromosome
-            return MappedEventChromosome(descriptor["path"],descriptor["manifest_sha256"],cache=self.chunk_cache)
+            return MappedEventChromosome(descriptor["path"],descriptor["manifest_sha256"],cache=self.chunk_cache,
+                                         max_window_sites=self.max_window_sites)
         return events.EventChromosome(descriptor["path"],descriptor["manifest_sha256"])
 
     def iter_person_batch(self,batch_index):

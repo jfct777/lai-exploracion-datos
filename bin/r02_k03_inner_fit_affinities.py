@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Build K03 rare affinities from raw genotypes using one INNER_FIT split.
+"""Build K03 affinities for the fixed DNABR source-minor catalogue.
 
-The module deliberately does not accept an existing affinity matrix.  For every
-site it estimates ALT frequency with the people named by ``inner_fit_indices``,
-chooses the unique minor allele from that frequency, applies the resulting
-orientation to INNER_FIT and INNER_PROJECT genotypes, and then calculates
-pairwise carrier Jaccard affinities.  Genotypes of SELECT and EVALUATE are not
-valid inputs.
+The catalogue and its ``source_minor`` orientation were fixed in 2,723 source
+people.  This module keeps every supplied catalogue site and that orientation.
+It uses the people named by ``inner_fit_indices`` to build the INNER_FIT graph
+and projects ``inner_project_indices`` against that graph.  It does not select
+sites, redefine the minor allele, or read SELECT/EVALUATE genotypes.
 """
 from __future__ import annotations
 
@@ -31,23 +30,20 @@ SCHEMA = "r02_k03_inner_fit_raw_genotypes_v1"
 SHARED_SCHEMA = contract.SHARED_SCHEMA
 GT_CODE_ENCODING = contract.GT_CODE_ENCODING
 STRICT_INNER_FIT_ASCERTAINMENT = contract.STRICT_INNER_FIT_ASCERTAINMENT
-FIXED_PANEL_PENDING = {
-    "scope": "FIXED_SOURCE_COHORT_2723_MAC_GE_2_MAF_LE_0_01",
-    "inner_fit_reselection": False,
-    "select_evaluate_in_source_selection": True,
-    "protocol_admission": "PENDING_EXPLICIT_FIXED_PANEL_DECISION",
-}
-FIXED_PANEL_ADMITTED = {
-    **FIXED_PANEL_PENDING,
-    "protocol_admission": "EXPLICITLY_ADMITTED_CONDITIONAL_ON_FIXED_SOURCE_PANEL",
-}
+FIXED_SOURCE_MINOR_ENCODING = contract.FIXED_SOURCE_MINOR_ENCODING
+FIXED_SOURCE_MINOR_CATALOG = contract.FIXED_SOURCE_MINOR_CATALOG
 OUTPUT_SCHEMA = "r02_k03_inner_fit_rare_affinities_v1"
-TRANSFORM_DTYPE = np.dtype([("alt_allele_count", "<i8"),
+TRANSFORM_DTYPE = np.dtype([("source_minor_allele_count", "<i8"),
                             ("called_alleles", "<i8"), ("status", "u1")])
-TRANSFORM_STATUS = {0: "NO_INNER_FIT_CALLS", 1: "INNER_FIT_MONOMORPHIC",
-                    2: "INNER_FIT_EQUAL_FREQUENCY_NO_UNIQUE_MINOR",
-                    3: "INCLUDED_ALT", 4: "INCLUDED_REF",
-                    5: "INNER_FIT_MAC_BELOW_2", 6: "INNER_FIT_MAF_ABOVE_0_01"}
+TRANSFORM_STATUS = {0: "NO_INNER_FIT_CALLS",
+                    1: "FIXED_SOURCE_MINOR_ABSENT_IN_INNER_FIT",
+                    2: "FIXED_SOURCE_MINOR_PRESENT_IN_INNER_FIT"}
+STRICT_TRANSFORM_DTYPE = np.dtype([("alt_allele_count", "<i8"),
+                                   ("called_alleles", "<i8"), ("status", "u1")])
+STRICT_TRANSFORM_STATUS = {0: "NO_INNER_FIT_CALLS", 1: "INNER_FIT_MONOMORPHIC",
+                           2: "INNER_FIT_EQUAL_FREQUENCY_NO_UNIQUE_MINOR",
+                           3: "INCLUDED_ALT", 4: "INCLUDED_REF",
+                           5: "INNER_FIT_MAC_BELOW_2", 6: "INNER_FIT_MAF_ABOVE_0_01"}
 EDGE_FIELDS = ["left_index", "right_index", "observed", "affinity",
                "joint_callable_sites", "value_denominator_sites", "candidate_sites"]
 def require(condition: bool, message: str) -> None:
@@ -96,29 +92,19 @@ def _descriptor(value: Any, label: str, *, base: Path | None = None) -> tuple[Pa
     return path, value["sha256"]
 
 
-def _validate_manifest(path: Path, roster_path: Path, plan_path: Path) -> tuple[dict[str, Any], list[dict[str, str]], dict[str, Any]]:
+def _validate_manifest(path: Path, roster_path: Path, plan_path: Path) -> tuple[dict[str, Any], list[dict[str, str]], dict[str, Any], bool]:
     manifest = load_json(path)
-    legacy_required = {"schema", "roster", "fold_plan", "sample_scope", "sample_ids_sha256",
-                       "dosage_allele", "variant_universe", "learning_scope",
-                       "outer_fit_learned_inputs", "chunks", "resources",
-                       "implementation_sha256"}
     shared_required = {"schema", "roster", "sample_scope", "sample_ids_sha256",
                        "dosage_allele", "genotype_encoding", "variant_universe", "territory", "learning_scope",
                        "outer_fit_learned_inputs", "candidate_ascertainment", "chunks",
                        "resources", "producer",
                        "consumer_implementation_sha256"}
-    legacy = manifest.get("schema") == SCHEMA
-    require((legacy and set(manifest) == legacy_required) or
-            (manifest.get("schema") == SHARED_SCHEMA and set(manifest) == shared_required),
-            "Exact raw-genotype INNER_FIT or shared outer-FIT ALT manifest required")
+    require(manifest.get("schema") == SHARED_SCHEMA and set(manifest) == shared_required,
+            "Exact fixed-source-minor or pre-frequency outer-FIT manifest required")
     source_dir = Path(path).resolve().parent
     roster_pin, _ = _descriptor(manifest["roster"], "roster", base=source_dir)
     require(roster_pin.resolve() == roster_path.resolve(),
             "CLI roster differs from pinned genotype input")
-    if legacy:
-        plan_pin, _ = _descriptor(manifest["fold_plan"], "fold plan", base=source_dir)
-        require(plan_pin.resolve() == plan_path.resolve(),
-                "CLI plan differs from pinned genotype input")
     people, inventory = split.roster_inventory(roster_path)
     plan = load_json(plan_path)
     require(plan.get("schema") == split.PAIR_PLAN_SCHEMA
@@ -133,39 +119,64 @@ def _validate_manifest(path: Path, roster_path: Path, plan_path: Path) -> tuple[
     require(manifest["sample_scope"] == "OUTER_FIT_GENOTYPES_ONLY"
             and manifest["sample_ids_sha256"] == ordered_ids_sha256(fit_ids),
             "Genotype source must contain exactly frozen outer FIT in roster order")
-    allowed_universe = ("PINNED_ORIGINALLY_BIALLELIC_PASS_NO_INNER_ROLE_SELECTION" if legacy else
-                        "PINNED_ORIGINALLY_BIALLELIC_PASS_TARGET_EXCLUDED_NO_ROLE_SELECTION")
-    require(manifest["dosage_allele"] == "ALT"
-            and manifest["variant_universe"] == allowed_universe
-            and manifest["learning_scope"] == "RAW_GENOTYPES_NO_LEARNED_TRANSFORMATIONS"
-            and manifest["outer_fit_learned_inputs"] is False,
-            "Outer-FIT frequencies, orientations, transformations or affinities are forbidden")
-    if not legacy:
-        require(manifest["candidate_ascertainment"] == STRICT_INNER_FIT_ASCERTAINMENT
-                and manifest["genotype_encoding"] == GT_CODE_ENCODING,
-                "Candidate eligibility and partial-call denominator must be learned only in INNER_FIT")
-    implementation = (manifest["implementation_sha256"] if legacy else
-                      manifest["consumer_implementation_sha256"])
+    fixed_catalog = manifest["candidate_ascertainment"] == FIXED_SOURCE_MINOR_CATALOG
+    new_catalog = manifest["candidate_ascertainment"] == STRICT_INNER_FIT_ASCERTAINMENT
+    require(fixed_catalog != new_catalog and manifest["outer_fit_learned_inputs"] is False,
+            "Exactly one fixed-catalogue or INNER_FIT catalogue-learning mode is required")
+    territory_rule = ("FIXED_SOURCE_COHORT_RARE_CANDIDATES_PRESERVED_NO_INNER_ROLE_FILTER"
+                      if fixed_catalog else "ORIGINALLY_BIALLELIC_PASS_BEFORE_MAC_MAF")
+    territory_scope, territory_block, _ = contract.validate_territory_descriptor(
+        manifest["territory"], territory_rule)
+    fixed_universe = {
+        "BLOCK_AND_LD_MARGIN":
+            "PINNED_SOURCE_RARE_BLOCK_AND_LD_MARGIN_TARGET_EXCLUDED_NO_INNER_ROLE_SELECTION",
+        "WHOLE_CHROMOSOME":
+            "PINNED_SOURCE_RARE_WHOLE_CHROMOSOME_TARGET_EXCLUDED_NO_INNER_ROLE_SELECTION",
+    }[territory_scope]
+    fixed_identity = (manifest["dosage_allele"] == "SOURCE_MINOR"
+        and manifest["genotype_encoding"] == FIXED_SOURCE_MINOR_ENCODING
+        and manifest["variant_universe"] == fixed_universe
+        and manifest["learning_scope"] == "FIXED_SOURCE_MINOR_DOSAGE_NO_INNER_TRANSFORMATIONS")
+    new_identity = (manifest["dosage_allele"] == "ALT"
+        and manifest["genotype_encoding"] == GT_CODE_ENCODING
+        and manifest["variant_universe"] ==
+            "PINNED_ORIGINALLY_BIALLELIC_PASS_TARGET_EXCLUDED_NO_ROLE_SELECTION"
+        and manifest["learning_scope"] == "RAW_GENOTYPES_NO_LEARNED_TRANSFORMATIONS")
+    require((fixed_catalog and fixed_identity) or (new_catalog and new_identity),
+            "Catalogue question, dosage allele, variant universe and encoding disagree")
+    implementation = manifest["consumer_implementation_sha256"]
     require(implementation == implementation_sha256(),
             "INNER_FIT producer implementation changed")
-    if not legacy:
-        territory = manifest["territory"]
-        require(territory == {
-            "view_id": "BLOCK_AND_LD_MARGIN:chr01_part01",
-            "excluded_intervals": [{"chromosome": 1, "start_bp": 1,
-                                    "end_bp": 115064116}],
-            "target_locus_policy": "EXCLUDED_BEFORE_OUTPUT",
-            "source_candidate_rule": "ORIGINALLY_BIALLELIC_PASS_BEFORE_MAC_MAF",
-        }, "Shared ALT chunks have a different target-exclusion territory")
-        producer = manifest["producer"]
-        require(isinstance(producer, dict) and set(producer) == {
-                    "implementation_sha256", "source_campaign_sha256", "source_frequency_use",
-                    "original_allele_filter", "site_filter", "all_autosomes_complete"}
-                and producer["source_frequency_use"] == "NONE_BEFORE_INNER_FIT"
-                and producer["original_allele_filter"] == "DNABR_V1_ORIG_NALLELES_EQ_2"
-                and producer["site_filter"] == "PASS_BIALLELIC_ACGT_SNV"
-                and producer["all_autosomes_complete"] is True,
-                "Shared genotype producer provenance is incomplete or admits pre-INNER_FIT frequency learning")
+    fixed_territory = fixed_catalog
+    new_territory = manifest["territory"] == {
+        "view_id": "BLOCK_AND_LD_MARGIN:chr01_part01",
+        "excluded_intervals": [{"chromosome": 1, "start_bp": 1,
+                                "end_bp": 115064116}],
+        "target_locus_policy": "EXCLUDED_BEFORE_OUTPUT",
+        "source_candidate_rule": "ORIGINALLY_BIALLELIC_PASS_BEFORE_MAC_MAF",
+    }
+    require((fixed_catalog and fixed_territory) or
+            (new_catalog and territory_scope == "BLOCK_AND_LD_MARGIN"
+             and territory_block == "chr01_part01" and new_territory),
+            "Target exclusion or source-candidate rule disagrees with catalogue mode")
+    producer = manifest["producer"]
+    fixed_producer = (isinstance(producer, dict) and set(producer) == {
+                "implementation_sha256", "source_contract_sha256", "source_frequency_use",
+                "source_minor_dose_use", "tail_recovery", "all_autosomes_complete"}
+            and producer["source_frequency_use"] ==
+                "ORIENTATION_VALIDATION_ONLY_NOT_AN_INNER_ESTIMATE"
+            and producer["source_minor_dose_use"] == "PRESERVE_FIXED_CATALOG_ORIENTATION"
+            and producer["tail_recovery"] == "ALL_OUTSIDE_MAP_SOURCE_RARE_ROWS_RECOVERED"
+            and producer["all_autosomes_complete"] is True)
+    new_producer = (isinstance(producer, dict) and set(producer) == {
+                "implementation_sha256", "source_campaign_sha256", "source_frequency_use",
+                "original_allele_filter", "site_filter", "all_autosomes_complete"}
+            and producer["source_frequency_use"] == "NONE_BEFORE_INNER_FIT"
+            and producer["original_allele_filter"] == "DNABR_V1_ORIG_NALLELES_EQ_2"
+            and producer["site_filter"] == "PASS_BIALLELIC_ACGT_SNV"
+            and producer["all_autosomes_complete"] is True)
+    require((fixed_catalog and fixed_producer) or (new_catalog and new_producer),
+            "Producer provenance is incomplete or disagrees with catalogue mode")
     resources = manifest["resources"]
     require(set(resources) == {"max_input_bytes", "max_output_bytes", "min_free_bytes",
                                "max_memory_bytes", "max_sparse_cells", "site_batch_size"}
@@ -181,8 +192,8 @@ def _validate_manifest(path: Path, roster_path: Path, plan_path: Path) -> tuple[
     for number, descriptor in enumerate(manifest["chunks"]):
         chunk, _ = _descriptor(descriptor, f"genotype chunk {number}", base=source_dir)
         total += chunk.stat().st_size
-        require(total <= resources["max_input_bytes"], "Raw genotype inputs exceed byte bound")
-    return manifest, people, plan
+        require(total <= resources["max_input_bytes"], "Source-minor inputs exceed byte bound")
+    return manifest, people, plan, fixed_catalog
 
 
 def _pair_keys(people: list[dict[str, str]], train: list[int], project: list[int]) -> tuple[np.ndarray, np.ndarray]:
@@ -201,7 +212,7 @@ def _pair_keys(people: list[dict[str, str]], train: list[int], project: list[int
     return array[:, 0], array[:, 1]
 
 
-def _load_chunk(path: Path, fit_ids: list[str]) -> dict[str, np.ndarray]:
+def _load_chunk(path: Path, fit_ids: list[str], fixed_catalog: bool) -> dict[str, np.ndarray]:
     required = {"sample_ids", "variant_id", "chromosome", "position_bp", "ref", "alt",
                 "genotype_code"}
     with np.load(path, allow_pickle=False) as data:
@@ -211,9 +222,10 @@ def _load_chunk(path: Path, fit_ids: list[str]) -> dict[str, np.ndarray]:
     require(value["sample_ids"].tolist() == fit_ids,
             "Chunk samples/order differ from frozen outer FIT")
     code = value["genotype_code"]
+    allowed = ([0, 1, 2, 255] if fixed_catalog else [0, 1, 2, 3, 4, 255])
     require(code.shape == (len(fit_ids), n_sites) and code.dtype == np.uint8
-            and np.all(np.isin(code, np.asarray([0, 1, 2, 3, 4, 255], np.uint8))),
-            "Chunk genotype code must preserve complete, partial and fully missing diploid calls")
+            and np.all(np.isin(code, np.asarray(allowed, np.uint8))),
+            "Chunk genotype encoding disagrees with the declared catalogue mode")
     require(all(value[k].shape == (n_sites,) for k in
                 ("chromosome", "position_bp", "ref", "alt", "variant_id"))
             and n_sites > 0, "Variant metadata/chunk dimensions differ")
@@ -237,7 +249,8 @@ def _load_chunk(path: Path, fit_ids: list[str]) -> dict[str, np.ndarray]:
 def materialize(manifest_path: Path, roster_path: Path, plan_path: Path,
                 output: Path) -> dict[str, Any]:
     manifest_path, roster_path, plan_path, output = map(Path, (manifest_path, roster_path, plan_path, output))
-    manifest, people, plan = _validate_manifest(manifest_path, roster_path, plan_path)
+    manifest, people, plan, fixed_catalog = _validate_manifest(
+        manifest_path, roster_path, plan_path)
     resources = manifest["resources"]
     require(not output.exists() and output.parent.is_dir()
             and shutil.disk_usage(output.parent).free >= resources["min_free_bytes"] + resources["max_output_bytes"],
@@ -259,12 +272,15 @@ def materialize(manifest_path: Path, roster_path: Path, plan_path: Path,
     previous_key: tuple[Any, ...] | None = None
     fit_ids = [people[i]["sample_id"] for i in outer_fit]
     site_batch = resources["site_batch_size"]
-    transform_path = output / "inner_fit_transformations.private.bin"
+    transform_path = output / ("inner_fit_source_minor_counts.private.bin" if fixed_catalog
+                               else "inner_fit_transformations.private.bin")
+    transform_dtype = TRANSFORM_DTYPE if fixed_catalog else STRICT_TRANSFORM_DTYPE
+    transform_status = TRANSFORM_STATUS if fixed_catalog else STRICT_TRANSFORM_STATUS
     with transform_path.open("xb") as transform_stream:
         for descriptor in manifest["chunks"]:
             path, digest = _descriptor(descriptor, "genotype chunk",
                                        base=manifest_path.resolve().parent)
-            chunk = _load_chunk(path, fit_ids)
+            chunk = _load_chunk(path, fit_ids, fixed_catalog)
             first_key = (int(chunk["chromosome"][0]), int(chunk["position_bp"][0]))
             last_key = (int(chunk["chromosome"][-1]), int(chunk["position_bp"][-1]))
             require(previous_key is None or previous_key < first_key,
@@ -275,23 +291,38 @@ def materialize(manifest_path: Path, roster_path: Path, plan_path: Path,
                 stop = min(start + site_batch, len(chunk["variant_id"]))
                 code = chunk["genotype_code"][:, start:stop]
                 fit_code = code[train_local]
-                called = np.where(fit_code <= 2, 2, np.where(fit_code <= 4, 1, 0)).sum(axis=0, dtype=np.int64)
-                alt_count = np.where(fit_code <= 2, fit_code,
-                                     np.where(fit_code == 4, 1, 0)).sum(axis=0, dtype=np.int64)
-                polymorphic = (alt_count > 0) & (alt_count < called)
-                unique_minor = 2 * alt_count != called
-                mac = np.minimum(alt_count, called - alt_count)
-                enough_mac = mac >= 2
-                rare_enough = 100 * mac <= called
-                eligible = (called > 0) & polymorphic & unique_minor & enough_mac & rare_enough
-                minor_alt = 2 * alt_count < called
-                status = np.where(called == 0, 0,
-                         np.where(~polymorphic, 1,
-                         np.where(~unique_minor, 2,
-                         np.where(~enough_mac, 5,
-                         np.where(~rare_enough, 6, np.where(minor_alt, 3, 4)))))).astype(np.uint8)
-                records = np.empty(stop - start, dtype=TRANSFORM_DTYPE)
-                records["alt_allele_count"] = alt_count
+                if fixed_catalog:
+                    observed_fit = fit_code <= 2
+                    called = (2 * observed_fit.sum(axis=0, dtype=np.int64))
+                    allele_count = np.where(observed_fit, fit_code, 0).sum(
+                        axis=0, dtype=np.int64)
+                    status = np.where(called == 0, 0,
+                                      np.where(allele_count == 0, 1, 2)).astype(np.uint8)
+                    eligible = np.ones(stop - start, dtype=np.bool_)
+                    minor_alt = None
+                else:
+                    called = np.where(fit_code <= 2, 2,
+                                      np.where(fit_code <= 4, 1, 0)).sum(
+                                          axis=0, dtype=np.int64)
+                    allele_count = np.where(fit_code <= 2, fit_code,
+                        np.where(fit_code == 4, 1, 0)).sum(axis=0, dtype=np.int64)
+                    polymorphic = (allele_count > 0) & (allele_count < called)
+                    unique_minor = 2 * allele_count != called
+                    mac = np.minimum(allele_count, called - allele_count)
+                    enough_mac = mac >= 2
+                    rare_enough = 100 * mac <= called
+                    eligible = ((called > 0) & polymorphic & unique_minor
+                                & enough_mac & rare_enough)
+                    minor_alt = 2 * allele_count < called
+                    status = np.where(called == 0, 0,
+                        np.where(~polymorphic, 1,
+                        np.where(~unique_minor, 2,
+                        np.where(~enough_mac, 5,
+                        np.where(~rare_enough, 6,
+                                 np.where(minor_alt, 3, 4)))))).astype(np.uint8)
+                records = np.empty(stop - start, dtype=transform_dtype)
+                records[("source_minor_allele_count" if fixed_catalog
+                         else "alt_allele_count")] = allele_count
                 records["called_alleles"] = called
                 records["status"] = status
                 transform_stream.write(records.tobytes())
@@ -299,20 +330,24 @@ def materialize(manifest_path: Path, roster_path: Path, plan_path: Path,
                 require(transform_stream.tell() <= resources["max_output_bytes"]
                         and shutil.disk_usage(output).free >= resources["min_free_bytes"],
                         "Transformation output exceeds byte/disk bound")
-                if not eligible.any():
-                    continue
                 candidate_sites += int(eligible.sum())
-                selected_code = code[:, eligible]
-                o = selected_code <= 2
-                d = np.where(o, selected_code, 255).astype(np.uint8)
-                minor_dosage = np.where(
-                    o, np.where(minor_alt[eligible], d, 2 - d), 255).astype(np.uint8)
-                counter.add(minor_dosage, o)
+                if eligible.any():
+                    selected_code = code[:, eligible]
+                    observed = selected_code <= 2
+                    selected_dosage = np.where(observed, selected_code, 255).astype(np.uint8)
+                    if not fixed_catalog:
+                        selected_dosage = np.where(
+                            observed,
+                            np.where(minor_alt[eligible], selected_dosage,
+                                     2 - selected_dosage), 255).astype(np.uint8)
+                    counter.add(selected_dosage, observed)
             require(sha256(path) == digest, "Genotype chunk changed while reading")
-    require(candidate_sites > 0, "No site has a unique polymorphic INNER_FIT minor allele")
+    require(candidate_sites > 0,
+            "No site remains in the declared fixed or INNER_FIT-learned catalogue")
     require(sum(status_counts.values()) == input_sites
-            and status_counts[3] + status_counts[4] == candidate_sites,
-            "Transformation status accounting differs from input/candidate sites")
+            and (candidate_sites == input_sites if fixed_catalog else
+                 status_counts[3] + status_counts[4] == candidate_sites),
+            "Catalogue status accounting differs from input/candidate sites")
     aggregate = counter.finish()
     require(int(aggregate["n_sites"]) == candidate_sites,
             "Sparse accumulator candidate-site denominator differs")
@@ -336,7 +371,7 @@ def materialize(manifest_path: Path, roster_path: Path, plan_path: Path,
                 require(stream.tell() <= resources["max_output_bytes"]
                         and shutil.disk_usage(output).free >= resources["min_free_bytes"],
                         "Affinity output exceeds byte/disk bound")
-    require(transform_path.stat().st_size == input_sites * TRANSFORM_DTYPE.itemsize,
+    require(transform_path.stat().st_size == input_sites * transform_dtype.itemsize,
             "Packed transformation length differs from input sites")
     raw_manifest_copy = output / "raw_genotype_manifest.json"
     shutil.copyfile(manifest_path, raw_manifest_copy)
@@ -346,30 +381,47 @@ def materialize(manifest_path: Path, roster_path: Path, plan_path: Path,
             "INNER_FIT outputs exceed byte bound")
     result = {
         "schema": OUTPUT_SCHEMA,
-        "status": "INNER_FIT_FREQUENCIES_ORIENTATION_TRANSFORMATION_AND_AFFINITIES_COMPLETE",
+        "status": ("INNER_FIT_FIXED_SOURCE_MINOR_AFFINITIES_COMPLETE" if fixed_catalog else
+                   "INNER_FIT_FREQUENCIES_ORIENTATION_TRANSFORMATION_AND_AFFINITIES_COMPLETE"),
         "fold_id": plan["fold_id"],
         "roster_sha256": sha256(roster_path), "fold_plan_sha256": sha256(plan_path),
         "raw_genotype_manifest": {"path": raw_manifest_copy.name,
                                   "sha256": sha256(raw_manifest_copy)},
         "learning_indices": train, "projection_indices": project,
         "learning_people": len(train), "projection_people": len(project),
-        "frequency_scope": "INNER_FIT_ONLY", "minor_allele_scope": "INNER_FIT_ONLY",
-        "transformation_scope": "INNER_FIT_ONLY", "affinity_scope": "INNER_FIT_DERIVED",
+        "frequency_scope": ("INNER_FIT_DESCRIPTIVE_COUNTS_ONLY" if fixed_catalog else
+                            "INNER_FIT_ONLY"),
+        "minor_allele_scope": ("FIXED_SOURCE_COHORT_2723" if fixed_catalog else
+                               "INNER_FIT_ONLY"),
+        "transformation_scope": ("FIXED_SOURCE_MINOR_IDENTITY_NO_REORIENTATION"
+                                 if fixed_catalog else "INNER_FIT_ONLY"),
+        "affinity_scope": ("INNER_FIT_GRAPH_FROM_FIXED_SOURCE_MINOR_CARRIERS"
+                           if fixed_catalog else "INNER_FIT_DERIVED"),
         "outer_fit_learned_inputs_used": False,
+        "fixed_source_catalog_used": fixed_catalog,
         "select_evaluate_genotypes_read": False,
-        "candidate_ascertainment": STRICT_INNER_FIT_ASCERTAINMENT,
-        "genotype_encoding": GT_CODE_ENCODING,
-        "affinity": {"source_measure": "INNER_FIT_MINOR_CARRIER_JACCARD",
-                     "transformation": "INNER_FIT_ALT_FREQUENCY_TO_UNIQUE_MINOR_CARRIER_THEN_INTERSECTION_OVER_UNION",
-                     "equal_frequency_policy": "EXCLUDE_NO_UNIQUE_MINOR_ALLELE",
-                     "missing_edge_policy": "UNKNOWN_NOT_ZERO", "maximum": 1.0},
+        "candidate_ascertainment": (FIXED_SOURCE_MINOR_CATALOG if fixed_catalog else
+                                    STRICT_INNER_FIT_ASCERTAINMENT),
+        "genotype_encoding": (FIXED_SOURCE_MINOR_ENCODING if fixed_catalog else
+                              GT_CODE_ENCODING),
+        "affinity": ({"source_measure": "FIXED_SOURCE_MINOR_CARRIER_JACCARD",
+                      "transformation": "SOURCE_MINOR_DOSAGE_PRESERVED_THEN_INTERSECTION_OVER_UNION",
+                      "zero_inner_fit_carrier_policy": "RETAIN_SITE_WITH_ZERO_CARRIER",
+                      "missing_edge_policy": "UNKNOWN_NOT_ZERO", "maximum": 1.0}
+                     if fixed_catalog else
+                     {"source_measure": "INNER_FIT_MINOR_CARRIER_JACCARD",
+                      "transformation": "INNER_FIT_ALT_FREQUENCY_TO_UNIQUE_MINOR_CARRIER_THEN_INTERSECTION_OVER_UNION",
+                      "equal_frequency_policy": "EXCLUDE_NO_UNIQUE_MINOR_ALLELE",
+                      "missing_edge_policy": "UNKNOWN_NOT_ZERO", "maximum": 1.0}),
         "candidate_sites": candidate_sites, "input_sites": input_sites,
         "transformation_encoding": {
-            "file": transform_path.name, "bytes_per_site": TRANSFORM_DTYPE.itemsize,
+            "file": transform_path.name, "bytes_per_site": transform_dtype.itemsize,
             "order": "PINNED_INPUT_CHUNK_AND_VARIANT_ORDER",
-            "fields": ["alt_allele_count:int64_le", "called_alleles:int64_le", "status:uint8"],
-            "status_codes": {str(k): v for k, v in TRANSFORM_STATUS.items()},
-            "status_counts": {str(k): status_counts[k] for k in sorted(TRANSFORM_STATUS)}
+            "fields": (["source_minor_allele_count:int64_le", "called_alleles:int64_le", "status:uint8"]
+                       if fixed_catalog else
+                       ["alt_allele_count:int64_le", "called_alleles:int64_le", "status:uint8"]),
+            "status_codes": {str(k): v for k, v in transform_status.items()},
+            "status_counts": {str(k): status_counts[k] for k in sorted(transform_status)}
         },
         "fit_graph_edges": int(fit_pair.sum()), "query_fit_edges": int((~fit_pair).sum()),
         "unknown_query_fit_edges": int(np.sum((~fit_pair) & (counts[1] == 0))),
