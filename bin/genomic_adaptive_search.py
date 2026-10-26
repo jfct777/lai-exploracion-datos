@@ -25,6 +25,7 @@ import warnings
 import optuna
 from optuna.samplers import PartialFixedSampler, TPESampler
 from optuna.trial import TrialState
+from r02_lai_cnn_config import validate_cnn_config, maximum_step
 
 
 SCHEMA = "genomic-adaptive-search/1"
@@ -239,6 +240,13 @@ def validate_plan(plan):
         require(len(set(metrics)) == len(metrics)
                 and all(isinstance(m, str) and IDENTIFIER.fullmatch(m) for m in metrics), "invalid metric names")
         require(isinstance(spec["fixed_config"], dict) and spec["fixed_config"], "fixed trainer config is required")
+        if "cnn_query_config" in spec["fixed_config"]:
+            require(contextual and name == "lai",
+                    "multiscale query convolution is a conditional LAI CNN option")
+            cnn = validate_cnn_config(spec["fixed_config"]["cnn_query_config"])
+            gap = spec["fixed_config"].get("query_max_gap_cm")
+            require(cnn is not None and type(gap) in (int, float) and math.isfinite(gap)
+                    and gap >= maximum_step(cnn), "CNN query grid and gap must be frozen together")
         rare_pooling = spec["fixed_config"].get("rare_pooling", "SUM")
         require(rare_pooling in RARE_POOLING_POLICIES and
                 (name == "structure" or rare_pooling == "SUM"),

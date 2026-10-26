@@ -10,6 +10,7 @@ params.objective = null
 params.state_dir = null
 params.outdir = null
 params.code_dir = "${projectDir}/../bin"
+params.source_manifest = "${projectDir}/../conf/r02_context_sources.txt"
 params.python = 'python3'
 params.task_cpus = 1
 params.task_memory = '2 GB'
@@ -133,20 +134,12 @@ workflow {
     if (!(params.task_retries instanceof Number) || params.task_retries < 0) error 'Invalid retry count'
     def plan = Channel.value(file(params.plan, checkIfExists:true))
     def binding = Channel.value(file(params.binding, checkIfExists:true))
-    def fingerprint = Channel.value([
-        file("${params.code_dir}/r02_context_train.py", checkIfExists:true),
-        file("${params.code_dir}/r02_context_checkpoint.py", checkIfExists:true),
-        file("${params.code_dir}/r02_adam_fp64_state.py", checkIfExists:true),
-        file("${params.code_dir}/r02_context_autosomal_dataset.py", checkIfExists:true),
-        file("${params.code_dir}/r02_context_autosomal_pool.py", checkIfExists:true),
-        file("${params.code_dir}/r02_event_mmap_reader.py", checkIfExists:true),
-        file("${params.code_dir}/r02_k03_neural_target.py", checkIfExists:true),
-        file("${params.code_dir}/r02_neural_training_eligibility.py", checkIfExists:true),
-        file("${params.code_dir}/r02_lai_separation.py", checkIfExists:true),
-        file("${params.code_dir}/r02_lai_target_dependencies.py", checkIfExists:true),
-        file("${params.code_dir}/r02_context_search_bridge.py", checkIfExists:true),
-        file("${params.code_dir}/genomic_context_runtime.py", checkIfExists:true),
-        file("${params.code_dir}/genomic_adaptive_search.py", checkIfExists:true)])
+    def names = file(params.source_manifest ?: "${projectDir}/../conf/r02_context_sources.txt",
+                     checkIfExists:true).readLines().findAll { it }
+    if (names.isEmpty() || names.toSet().size() != names.size() ||
+        names.any { !(it ==~ /[A-Za-z0-9_]+\.py/) }) error 'Invalid Python source manifest'
+    def fingerprint = Channel.value(names.collect {
+        file("${params.code_dir}/${it}", checkIfExists:true) })
     PREFLIGHT_CONTEXT(plan, binding, params.binding_sha256)
     PREPARE_RECIPE(plan, binding, params.binding_sha256, params.trial_number as int,
                    PREFLIGHT_CONTEXT.out.gate, fingerprint)

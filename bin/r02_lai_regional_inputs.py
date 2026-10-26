@@ -25,10 +25,12 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import r02_lai_event_annotations as event_annotations
+from r02_lai_cnn_config import (validate_cnn_config, query_halo, validate_grid_block,
+                               chromosome_step, maximum_step)
 
 
-SCHEMA = "r02_lai_regional_layout_v1"
-RECEIPT_SCHEMA = "r02_lai_regional_layout_receipt_v1"
+SCHEMA = "r02_lai_regional_layout_v2"
+RECEIPT_SCHEMA = "r02_lai_regional_layout_receipt_v2"
 DEFAULT_SCALES_CM = (0.05, 0.2, 1.0)
 FAMILIES = ("lai_cnn", "lai_local_attention")
 GRCH38_AUTOSOME_LENGTH_BP = {
@@ -154,9 +156,10 @@ def query_blocks(cm, chrom, valid, max_gap_cm):
 
 
 def cnn_query_read_indices(core_start, core_end, cm, chrom, valid_rows,
-                           depth, max_gap_cm, blocks_by_person=None):
+                           depth, max_gap_cm, blocks_by_person=None, cnn_query_config=None):
     """Union exact per-person CNN neighbors with the complete core rows."""
     require(type(depth) is int and depth >= 0, "invalid CNN depth")
+    halo = query_halo(depth, cnn_query_config)
     selected = set(range(core_start, core_end))
     blocks_by_person = (blocks_by_person if blocks_by_person is not None else
                         [query_blocks(cm, chrom, valid, max_gap_cm) for valid in valid_rows])
@@ -165,8 +168,8 @@ def cnn_query_read_indices(core_start, core_end, cm, chrom, valid_rows,
             owned = [offset for offset, index in enumerate(block)
                      if core_start <= index < core_end]
             if owned:
-                selected.update(block[max(0, min(owned) - depth):
-                                      min(len(block), max(owned) + depth + 1)])
+                selected.update(block[max(0, min(owned) - halo):
+                                      min(len(block), max(owned) + halo + 1)])
     return sorted(selected)
 
 
@@ -184,7 +187,7 @@ def attention_event_spans(query_cm, event_cm, radius_cm, depth):
 
 def _geometry(family, core, query_cm, query_chrom, valid_rows,
               common_cm, event_cm, scale_cm, depth, query_max_gap_cm,
-              valid_any=None, cnn_query_read=None):
+              valid_any=None, cnn_query_read=None, cnn_query_config=None):
     start, end = core
     valid_any = (valid_any if valid_any is not None else
                  [any(bool(row[i]) for row in valid_rows) for i in range(len(query_cm))])
@@ -193,7 +196,8 @@ def _geometry(family, core, query_cm, query_chrom, valid_rows,
     if family == "lai_cnn":
         query_read = (cnn_query_read if cnn_query_read is not None else
                       cnn_query_read_indices(start, end, query_cm, query_chrom,
-                                             valid_rows, depth, query_max_gap_cm))
+                                             valid_rows, depth, query_max_gap_cm,
+                                             cnn_query_config=cnn_query_config))
         query_context = [i for i in query_read if valid_any[i]
                          and _located(query_cm, query_chrom, i)]
         event = radius_spans(event_cm, [query_cm[i] for i in query_context], scale_cm)
@@ -229,8 +233,29 @@ def _same_axis(array, np, name, equal_nan=False):
     return array[0]
 
 
+def _cnn_configs_by_scale(scales, single, by_scale):
+    require(single is None or by_scale is None,
+            "use one CNN configuration or a scale-indexed mapping, not both")
+    if by_scale is None:
+        checked = validate_cnn_config(single)
+        return {float(scale): checked for scale in scales}
+    require(isinstance(by_scale, dict), "CNN configurations by scale must be an object")
+    parsed = {}
+    for key, value in by_scale.items():
+        try:
+            scale = float(key)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("CNN configuration scale is not numeric") from exc
+        require(scale not in parsed, "duplicate CNN configuration scale")
+        parsed[scale] = validate_cnn_config(value)
+    require(set(parsed) == {float(scale) for scale in scales},
+            "CNN configurations must cover every requested scale exactly once")
+    return parsed
+
+
 def prepare_case(index_dir, output_dir, scales=DEFAULT_SCALES_CM, chunks=16,
-                 depth=2, query_max_gap_cm=0.01):
+                 depth=2, query_max_gap_cm=0.01, cnn_query_config=None,
+                 cnn_query_configs_by_scale=None):
     """Build one truth-blind regional layout from an existing predictor index."""
     import numpy as np
 
@@ -253,6 +278,12 @@ def prepare_case(index_dir, output_dir, scales=DEFAULT_SCALES_CM, chunks=16,
     require(len(set(float(x) for x in scales)) == len(scales), "duplicate scales")
     require(type(depth) is int and depth > 0, "positive depth required")
     _finite_positive(query_max_gap_cm, "query_max_gap_cm")
+    cnn_configs = _cnn_configs_by_scale(scales, cnn_query_config,
+                                        cnn_query_configs_by_scale)
+    for config in cnn_configs.values():
+        if config is not None:
+            require(maximum_step(config) <= query_max_gap_cm,
+                    "multiscale query grid and block gap must match")
 
     with np.load(index_path, allow_pickle=False) as index:
         people = index["person_id"].astype(str)
@@ -296,6 +327,7 @@ def prepare_case(index_dir, output_dir, scales=DEFAULT_SCALES_CM, chunks=16,
     require(query_valid.dtype == np.bool_ and query_features.shape[:2] == query_valid.shape,
             "query masks/features differ")
     query_cm = _same_axis(query_cm_array, np, "query_cm", equal_nan=True).astype(float).tolist()
+    query_coordinate_epsilon = np.finfo(query_cm_array.dtype).eps
     query_chrom = _same_axis(query_chrom_array, np, "query_chrom").astype(int).tolist()
     _same_axis(query_bp_array, np, "query_pos_bp")
     require(query_valid.shape == (len(people), receipt["queries_per_person"]),
@@ -310,22 +342,43 @@ def prepare_case(index_dir, output_dir, scales=DEFAULT_SCALES_CM, chunks=16,
     valid_any = query_valid.any(axis=0).tolist()
     blocks_by_person = [query_blocks(query_cm, query_chrom, row, query_max_gap_cm)
                         for row in valid_rows]
-    cnn_reads = [cnn_query_read_indices(start, end, query_cm, query_chrom,
-                                        valid_rows, depth, query_max_gap_cm,
-                                        blocks_by_person=blocks_by_person)
-                 for start, end in cores]
+    for config in {json.dumps(value, sort_keys=True): value for value in cnn_configs.values()
+                   if value is not None}.values():
+        checked = set()
+        for blocks in blocks_by_person:
+            for block in blocks:
+                key = tuple(block)
+                if key not in checked:
+                    validate_grid_block([query_cm[i] for i in block],
+                                        chromosome_step(config, query_chrom[block[0]]),
+                                        query_coordinate_epsilon)
+                    checked.add(key)
+    cnn_reads = {}
+    for scale, config in cnn_configs.items():
+        cnn_reads[scale] = [cnn_query_read_indices(
+            start, end, query_cm, query_chrom, valid_rows, depth, query_max_gap_cm,
+            blocks_by_person=blocks_by_person, cnn_query_config=config)
+            for start, end in cores]
     for family in FAMILIES:
         for scale in sorted(float(x) for x in scales):
+            cnn_query_config = cnn_configs[scale]
             recipe = {"family": family, "common_radius_cm": scale,
                       "rare_radius_cm": scale, "depth": depth,
                       "query_max_gap_cm": query_max_gap_cm if family == "lai_cnn" else None,
                       "geometry_source": "CY_CONTEXT_DESIGN_EXISTING_CANDIDATE_NOT_SELECTED"}
+            if family == "lai_cnn" and cnn_query_config is not None:
+                recipe.update(cnn_query_config=cnn_query_config,
+                              query_halo_each_side=query_halo(depth, cnn_query_config),
+                              query_reach_each_side_cm=query_halo(depth, cnn_query_config)
+                              * chromosome_step(cnn_query_config, receipt["chromosome"]),
+                              geometry_source="EXPLICIT_MULTISCALE_QUERY_CNN_NOT_SELECTED")
             regions = []
             for number, core in enumerate(cores):
                 item = _geometry(family, core, query_cm, query_chrom, valid_rows,
                                  common_cm, event_cm, scale, depth, query_max_gap_cm,
                                  valid_any=valid_any,
-                                 cnn_query_read=cnn_reads[number] if family == "lai_cnn" else None)
+                                 cnn_query_read=cnn_reads[scale][number] if family == "lai_cnn" else None,
+                                 cnn_query_config=cnn_query_config if family == "lai_cnn" else None)
                 item["region_id"] = f"region-{number:02d}"
                 regions.append(item)
             cases.append({"recipe": recipe, "regions": regions})
@@ -451,9 +504,20 @@ class RegionalReader:
         require(len(found) == 1, "layout recipe absent or duplicated")
         return found[0]
 
-    def load_raw(self, family, scale_cm, region_id, person_indices=None):
+    def load_raw(self, family, scale_cm, region_id, person_indices=None, resolved=None):
         """Return raw arrays aligned for a later admitted LAI feature adapter."""
         np = self.np; recipe = self._recipe(family, scale_cm)
+        expected_cnn = recipe["recipe"].get("cnn_query_config")
+        if expected_cnn is not None or (resolved is not None and resolved.get("cnn_query_config") is not None
+                                        and family == "lai_cnn"):
+            require(resolved is not None, "multiscale layout requires the resolved model configuration")
+            require(resolved.get("family") == family
+                    and resolved.get("depth") == recipe["recipe"]["depth"]
+                    and resolved.get("common_radius_cm") == recipe["recipe"]["common_radius_cm"]
+                    and resolved.get("rare_radius_cm") == recipe["recipe"]["rare_radius_cm"]
+                    and resolved.get("query_max_gap_cm") == recipe["recipe"]["query_max_gap_cm"]
+                    and validate_cnn_config(resolved.get("cnn_query_config")) == expected_cnn,
+                    "model configuration differs from authenticated regional geometry")
         found = [x for x in recipe["regions"] if x["region_id"] == region_id]
         require(len(found) == 1, "region absent or duplicated"); region = found[0]
         pids = list(range(self.layout["people"])) if person_indices is None else [int(x) for x in person_indices]
@@ -608,9 +672,15 @@ def main():
     parser.add_argument("--core-chunks", type=int, default=16)
     parser.add_argument("--depth", type=int, default=2)
     parser.add_argument("--query-max-gap-cm", type=float, default=0.01)
+    parser.add_argument("--cnn-query-config", help="Explicit JSON multiscale query-convolution configuration")
+    parser.add_argument("--cnn-query-configs-by-scale",
+                        help="JSON object mapping every requested cM radius to its CNN configuration")
     args = parser.parse_args(); os.umask(0o077)
     value = prepare_case(args.index_dir, args.output_dir, _parse_scales(args.scales_cm),
-                         args.core_chunks, args.depth, args.query_max_gap_cm)
+                         args.core_chunks, args.depth, args.query_max_gap_cm,
+                         None if args.cnn_query_config is None else json.loads(args.cnn_query_config),
+                         None if args.cnn_query_configs_by_scale is None else
+                         json.loads(args.cnn_query_configs_by_scale))
     print(json.dumps(value, sort_keys=True))
 
 

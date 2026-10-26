@@ -31,6 +31,16 @@ PRIMARY_FLARE = {
     "marker_condition": "BASELINE_EXCLUDING_EVALUATED_DNABR_RARE",
 }
 SENSITIVITY_GENS = ("5", "16")
+REFERENCE_HASHES = ("event_catalogue_sha256", "ref_train_receipt_sha256",
+                    "ref_support_by_provenance_sha256", "reference_vcf_sha256",
+                    "reference_roles_sha256")
+PREPARE_CONTROLS = (
+    ("NONE", "ALL_ADMITTED_CONTEXT"),
+    ("NO_RARE", "COMMON_AND_FLARE_ONLY"),
+    ("COUNT_MATCHED", "RARE_COUNT_FIXED_IDENTITY_REPLACED"),
+    ("DENSITY_MATCHED", "RARE_DENSITY_FIXED_IDENTITY_REPLACED"),
+    ("IDENTITY_SHAM", "RARE_LOCUS_AND_COUNT_FIXED_PERSON_RELATION_BROKEN"),
+)
 
 
 def require(value, message):
@@ -54,6 +64,13 @@ def descriptor(path):
     path = Path(path).resolve()
     require(path.is_file(), f"file absent: {path}")
     return {"path": str(path), "sha256": sha(path)}
+
+
+def write_new_json(path, value):
+    path = Path(path)
+    require(not path.exists() and path.parent.is_dir(), "fresh output file required: " + str(path))
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+    return value
 
 
 def recorded_file(path, expected_sha):
@@ -333,17 +350,57 @@ def case_from_plan(path, task_id):
     return plan, rows[0]
 
 
+def reference_case(path, task_id, role):
+    receipt = load(path)
+    require(receipt.get("schema") == "r02_lai_reference_linkage_receipt_v1"
+            and receipt.get("status") == "COUNTS_AND_ORIGINAL_UNITS_MATCH"
+            and receipt.get("training_authorized") is False
+            and receipt.get("controls_materialized") is False
+            and receipt.get("truth_loaded") is False
+            and receipt.get("evaluate_opened") is False,
+            "DM reference receipt is not PREPARE-only")
+    rows = [row for row in receipt.get("cases", []) if row.get("task_id") == task_id]
+    require(len(rows) == 1, "DM reference case absent or duplicated")
+    row = rows[0]
+    require(row.get("role") == role and row.get("problems") == []
+            and row.get("reference_join_key") == ["chromosome", "position_bp", "REF", "ALT"]
+            and row.get("reference_duplicate_keys") == 0
+            and row.get("reference_target_person_overlap") == 0,
+            "DM reference case checks differ")
+    identity = {name: row.get(name) for name in REFERENCE_HASHES}
+    require(all(isinstance(value, str) and len(value) == 64 for value in identity.values()),
+            "DM reference identity is incomplete")
+    return receipt, row, identity
+
+
 def adapter_request(args):
     plan, case = case_from_plan(args.plan, args.task_id)
     probability = Path(case["flare"]["primary"]["local_path"])
     require(probability.is_file() and sha(probability) == case["flare"]["primary"]["sha256"],
             "recovered primary FLARE probability file differs")
     material = Path(case["inputs"]["material_manifest"])
+    reference_receipt, reference_row, reference_identity = reference_case(
+        args.reference_receipt, args.task_id, case["role"])
+    explicit_receipt = load(args.explicit_receipt)
+    require(explicit_receipt.get("schema") == "r02_lai_predictor_channels_receipt_v2"
+            and explicit_receipt.get("status") == "PREPARED_EXACT_REVIEWED_AXES_NO_TRAINING"
+            and explicit_receipt.get("task_id") == args.task_id
+            and explicit_receipt.get("case_id") == case["case_id"]
+            and explicit_receipt.get("direction") == plan["direction"]
+            and explicit_receipt.get("role") == case["role"]
+            and explicit_receipt.get("reference_identity") == reference_identity
+            and explicit_receipt.get("reference_linkage_receipt_sha256") == sha(args.reference_receipt)
+            and explicit_receipt.get("training_allowed") is False
+            and explicit_receipt.get("controls_materialized") is False,
+            "explicit channel receipt is not the exact PREPARE product for this case")
+    require(explicit_receipt.get("n_event") == reference_row.get("event_loci"),
+            "explicit channel EVENT axis differs from reviewed catalogue")
     value = {
         "schema": "r02_lai_neural_channel_adapter_request_v1",
         "operation": "BIND_EXISTING_CHANNELS_NO_SELECTION",
         "case_id": case["case_id"], "direction": plan["direction"], "expected_role": case["role"],
         "source_genotype_material_sha256": sha(material),
+        "reference_identity": reference_identity,
         "inputs": {
             "source_batch": descriptor(args.explicit_batch),
             "source_receipt": descriptor(args.explicit_receipt),
@@ -353,8 +410,7 @@ def adapter_request(args):
             "flare_receipt": descriptor(args.flare_receipt),
         },
     }
-    Path(args.output).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
-    return value
+    return write_new_json(args.output, value)
 
 
 def input_request(args):
@@ -381,8 +437,45 @@ def input_request(args):
         "resources": {"cpus": 1, "memory_bytes": 3 * 1024**3, "timeout_seconds": 2700,
                       "max_input_bytes": 3 * 1024**3, "max_output_bytes": 2 * 1024**3},
     }
-    Path(args.output).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
-    return value
+    return write_new_json(args.output, value)
+
+
+def prepare_input_request(args):
+    """Write an assembly-only request; definitions are registered but not materialized."""
+    plan, case = case_from_plan(args.plan, args.task_id)
+    channel = load(args.channel_receipt)
+    require(channel.get("schema") == "r02_lai_neural_channel_receipt_v1"
+            and channel.get("status") == "CHANNELS_AND_FLARE_BOUND_NO_TRAINING_NO_SELECTION"
+            and channel.get("case_id") == case["case_id"]
+            and channel.get("direction") == plan["direction"]
+            and channel.get("expected_role") == case["role"]
+            and channel.get("batch_sha256") == sha(args.channel_batch)
+            and channel.get("controls_materialized") is False
+            and channel.get("truth_arrays_loaded") is False
+            and channel.get("selection_performed") is False,
+            "channel batch is not an exact PREPARE-only product")
+    paths = case["inputs"]
+    controls = [{"name": name, "operation": operation, "truth_used": False,
+                 "preserves_people": True, "materialized": False}
+                for name, operation in PREPARE_CONTROLS]
+    value = {
+        "schema": "r02_lai_neural_input_request_v1", "operation": "ASSEMBLE_ONLY_NO_TRAINING",
+        "protocol_id": plan["direction"], "direction": plan["direction"],
+        "case_id": case["case_id"], "expected_role": case["role"],
+        "controls": controls, "controls_materialized": False,
+        "training_authorized": False, "model_selection_authorized": False, "evaluate_opened": False,
+        "inputs": {
+            "material_manifest": descriptor(paths["material_manifest"]),
+            "genotype_request": descriptor(paths["genotype_request"]),
+            "truthblind_request": descriptor(paths["truthblind_request"]),
+            "overlay": paths["query_overlay"], "overlay_receipt": paths["query_overlay_receipt"],
+            "channel_batch": descriptor(args.channel_batch),
+            "channel_receipt": descriptor(args.channel_receipt),
+        },
+        "resources": {"cpus": 1, "memory_bytes": 3 * 1024**3, "timeout_seconds": 2700,
+                      "max_input_bytes": 3 * 1024**3, "max_output_bytes": 2 * 1024**3},
+    }
+    return write_new_json(args.output, value)
 
 
 def gcs_cat(uri, generation, byte_range, account, project):
@@ -733,6 +826,7 @@ def main():
     p = sub.add_parser("adapter-request")
     p.add_argument("--plan", required=True); p.add_argument("--task-id", required=True)
     p.add_argument("--explicit-batch", required=True); p.add_argument("--explicit-receipt", required=True)
+    p.add_argument("--reference-receipt", required=True)
     p.add_argument("--flare-receipt", required=True); p.add_argument("--output", required=True)
     p.set_defaults(func=adapter_request)
     p = sub.add_parser("input-request")
@@ -740,6 +834,10 @@ def main():
     p.add_argument("--channel-batch", required=True); p.add_argument("--channel-receipt", required=True)
     p.add_argument("--controls", required=True); p.add_argument("--output", required=True)
     p.set_defaults(func=input_request)
+    p = sub.add_parser("prepare-input-request")
+    p.add_argument("--plan", required=True); p.add_argument("--task-id", required=True)
+    p.add_argument("--channel-batch", required=True); p.add_argument("--channel-receipt", required=True)
+    p.add_argument("--output", required=True); p.set_defaults(func=prepare_input_request)
     p = sub.add_parser("extract-common")
     p.add_argument("--plan", required=True); p.add_argument("--output-dir", required=True)
     p.add_argument("--gcloud-account", default="653458115080-compute@developer.gserviceaccount.com")

@@ -198,6 +198,25 @@ def require_contract_eligibility(contract):
             "development training requires a pinned joint eligibility manifest")
     path = descriptor(spec, "joint neural eligibility manifest")
     receipt = read_json(path, spec["sha256"])
+    if receipt.get("schema") == "r02_lai_factorized_training_eligibility_v1":
+        require(contract.get("objective") == "lai"
+                and set(receipt) == {"schema", "status", "protocol_id", "chromosome",
+                                     "development_scope", "separation_request",
+                                     "case_roles", "people_per_case", "shared_donors",
+                                     "shared_reference_dependency", "select_values_loaded",
+                                     "evaluate_opened"}
+                and receipt["status"] ==
+                    "ELIGIBLE_FOR_INITIAL_FIT_WITH_DEPENDENT_REALIZATIONS_SELECT_VALUES_CLOSED"
+                and receipt["protocol_id"] == "FOLD_A_TO_FOLD_B"
+                and receipt["chromosome"] == "22"
+                and receipt["people_per_case"] == 128
+                and receipt["shared_donors"] is True
+                and receipt["select_values_loaded"] is False
+                and receipt["evaluate_opened"] is False
+                and contract.get("lai_development_scope") == receipt["development_scope"]
+                and contract.get("lai_separation_request") == receipt["separation_request"],
+                "factorized LAI eligibility receipt differs")
+        return receipt
     require(receipt.get("schema") == RECEIPT_SCHEMA and receipt.get("evaluate_opened") is False,
             "joint eligibility receipt differs or opened EVALUATE")
     objective = contract.get("objective")

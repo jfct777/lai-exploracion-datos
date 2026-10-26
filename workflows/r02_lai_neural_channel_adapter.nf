@@ -12,12 +12,12 @@ process BIND_ADMITTED_CHANNELS_AND_FLARE {
     input:
     tuple val(task_id), path(request, stageAs:'request.json'), val(digest),
           path(inputs, stageAs:'inputs/input????????')
-    path code
+    path code, stageAs:'code/*'
     output:
     tuple val(task_id), path('bound/channel-batch.npz'), path('bound/receipt.json')
     script:
     """
-    python3 '${code}' --request request.json --request-sha256 '${digest}' \
+    python3 code/r02_lai_neural_channel_adapter.py --request request.json --request-sha256 '${digest}' \
       --staged-inputs inputs --output-dir bound
     """
 }
@@ -36,6 +36,9 @@ workflow {
         def staged=spec.inputs.values().collect{file(it.path,checkIfExists:true)}.unique()
         tuple(task.task_id,request,task.request.sha256,staged)
     }
-    BIND_ADMITTED_CHANNELS_AND_FLARE(Channel.fromList(rows),
-      file(params.source_bin+'/r02_lai_neural_channel_adapter.py',checkIfExists:true))
+    def code = ['r02_lai_neural_channel_adapter.py', 'r02_lai_reference_features.py',
+                'r02_lai_event_annotations.py'].collect {
+        file(params.source_bin+'/'+it,checkIfExists:true)
+    }
+    BIND_ADMITTED_CHANNELS_AND_FLARE(Channel.fromList(rows), code)
 }

@@ -18,6 +18,7 @@ from r02_local_attention_blocks import (LOCAL_MEAN_PREFIX_RANGE_V1, ContextExecu
                                          prefix_range_mean)
 from r02_context_autosomal_pool import (RARE_POOLING_POLICIES, RARE_POOLING_SUM,
                                          finalize_rare_sum)
+from r02_lai_cnn_config import validate_cnn_config, query_halo, chromosome_step, maximum_step
 
 
 FAMILIES = {"structure_deep_sets", "structure_local_attention", "lai_cnn", "lai_local_attention"}
@@ -226,6 +227,24 @@ class LocalAttention(nn.Module):
         return attended
 
 
+class MultiscaleQueryConvolution(nn.Module):
+    """Parallel dense-support depthwise filters, then learned channel mixing.
+
+    Separable filtering limits parameters; it does not make capacity identical
+    to the historical full kernel-3 convolution or certify LAI accuracy.
+    """
+    def __init__(self, width, kernels):
+        super().__init__()
+        self.filters = nn.ModuleList(
+            nn.Conv1d(width, width, k, padding=k // 2, groups=width)
+            for k in kernels
+        )
+        self.mix = nn.Conv1d(width * len(kernels), width, 1)
+
+    def forward(self, values):
+        return self.mix(torch.cat([layer(values) for layer in self.filters], dim=1))
+
+
 class ContextualModel(nn.Module):
     """Real tensor computation for both search branches, without a data loader.
 
@@ -237,7 +256,9 @@ class ContextualModel(nn.Module):
     def __init__(self, config: ContextConfig, common_features: int, event_features: int,
                  max_common_sites=100000, max_events=2048, max_queries=2048,
                  query_max_gap_cm: float | None = None,
-                 context_execution: dict | None = None):
+                 context_execution: dict | None = None,
+                 cnn_query_config: dict | None = None,
+                 lai_query_burden_features: int = 0):
         super().__init__()
         require(common_features > 0 and event_features > 0, "positive feature dimensions required")
         if config.family == "lai_cnn":
@@ -250,6 +271,17 @@ class ContextualModel(nn.Module):
         self.event_features = event_features
         self.limits = (max_common_sites, max_events, max_queries)
         self.query_max_gap_cm = query_max_gap_cm
+        self.cnn_query_config = validate_cnn_config(cnn_query_config)
+        require(self.cnn_query_config is None or config.family == "lai_cnn",
+                "multiscale query convolution applies only to lai_cnn")
+        if self.cnn_query_config is not None:
+            require(query_max_gap_cm >= maximum_step(self.cnn_query_config),
+                    "multiscale query block gap must cover declared query steps")
+        self.query_halo_each_side = query_halo(config.depth, self.cnn_query_config)
+        require(lai_query_burden_features in (0, 3), "LAI query burden width differs")
+        require(lai_query_burden_features == 0 or config.family.startswith("lai_"),
+                "query burden applies only to LAI")
+        self.lai_query_burden_features = lai_query_burden_features
         execution = None if context_execution is None else ContextExecution(**context_execution)
         self.context_execution = execution
         self.chromosome_aware = config.locus_descriptor == LOCUS_DESCRIPTOR_CHROM22
@@ -265,9 +297,13 @@ class ContextualModel(nn.Module):
         ) if config.family.endswith("local_attention") else nn.ModuleList()
         is_structure = config.family.startswith("structure_")
         self.person_rho = mlp(config.width, config.width, 1, config.dropout) if is_structure else None
-        self.query_fusion = mlp(2 * config.width + 8, config.width, 1, config.dropout) if not is_structure else None
+        self.query_fusion = mlp(2 * config.width + 8 + lai_query_burden_features,
+                                config.width, 1, config.dropout) if not is_structure else None
         self.query_convs = nn.ModuleList(
-            nn.Conv1d(config.width, config.width, 3, padding=1) for _ in range(config.depth)
+            (nn.Conv1d(config.width, config.width, 3, padding=1)
+             if self.cnn_query_config is None else MultiscaleQueryConvolution(
+                 config.width, self.cnn_query_config["kernel_sizes"]))
+            for _ in range(config.depth)
         ) if config.family == "lai_cnn" else nn.ModuleList()
         self.query_dropout = nn.Dropout(config.dropout)
         self.state_head = nn.Linear(config.width, 6) if not is_structure else None
@@ -318,8 +354,9 @@ class ContextualModel(nn.Module):
     def _convolve_queries(self, values, queries):
         """Sort within chromosome, convolve, restore caller query order.
 
-        Queries must describe a prespecified dense genomic grid. Kernel=3 and
-        unit dilation are fixed engineering settings, not searched parameters.
+        Queries must describe a prespecified dense genomic grid. Historical
+        runs use kernel=3; an explicit multiscale configuration changes the
+        query halo and requires its authenticated, regular genetic grid.
         A fixed, explicit query_max_gap_cm splits genomic gaps. Invalid queries
         with known coordinates also split blocks, even when the surviving gap
         is smaller than that maximum. NaN padding has no genomic location;
@@ -349,6 +386,15 @@ class ContextualModel(nn.Module):
                 masked_between = kept_positions[1:] > kept_positions[:-1] + 1
                 cuts = (torch.where(too_far | masked_between)[0] + 1).tolist()
                 for block_ids in torch.tensor_split(ids, cuts):
+                    step = (None if self.cnn_query_config is None else
+                            chromosome_step(self.cnn_query_config, queries.chrom[batch, block_ids[0]].item()))
+                    if self.cnn_query_config is not None and len(block_ids) > 1:
+                        coordinates = queries.cm[batch, block_ids]
+                        scale = torch.maximum(coordinates[:-1].abs(), coordinates[1:].abs())
+                        tolerance = 2 * torch.finfo(coordinates.dtype).eps * torch.clamp(scale, min=step)
+                        require(bool(((coordinates[1:] - coordinates[:-1] - step).abs()
+                                      <= tolerance).all()),
+                                "multiscale CNN requires the frozen regular query grid")
                     block = values[batch, block_ids].T[None]
                     for conv in self.query_convs:
                         block = block + self.query_dropout(torch.nn.functional.gelu(conv(block)))
@@ -357,7 +403,8 @@ class ContextualModel(nn.Module):
         return torch.stack(rows)
 
     def predict_lai(self, common: Sites, queries: Sites, baseline_probabilities: Tensor,
-                    events: Sites | None = None, include_rare=True):
+                    events: Sites | None = None, include_rare=True,
+                    query_burden: Tensor | None = None):
         require(self.config.family.startswith("lai_"), "LAI family required")
         encoded = self.common_values(common)
         queries.check(queries.features.shape[-1], self.limits[2])
@@ -379,8 +426,16 @@ class ContextualModel(nn.Module):
             values = self.event_values(common, encoded, events)
             rare, nr = local_mean(values, queries, events, self.config.rare_radius_cm,
                                  execution=self.context_execution)
-        x = self.query_fusion(torch.cat((c, rare, p, torch.log1p(nc.to(c.dtype))[..., None],
-                                         torch.log1p(nr.to(c.dtype))[..., None]), -1))
+        inputs = [c, rare, p, torch.log1p(nc.to(c.dtype))[..., None],
+                  torch.log1p(nr.to(c.dtype))[..., None]]
+        if self.lai_query_burden_features:
+            require(query_burden is not None and query_burden.shape == (*queries.cm.shape, 3)
+                    and bool(torch.isfinite(query_burden).all()) and bool((query_burden >= 0).all()),
+                    "LAI query burden shape/value differs")
+            inputs.append(torch.log1p(query_burden.to(c.dtype)))
+        else:
+            require(query_burden is None, "legacy LAI model cannot consume query burden")
+        x = self.query_fusion(torch.cat(inputs, -1))
         if self.query_convs:
             x = self._convolve_queries(x, queries)
         candidate = self.state_head(x).softmax(-1)
@@ -398,6 +453,11 @@ def build_model(resolved: dict, common_features: int, event_features: int, **lim
             require(limits["query_max_gap_cm"] == resolved["query_max_gap_cm"],
                     "conflicting query_max_gap_cm configuration")
         limits["query_max_gap_cm"] = resolved["query_max_gap_cm"]
+    if resolved["family"] == "lai_cnn" and "cnn_query_config" in resolved:
+        if "cnn_query_config" in limits:
+            require(limits["cnn_query_config"] == resolved["cnn_query_config"],
+                    "conflicting multiscale query configuration")
+        limits["cnn_query_config"] = resolved["cnn_query_config"]
     return ContextualModel(ContextConfig.from_recipe(resolved), common_features, event_features, **limits)
 
 

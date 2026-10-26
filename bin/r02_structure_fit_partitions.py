@@ -42,8 +42,103 @@ def canonical_labels(membership, global_indices):
     return {i: 'FIT_C%04d' % (k + 1) for k, members in enumerate(ordered) for i in members}
 
 
+class PreparedLeidenWorkspace:
+    """Invariant arrays and one verified igraph topology for repeated seeds.
+
+    ``igraph.Graph`` is mutable, so this class does not claim that the library
+    object is immutable.  :meth:`verify` checks its vertex and ordered-edge
+    identity, the read-only NumPy arrays, and the authenticated source spectrum
+    before and after every optimization.  Partitions and optimizers are never
+    stored here: every seed receives fresh instances in :func:`learn_candidate`.
+    """
+
+    __slots__ = ('_spectrum', 'source_sha256', 'graph_sha256', 'persons_sha256',
+                 'active', 'fit_indices', 'left', 'right', 'weights', 'degree',
+                 'line_left', 'line_right', 'line_weights',
+                 'volume', 'graph', 'edge_order', 'workspace_estimate_bytes',
+                 '_array_digests', '_spectrum_arrays')
+
+    def __init__(self, spectrum, *, source_sha256, max_working_bytes):
+        require(isinstance(spectrum, FitRareGraphSpectrum), 'Validated FIT rare graph required')
+        spectrum.verify(source_sha256)
+        require(type(max_working_bytes) is int and max_working_bytes > 0,
+                'Explicit workspace bound required')
+        active = np.flatnonzero(spectrum.active_fit)
+        adjacency = spectrum.adjacency[np.ix_(active, active)]
+        left, right = np.nonzero(np.triu(adjacency, 1))
+        weights = adjacency[left, right]
+        line_left, line_right = np.nonzero(np.triu(spectrum.adjacency, 1))
+        line_weights = spectrum.adjacency[line_left, line_right]
+        bound = 512*len(left) + 1024*len(spectrum.fit_indices)
+        require(bound <= max_working_bytes, 'Community graph workspace estimate exceeds budget')
+        degree = adjacency.sum(axis=1)
+        volume = float(degree.sum())
+        require(len(left) > 0 and np.isfinite(volume) and volume > 0,
+                'Nonempty positive affinity required')
+
+        self._spectrum = spectrum
+        self.source_sha256 = source_sha256
+        self.graph_sha256 = spectrum.graph_sha256
+        self.persons_sha256 = spectrum.persons_sha256
+        self.active = active
+        self.fit_indices = spectrum.fit_indices
+        self.left = left
+        self.right = right
+        self.weights = weights
+        self.degree = degree
+        self.line_left = line_left
+        self.line_right = line_right
+        self.line_weights = line_weights
+        self.volume = volume
+        self.edge_order = tuple(zip(left.tolist(), right.tolist()))
+        self.graph = igraph.Graph(n=len(active), edges=self.edge_order, directed=False)
+        self.workspace_estimate_bytes = bound
+        for array in (self.active, self.left, self.right, self.weights, self.degree,
+                      self.line_left, self.line_right, self.line_weights):
+            array.setflags(write=False)
+        self._array_digests = tuple(
+            hashlib.sha256(array.tobytes()).hexdigest()
+            for array in (self.active, self.left, self.right, self.weights, self.degree,
+                          self.line_left, self.line_right, self.line_weights))
+        self._spectrum_arrays = tuple(
+            (name, getattr(spectrum, name))
+            for name in ('adjacency', 'degree', 'fit_indices', 'active_fit'))
+        self.verify(spectrum, source_sha256=source_sha256,
+                    max_working_bytes=max_working_bytes)
+
+    def verify(self, spectrum, *, source_sha256, max_working_bytes):
+        """Reject a workspace used with another or subsequently changed graph."""
+        require(spectrum is self._spectrum, 'Prepared Leiden workspace belongs to another spectrum')
+        require(type(max_working_bytes) is int and max_working_bytes > 0
+                and self.workspace_estimate_bytes <= max_working_bytes,
+                'Prepared Leiden workspace exceeds current budget')
+        spectrum.verify(source_sha256)
+        require(source_sha256 == self.source_sha256
+                and spectrum.graph_sha256 == self.graph_sha256
+                and spectrum.persons_sha256 == self.persons_sha256,
+                'Prepared Leiden workspace identity is stale')
+        require(all(getattr(spectrum, name) is array for name, array in self._spectrum_arrays),
+                'Prepared Leiden workspace spectrum arrays were replaced')
+        arrays = (self.active, self.left, self.right, self.weights, self.degree,
+                  self.line_left, self.line_right, self.line_weights)
+        require(all(not array.flags.writeable for array in arrays)
+                and tuple(hashlib.sha256(array.tobytes()).hexdigest() for array in arrays)
+                    == self._array_digests,
+                'Prepared Leiden workspace arrays changed')
+        require(self.graph.vcount() == len(self.active) and not self.graph.is_directed()
+                and tuple(self.graph.get_edgelist()) == self.edge_order,
+                'Prepared Leiden igraph topology changed')
+        return self
+
+
+def prepare_leiden_workspace(spectrum, *, source_sha256, max_working_bytes):
+    """Prepare graph invariants once for repeated resolutions and seeds."""
+    return PreparedLeidenWorkspace(
+        spectrum, source_sha256=source_sha256, max_working_bytes=max_working_bytes)
+
+
 def learn_candidate(spectrum, *, source_sha256, resolution, seed,
-                    max_iterations, max_working_bytes):
+                    max_iterations, max_working_bytes, prepared_workspace=None):
     """Return one explicit RB-configuration Leiden candidate and diagnostics.
 
     Reuses the authenticated FIT graph rather than implementing another affinity
@@ -54,21 +149,24 @@ def learn_candidate(spectrum, *, source_sha256, resolution, seed,
     The workspace check is a conservative estimate for this extra graph, not an
     OS memory cap. Deployment must also cap the process and measure its peak.
     """
-    require(isinstance(spectrum, FitRareGraphSpectrum), 'Validated FIT rare graph required')
-    spectrum.verify(source_sha256)
     require(type(resolution) in (int, float) and np.isfinite(resolution) and resolution > 0,
             'Explicit positive finite resolution required; no default grid')
     require(type(seed) is int and 0 <= seed < 2**31, 'Explicit nonnegative 31-bit seed required')
     require(type(max_iterations) is int and max_iterations > 0, 'Positive iteration bound required')
     require(type(max_working_bytes) is int and max_working_bytes > 0, 'Explicit workspace bound required')
-    active = np.flatnonzero(spectrum.active_fit)
-    n_edges = int(np.count_nonzero(spectrum.adjacency)) // 2
-    bound = 512*n_edges + 1024*len(spectrum.fit_indices)
-    require(bound <= max_working_bytes, 'Community graph workspace estimate exceeds budget')
-    adjacency = spectrum.adjacency[np.ix_(active, active)]
-    left, right = np.nonzero(np.triu(adjacency, 1))
-    weights = adjacency[left, right]
-    graph = igraph.Graph(n=len(active), edges=zip(left.tolist(), right.tolist()), directed=False)
+    if prepared_workspace is None:
+        workspace = prepare_leiden_workspace(
+            spectrum, source_sha256=source_sha256,
+            max_working_bytes=max_working_bytes)
+    else:
+        require(isinstance(prepared_workspace, PreparedLeidenWorkspace),
+                'Prepared Leiden workspace required')
+        workspace = prepared_workspace.verify(
+            spectrum, source_sha256=source_sha256,
+            max_working_bytes=max_working_bytes)
+    active, left, right = workspace.active, workspace.left, workspace.right
+    weights, degree = workspace.weights, workspace.degree
+    volume, graph = workspace.volume, workspace.graph
     partition = leidenalg.RBConfigurationVertexPartition(
         graph, weights=weights.tolist(), resolution_parameter=float(resolution))
     optimiser = leidenalg.Optimiser()
@@ -89,8 +187,6 @@ def learn_candidate(spectrum, *, source_sha256, resolution, seed,
             converged = True
             break
     membership = np.asarray(partition.membership, dtype=np.int64)
-    degree = adjacency.sum(axis=1)
-    volume = float(degree.sum())
     within = float(2*weights[membership[left] == membership[right]].sum())
     degree_per_community = np.bincount(membership, weights=degree)
     independent_quality = within - float(resolution)*float(degree_per_community @ degree_per_community)/volume
@@ -99,7 +195,8 @@ def learn_candidate(spectrum, *, source_sha256, resolution, seed,
     active_labels = canonical_labels(membership, spectrum.fit_indices[active])
     # String keys are canonical before hashing and survive JSON roundtrips.
     labels = {str(int(i)): active_labels.get(int(i), 'UNASSIGNED') for i in spectrum.fit_indices}
-    spectrum.verify(source_sha256)
+    workspace.verify(spectrum, source_sha256=source_sha256,
+                     max_working_bytes=max_working_bytes)
     result = dict(
         schema='r02_fit_leiden_candidate_v1',
         status='FIT_ZERO_IMPROVEMENT_ITERATION_REACHED' if converged else 'ITERATION_LIMIT_NOT_ADMITTED',
@@ -109,7 +206,8 @@ def learn_candidate(spectrum, *, source_sha256, resolution, seed,
         iterations=history, objective=previous, normalized_objective=previous/volume,
         objective_definition='sum_ij(A_ij-gamma*k_i*k_j/sum_ij(A_ij))*1(c_i=c_j)',
         libraries=dict(igraph=version('igraph'), leidenalg=version('leidenalg')),
-        graph_edges=n_edges, graph_volume=volume, workspace_estimate_bytes=bound,
+        graph_edges=len(left), graph_volume=volume,
+        workspace_estimate_bytes=workspace.workspace_estimate_bytes,
         assigned_fit=len(active), unassigned_fit=len(labels)-len(active),
         same_component_fit_edges='EXCLUDE', missing_edge_policy='UNKNOWN_NOT_ZERO',
         learning_roles=['FIT'], target_used=False, heldout_edges_used=False,

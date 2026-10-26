@@ -461,6 +461,51 @@ def require_training_separation(contract):
     scope_spec = contract.get("lai_development_scope")
     require(isinstance(scope_spec, dict), "LAI development requires a pinned directional scope")
     scope = read_json(authenticated(scope_spec))
+    if scope.get("schema") == "r02_lai_factorized_development_scope_v1":
+        chromosome = str(contract.get("lai_chromosome", ""))
+        require(chromosome.isdigit() and 1 <= int(chromosome) <= 22
+                and chromosome == str(int(chromosome)),
+                "factorized LAI contract requires one canonical autosome")
+        require(set(scope) == {"schema", "protocol_id", "chromosome", "cases",
+                               "source_directional_audit", "shared_reference_dependency",
+                               "select_values_loaded", "evaluate_opened"}
+                and scope["protocol_id"] == "FOLD_A_TO_FOLD_B"
+                and scope["chromosome"] == chromosome
+                and scope["select_values_loaded"] is False
+                and scope["evaluate_opened"] is False,
+                "invalid factorized protocol-chromosome directional scope")
+        source_audit = read_json(authenticated(scope["source_directional_audit"]))
+        require(source_audit.get("protocol_id") == "FOLD_A_TO_FOLD_B"
+                and source_audit.get("development_separation_passed") is True
+                and source_audit.get("evaluate_opened") is False
+                and not any(source_audit.get("collision_counts", {}).values())
+                and scope["shared_reference_dependency"] ==
+                    source_audit.get("reference_dependency"),
+                "source directional audit does not support this dependent FIT/SELECT scope")
+        cases = scope["cases"]
+        require(isinstance(cases, dict) and set(cases) == {"FIT", "SELECT"}
+                and all(len(values) == 3 and len(set(values)) == 3
+                        for values in cases.values()),
+                "factorized scope requires three cases per development role")
+        observed = {role: {entry.get("lai_case_id") for entry in entries}
+                    for role, entries in contract.get("batches", {}).items()}
+        from r02_lai_neural_input import parse_case
+        observed_chromosomes = {
+            parse_case(entry.get("lai_case_id"))[1]
+            for entries in contract.get("batches", {}).values() for entry in entries
+        }
+        require(observed == {role: set(values) for role, values in cases.items()}
+                and observed_chromosomes == {chromosome}
+                and all(entry.get("protocol_id") == "FOLD_A_TO_FOLD_B"
+                        and entry.get("role") == role
+                        for role, entries in contract["batches"].items()
+                        for entry in entries),
+                "contract batches differ from the factorized directional cases or chromosome")
+        return {"protocol_id": "FOLD_A_TO_FOLD_B",
+                "chromosome": chromosome,
+                "development_training_separation_allowed": True,
+                "independent_replicates": False,
+                "shared_reference_dependency": scope["shared_reference_dependency"]}
     directional = audit_directional_development(result, scope)
     require(directional["development_training_separation_allowed"],
             "LAI development blocked: " + "; ".join(directional["blockers"]))

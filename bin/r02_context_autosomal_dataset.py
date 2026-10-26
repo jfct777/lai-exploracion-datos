@@ -41,7 +41,7 @@ def _json(path,digest):
     return json.loads(Path(path).read_text(),object_pairs_hook=unique)
 
 class AutosomalDataset:
-    """Reopens one authenticated chromosome and materializes one tile per step."""
+    """Retain authenticated chromosome metadata; materialize one tile per step."""
     def __init__(self,request_path,request_sha256):
         r=_json(request_path,request_sha256)
         self.request_sha256=request_sha256
@@ -92,9 +92,16 @@ class AutosomalDataset:
                     and Path(d["path"]).is_absolute()and re.fullmatch(r"[0-9a-f]{64}",d["manifest_sha256"]),"Invalid store descriptor")
             require(str(d["chromosome"])not in stores,"Duplicate chromosome store");stores[str(d["chromosome"])]=d
         require(tuple(sorted(stores,key=int))==AUTOSOMES and set(r["tiles"])==set(AUTOSOMES),"Exact autosome store/tile inventory required")
-        lineage=None;total_chunks=0
+        lineage=None;total_chunks=0;authenticated_readers={};metadata_signatures={}
+        if r["schema"]==PERSON_BATCH_SCHEMA:
+            from r02_event_mmap_reader import authenticate_event_chromosome
         for chrom in AUTOSOMES:
-            reader=events.EventChromosome(stores[chrom]["path"],stores[chrom]["manifest_sha256"])
+            if r["schema"]==PERSON_BATCH_SCHEMA:
+                reader,metadata_signatures[chrom]=authenticate_event_chromosome(
+                    stores[chrom]["path"],stores[chrom]["manifest_sha256"])
+            else:
+                reader=events.EventChromosome(stores[chrom]["path"],stores[chrom]["manifest_sha256"])
+            authenticated_readers[chrom]=reader
             require(reader.chrom==chrom,"Store chromosome differs")
             require(r["exclusion_scope"] in {reader.source["exclusion_scope"],*reader.source.get("additional_exclusion_scopes",[])}
                     and sum(x["block_id"]==r["block_id"] for x in reader.blocks)==1,
@@ -118,27 +125,37 @@ class AutosomalDataset:
         if r["schema"]==PERSON_BATCH_SCHEMA:
             require(r["reader_backend"]["max_verified_chunks"]==total_chunks,
                     "Reader cache bound must equal the authenticated 22-store chunk inventory")
-            from r02_event_mmap_reader import VerifiedChunkCache
+            from r02_event_mmap_reader import MappedEventChromosome,VerifiedChunkCache
             self.chunk_cache=VerifiedChunkCache(total_chunks)
+            self.readers={chrom:MappedEventChromosome.from_authenticated(
+                authenticated_readers[chrom],cache=self.chunk_cache,
+                metadata_signatures=metadata_signatures[chrom],
+                max_window_sites=self.max_window_sites) for chrom in AUTOSOMES}
+        else:self.readers=None
         self.request=r;self.stores=stores;self.lineage=lineage;self.training_allowed=False
         self.n_person_batches=len(self.person_batches)
+        self.tiles_per_person_batch=sum(len(r["tiles"][chrom]) for chrom in AUTOSOMES)
 
     def _reader(self,chrom):
         descriptor=self.stores[chrom]
         if self.request["schema"]==PERSON_BATCH_SCHEMA:
-            from r02_event_mmap_reader import MappedEventChromosome
-            return MappedEventChromosome(descriptor["path"],descriptor["manifest_sha256"],cache=self.chunk_cache,
-                                         max_window_sites=self.max_window_sites)
+            return self.readers[chrom]
         return events.EventChromosome(descriptor["path"],descriptor["manifest_sha256"])
 
-    def iter_person_batch(self,batch_index):
+    def iter_person_batch(self,batch_index,start_tile_index=0):
         require(type(batch_index)is int and 0<=batch_index<self.n_person_batches,"Unknown person batch")
+        require(type(start_tile_index)is int and 0<=start_tile_index<=self.tiles_per_person_batch,
+                "Unknown flat autosomal tile cursor")
         r=self.request
         ids,roles,components=self.person_batches[batch_index]
+        flat_index=0
         for chrom in AUTOSOMES:
             reader=self._reader(chrom)
             tiles=r["tiles"][chrom]
             for index,(start,end) in enumerate(tiles):
+                if flat_index<start_tile_index:
+                    flat_index+=1
+                    continue
                 view=reader.load_window(list(ids),start,end,r["block_id"],r["exclusion_scope"],
                     r["common_radius_cm"],r["rare_radius_cm"],r["attention_depth"])
                 require(tuple(map(str,view["person_id"]))==ids and tuple(map(str,view["role"]))==roles and
@@ -153,6 +170,8 @@ class AutosomalDataset:
                 view["autosomal_tile_index"]=index;view["autosomal_tile_count"]=len(tiles)
                 view["autosomal_last_tile"]=index+1==len(tiles);view["training_allowed"]=False
                 view["person_batch_index"]=batch_index;view["person_batch_count"]=self.n_person_batches
+                view["autosomal_flat_tile_index"]=flat_index
+                flat_index+=1
                 yield view
 
     def __iter__(self):

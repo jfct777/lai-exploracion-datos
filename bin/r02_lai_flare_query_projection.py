@@ -245,6 +245,8 @@ def run(request_path, digest, output_dir, staged=None):
         "maximum_source_haplotype_mass_residual": residual, "maximum_projected_mass_residual": mass,
         "truth_arrays_loaded": False, "truth_used_for_projection": False,
         "selection_performed": False, "source_prediction_sha256": inputs["predictions"]["sha256"],
+        "request_sha256": digest, "genetic_map_sha256": inputs["genetic_map"]["sha256"],
+        "view_kind": "INTERPOLATED_DERIVED_NEURAL_INPUT",
         "overlay_sha256": inputs["overlay"]["sha256"], "probabilities_sha256": sha(output),
         "probability_semantics": "UNORDERED_DIPLOID_PRODUCT_OF_FLARE_HAPLOTYPE_MARGINALS",
         "scientific_limit": "Interpolation is a derived neural-input view; it does not replace exact-marker FLARE evaluation.",

@@ -8,7 +8,7 @@ no genotype matrix or whole marker catalogue is retained in memory.
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
+from collections import Counter
 import csv
 import hashlib
 from itertools import zip_longest
@@ -21,6 +21,7 @@ import subprocess
 import time
 
 import m34_run_flare as legacy
+from r02_lai_role_units import role_units
 import r02_lai_simulate as sim
 from r02_lai_support_review import require, read, write, sha
 
@@ -28,7 +29,7 @@ SCHEMA = 'r02_lai_flare_plan_input_v1'
 INPUTS = {'reference_vcf','reference_index','target_vcf','target_index','sample_map',
           'genetic_map','flare_jar','roles','marker_inventory','material_provenance','simulation_manifest'}
 OPTIONS = legacy.PARAMETER_MEMBERS | {'panel-cm','model','gt-samples','gt-ancestries','excludemarkers'}
-CODE_FILES = ('r02_lai_flare_plan.py','m34_run_flare.py','r02_lai_simulate.py','r02_lai_support_review.py')
+CODE_FILES = ('r02_lai_flare_plan.py','r02_lai_role_units.py','m34_run_flare.py','r02_lai_simulate.py','r02_lai_support_review.py')
 MARKER_CONDITIONS = {
     'COMMON_ONLY': {'COMMON'},
     'COMMON_PLUS_RARE': {'COMMON','RARE'},
@@ -132,27 +133,6 @@ def bound_map(path, resources):
             require(len(line) <= 4096, 'Map row exceeds bounded normalization contract')
             if line.strip() and not line.lstrip().startswith('#'): count += 1
             require(count <= resources['max_map_points'], 'Map-point bound exceeded')
-
-
-def role_units(path, references, targets, ancestry_names, synthetic):
-    units = defaultdict(set); observed = defaultdict(set); ref_ancestry = {}
-    with path.open() as stream:
-        reader = csv.DictReader(stream, delimiter='\t')
-        require(set(reader.fieldnames or []) == {'sample_id','role','atomic_unit_id','ancestry'}, 'Explicit original unit table required')
-        for row in reader:
-            sid, role, unit = row['sample_id'], row['role'], row['atomic_unit_id']
-            require(sid and unit and role in {'REF_TRAIN','SIMULATED_TARGET'}, 'Unknown role or absent original unit')
-            if synthetic: require(sid.startswith('SYNTH_'), 'Synthetic scope requires synthetic samples')
-            require(unit not in observed[sid], 'Duplicate sample/unit record')
-            observed[sid].add(unit); units[role].add(unit)
-            require(sid in (references if role == 'REF_TRAIN' else targets), 'Role differs from VCF sample sets')
-            require(row['ancestry'] in ancestry_names, 'Unknown donor/reference ancestry')
-            if role == 'REF_TRAIN':
-                require(sid not in ref_ancestry, 'Each reference needs exactly one original unit')
-                ref_ancestry[sid] = row['ancestry']
-    require(set(observed) == set(references)|set(targets), 'Missing original units for a sample')
-    require(units['REF_TRAIN'].isdisjoint(units['SIMULATED_TARGET']), 'Original donor unit crosses reference/target boundary')
-    return ref_ancestry, {role:len(value) for role,value in units.items()}
 
 
 def axes(files, config, resources, deadline):

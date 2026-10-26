@@ -21,6 +21,38 @@ def signature(path):
     return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
 
 
+def _metadata_paths(directory, manifest_sha256):
+    """Return the authenticated manifest and its complete non-NPZ inventory."""
+    root = Path(directory).resolve()
+    manifest_path = root / 'manifest.json'
+    require(original.sha(manifest_path) == manifest_sha256,
+            'Chromosome manifest SHA256 differs')
+    manifest = original.load_json(manifest_path)
+    outputs = manifest.get('outputs_sha256')
+    require(isinstance(outputs, dict), 'Chromosome output inventory differs')
+    paths = [manifest_path]
+    for name in sorted(name for name in outputs if not name.endswith('.npz')):
+        relative = Path(name)
+        require(not relative.is_absolute() and '..' not in relative.parts,
+                'Unsafe chromosome metadata path')
+        path = (root / relative).resolve()
+        require(path.is_relative_to(root), 'Chromosome metadata escaped its root')
+        paths.append(path)
+    require(len(paths) == len(set(paths)) and all(path.is_file() for path in paths),
+            'Exact non-genotype metadata inventory required')
+    return tuple(paths)
+
+
+def authenticate_event_chromosome(directory, manifest_sha256):
+    """Bind a fully authenticated base reader to pre-construction signatures."""
+    paths = _metadata_paths(directory, manifest_sha256)
+    before = tuple((str(path), signature(path)) for path in paths)
+    reader = original.EventChromosome(directory, manifest_sha256)
+    after = tuple((str(path), signature(path)) for path in paths)
+    require(after == before, 'Chromosome metadata changed during authentication')
+    return reader, before
+
+
 @contextmanager
 def mapped_arrays(path):
     """Map stored numeric NPY members; hold no descriptor after this context."""
@@ -115,7 +147,38 @@ class VerifiedChunkCache:
 
 class MappedEventChromosome(original.EventChromosome):
     def __init__(self, directory, manifest_sha256, *, cache, max_window_sites=None):
-        super().__init__(directory, manifest_sha256)
+        reader, metadata_signatures = authenticate_event_chromosome(
+            directory, manifest_sha256)
+        self._copy_authenticated_reader(reader)
+        self._finish_authenticated_reader(cache, max_window_sites,
+                                          metadata_signatures)
+
+    @classmethod
+    def from_authenticated(cls, reader, *, metadata_signatures, cache,
+                           max_window_sites=None):
+        """Convert an already authenticated reader without reopening metadata.
+
+        Attributes are assigned explicitly.  The source reader is not mutated,
+        and the only copied mapping is the resource dictionary whose external
+        row limit can be raised by the authenticated request.
+        """
+        require(type(reader) is original.EventChromosome,
+                'Exact authenticated EventChromosome required')
+        converted = cls.__new__(cls)
+        converted._copy_authenticated_reader(reader)
+        converted._finish_authenticated_reader(cache, max_window_sites,
+                                                metadata_signatures)
+        return converted
+
+    def _copy_authenticated_reader(self, reader):
+        for name in ('root', 'manifest', 'manifest_sha256', 'cfg', 'source',
+                     'persons', 'roles', 'blocks', 'chrom', 'length', 'people',
+                     'points'):
+            setattr(self, name, getattr(reader, name))
+        self.r = dict(reader.r)
+
+    def _finish_authenticated_reader(self, cache, max_window_sites,
+                                     metadata_signatures):
         if max_window_sites is not None:
             require(type(max_window_sites) is int and
                     max_window_sites >= self.r['max_window_sites'],
@@ -123,6 +186,27 @@ class MappedEventChromosome(original.EventChromosome):
             self.r = {**self.r, 'max_window_sites': max_window_sites}
         require(isinstance(cache, VerifiedChunkCache), 'Explicit verified-source cache required')
         self.cache = cache
+        expected_paths = tuple(map(str, _metadata_paths(
+            self.root, self.manifest_sha256)))
+        require(isinstance(metadata_signatures, tuple) and
+                tuple(path for path, _ in metadata_signatures) == expected_paths and
+                all(signature(path) == expected
+                    for path, expected in metadata_signatures),
+                'Authenticated chromosome metadata changed before conversion')
+        self._metadata_signatures = metadata_signatures
+
+    def _assert_metadata_unchanged(self):
+        require(all(signature(path) == expected
+                    for path, expected in self._metadata_signatures),
+                'Authenticated chromosome metadata changed')
+
+    def load_window(self, *args, **kwargs):
+        """Check every authenticated non-NPZ file around each complete view."""
+        self._assert_metadata_unchanged()
+        try:
+            return super().load_window(*args, **kwargs)
+        finally:
+            self._assert_metadata_unchanged()
 
     def read(self, kind, ids, lower, upper, excluded):
         columns = {k: [] for k in original.ARRAY_FIELDS}

@@ -75,12 +75,33 @@ class BudgetReached(RuntimeError):
     pass
 
 
+def seed_time_limit(max_seed_seconds, profile_remaining, campaign_remaining):
+    """Return the earliest deadline and its cause; do not reset any budget."""
+    values = (max_seed_seconds, profile_remaining, campaign_remaining)
+    require(all(math.isfinite(value) for value in values) and max_seed_seconds > 0,
+            'Finite seed/profile/campaign time budgets required')
+    # On ties retain the enclosing limit, which cannot be retried as a seed.
+    deadlines = ((campaign_remaining, 'CAMPAIGN_TIME_LIMIT'),
+                 (profile_remaining, 'CUMULATIVE_PROFILE_TIME_LIMIT'),
+                 (max_seed_seconds, 'SINGLE_SEED_TIME_LIMIT'))
+    seconds, reason = min(deadlines, key=lambda item: item[0])
+    if seconds <= 0:
+        raise BudgetReached(reason)
+    return seconds, reason
+
+
 def execute(request, output, root):
     task = request['task']; limits = request['limits']; search = request['search']
+    finite = search.get('policy') == 'HISTORICAL_SCALES_FINITE_RESTARTS_RETAIN_PRIOR_V1'
     require(request['schema'] == 'r02_inner_fit_profile_request_v1'
-            and request['scientific_scope'] == 'INNER_FIT_COMMUNITY_DISCOVERY_ONLY'
-            and search['views'] == 52140 and search['family_error'] == .05
-            and search['missing_mass'] == .1, 'Reviewed inner-FIT policy required')
+            and request['scientific_scope'] == 'INNER_FIT_COMMUNITY_DISCOVERY_ONLY',
+            'Reviewed inner-FIT scope required')
+    if finite:
+        from r02_k03_finite_search import validate_request
+        validate_request(request)
+    else:
+        require(search['views'] == 52140 and search['family_error'] == .05
+                and search['missing_mass'] == .1, 'Reviewed legacy policy required')
     code_dir = Path(__file__).parent
     require(all(Path(name).name == name and name.endswith('.py') for name in request['code_sha256']),
             'Unsafe code file identity')
@@ -95,8 +116,11 @@ def execute(request, output, root):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         immutable = {k:v for k,v in request.items() if k not in ('limits','campaign_deadline_epoch')}
         binding = dict(problem_sha256=projection.digest(immutable), scope=request['scientific_scope'])
-        write_once(output / 'binding.json', binding, 2**20)
-        write_once(output / 'attempt_requests' / (projection.digest(request) + '.json'), request, 2**20)
+        immutable_write = write_once
+        if finite:
+            from r02_k03_finite_search import write_once as immutable_write
+        immutable_write(output / 'binding.json', binding, 2**20)
+        immutable_write(output / 'attempt_requests' / (projection.digest(request) + '.json'), request, 2**20)
         persons_path = resolve(task['persons'], root)
         plan_path = resolve(task['fold_plan'], root)
         require(sha(persons_path) == task['persons_sha256']
@@ -111,7 +135,11 @@ def execute(request, output, root):
                 source_sha256=task['source_sha256'], max_input_bytes=limits['max_input_bytes'],
                 max_memory_bytes=limits['max_memory_bytes'])
             require(task['fold_id'] == plan['fold_id'], 'Published fold identity differs from authenticated plan')
-        result = search_graph(graph, request, output)
+        if finite:
+            from r02_k03_finite_search import search_graph as finite_search
+            result = finite_search(graph, request, output)
+        else:
+            result = search_graph(graph, request, output)
         result.update(fold_id=task['fold_id'], physical_view=task['physical_view'],
             logical_target_ids=request['logical_target_ids'], inner_fit_people=len(plan['inner_fit_indices']),
             inner_project_people=len(plan['inner_project_indices']),
@@ -147,10 +175,10 @@ def search_graph(graph, request, output):
     known = {line.key: line for line in initial}
     discovered = {}; assessments = []
 
-    def save_budget(active_seed=False):
+    def save_budget(active_seed_seconds=0.):
         record = dict(spent_seconds=spent_before + time.monotonic() - started,
             max_seconds=limits['max_seconds'], counters=counters,
-            active_seed_reserved_seconds=limits['max_seed_seconds'] if active_seed else 0.,
+            active_seed_reserved_seconds=active_seed_seconds,
             interrupted_seed_charge_this_attempt=interrupted_charge,
             interruption_charge_is_measurement=False)
         temporary = output / 'BUDGET.json.tmp'
@@ -204,15 +232,24 @@ def search_graph(graph, request, output):
                         and record['status'] == 'FIT_ZERO_IMPROVEMENT_ITERATION_REACHED', 'Seed identity/status differs')
                     counters['reused_seeds'] += 1
                 else:
-                    save_budget(active_seed=True)
+                    seconds, timeout_reason = seed_time_limit(
+                        limits['max_seed_seconds'],
+                        limits['max_seconds'] - spent_before - time.monotonic() + started,
+                        request['campaign_deadline_epoch'] - time.time())
+                    save_budget(active_seed_seconds=seconds)
                     began = time.monotonic()
                     def expired(signum, frame):
-                        raise BudgetReached('SINGLE_SEED_TIME_LIMIT')
+                        raise BudgetReached(timeout_reason)
                     previous_handler = signal.signal(signal.SIGALRM, expired)
-                    signal.setitimer(signal.ITIMER_REAL, min(limits['max_seed_seconds'],
-                        max(.001, limits['max_seconds']-spent_before-time.monotonic()+started),
-                        max(.001, request['campaign_deadline_epoch']-time.time())))
                     try:
+                        # Checkpoint I/O consumes the enclosing budgets. Recheck
+                        # immediately before arming, so it cannot change a
+                        # profile timeout into a misleading seed timeout.
+                        seconds, timeout_reason = seed_time_limit(
+                            limits['max_seed_seconds'],
+                            limits['max_seconds'] - spent_before - time.monotonic() + started,
+                            request['campaign_deadline_epoch'] - time.time())
+                        signal.setitimer(signal.ITIMER_REAL, seconds)
                         candidate = partitions.learn_candidate(graph, source_sha256=source, resolution=gamma,
                             seed=seed, max_iterations=search['max_iterations'],
                             max_working_bytes=limits['max_working_bytes'])

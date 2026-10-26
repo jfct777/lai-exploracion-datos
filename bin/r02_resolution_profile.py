@@ -130,7 +130,7 @@ def bounded_profile(initial, oracle, *, gamma_low, gamma_high, max_queries):
                 heldout_used=False, biological_validation=False)
 
 
-def make_line(spectrum, labels):
+def make_line(spectrum, labels, prepared_workspace=None):
     """Canonical membership and RB coefficients shared by both profile drivers.
 
     This is the identical formula formerly nested in fit_leiden_profile. It
@@ -139,10 +139,22 @@ def make_line(spectrum, labels):
     import hashlib
     import json
     import numpy as np
-    a, d = spectrum.adjacency, spectrum.degree
-    left, right = np.nonzero(np.triu(a, 1))
-    volume = float(d.sum())
-    active = np.flatnonzero(spectrum.active_fit)
+    if prepared_workspace is None:
+        a, d = spectrum.adjacency, spectrum.degree
+        left, right = np.nonzero(np.triu(a, 1))
+        weights = a[left, right]
+        volume = float(d.sum())
+        active = np.flatnonzero(spectrum.active_fit)
+    else:
+        prepared_workspace.verify(
+            spectrum, source_sha256=spectrum.source_sha256,
+            max_working_bytes=prepared_workspace.workspace_estimate_bytes)
+        d = spectrum.degree
+        left, right, weights = (prepared_workspace.line_left,
+                                prepared_workspace.line_right,
+                                prepared_workspace.line_weights)
+        volume = prepared_workspace.volume
+        active = prepared_workspace.active
     require(set(labels) == {str(int(i)) for i in spectrum.fit_indices}, 'Candidate FIT membership differs')
     ordered = [labels[str(int(i))] for i in spectrum.fit_indices]
     names = {}
@@ -159,7 +171,7 @@ def make_line(spectrum, labels):
     membership = np.asarray(canonical)
     degrees = np.bincount(membership[active], weights=d[active])
     key = hashlib.sha256(json.dumps(canonical, separators=(',', ':')).encode()).hexdigest()
-    return PartitionLine(key, float(2*a[left, right][membership[left] == membership[right]].sum()/volume),
+    return PartitionLine(key, float(2*weights[membership[left] == membership[right]].sum()/volume),
                          float((degrees/volume) @ (degrees/volume)))
 
 
@@ -196,6 +208,9 @@ def fit_leiden_profile(spectrum, *, source_sha256, seeds, max_iterations,
     record_bound = max_queries*len(seeds)*(len(d)*256+max_iterations*256+16384)
     graph_bound = 512*len(left)+1024*len(d)
     require(record_bound+graph_bound <= max_working_bytes, 'Profile candidate/graph memory bound exceeded')
+    workspace = learner.prepare_leiden_workspace(
+        spectrum, source_sha256=source_sha256,
+        max_working_bytes=max_working_bytes-record_bound)
     active = np.flatnonzero(spectrum.active_fit)
     candidates, attempts = {}, []
 
@@ -203,17 +218,19 @@ def fit_leiden_profile(spectrum, *, source_sha256, seeds, max_iterations,
     for membership in (spectrum.connected_component, np.arange(len(d))):
         labels = learner.canonical_labels(membership[active], spectrum.fit_indices[active])
         endpoint_labels.append({str(int(i)):labels.get(int(i), 'UNASSIGNED') for i in spectrum.fit_indices})
-    initial = [make_line(spectrum, labels) for labels in endpoint_labels]
+    initial = [make_line(spectrum, labels, prepared_workspace=workspace)
+               for labels in endpoint_labels]
 
     def oracle(gamma):
         lines = []
         for seed in seeds:
             candidate = learner.learn_candidate(spectrum, source_sha256=source_sha256,
                 resolution=gamma, seed=seed, max_iterations=max_iterations,
-                max_working_bytes=max_working_bytes-record_bound)
+                max_working_bytes=max_working_bytes-record_bound,
+                prepared_workspace=workspace)
             require(candidate['status'] == 'FIT_ZERO_IMPROVEMENT_ITERATION_REACHED',
                     'Iteration-limited query cannot close a profile')
-            line = make_line(spectrum, candidate['labels'])
+            line = make_line(spectrum, candidate['labels'], prepared_workspace=workspace)
             require(np.isclose(line.quality(gamma), candidate['normalized_objective'],
                                rtol=1e-11, atol=1e-11), 'Profile line differs from Leiden objective')
             attempts.append(dict(gamma=gamma, seed=seed, membership_key=line.key,

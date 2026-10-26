@@ -6,6 +6,7 @@ params.plan = null
 params.plan_sha256 = null
 params.outdir = null
 params.code_dir = new File("${projectDir}/../bin").canonicalPath
+params.source_manifest = "${projectDir}/../conf/r02_context_sources.txt"
 params.python = 'python3'
 params.python_sha256 = ''
 params.task_cpus = 1
@@ -76,7 +77,10 @@ workflow {
     if ((development.threads as int) > (params.task_cpus as int))
         error 'Frozen Torch threads exceed task_cpus; never oversubscribe silently'
     def plan = Channel.value(file(params.plan, checkIfExists:true))
-    def sources = Channel.value(['r02_context_train.py','genomic_context_runtime.py'].collect {
+    def names = file(params.source_manifest,checkIfExists:true).readLines().findAll { it }
+    if (names.isEmpty() || names.toSet().size() != names.size() ||
+        names.any { !(it ==~ /[A-Za-z0-9_]+\.py/) }) error 'Invalid Python source manifest'
+    def sources = Channel.value(names.collect {
         file("${params.code_dir}/${it}",checkIfExists:true) })
     VERIFY_RESERVED_CONTEXT(plan,params.plan_sha256,sources)
     SCORE_RESERVED_CONTEXT(plan,params.plan_sha256,VERIFY_RESERVED_CONTEXT.out,sources)

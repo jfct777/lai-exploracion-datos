@@ -1,0 +1,148 @@
+{
+  "chromosome": "22",
+  "conditions": [
+    "NONE",
+    "NO_RARE",
+    "COUNT_MATCHED",
+    "DENSITY_MATCHED",
+    "IDENTITY_SHAM"
+  ],
+  "direction": "FOLD_A_TO_FOLD_B",
+  "evaluate_opened": false,
+  "execution_mode": "FIT_ONLY_INITIAL",
+  "evidence": {
+    "claude": null,
+    "consejo": null,
+    "fit_budget_measurement": null,
+    "independent_audit": null
+  },
+  "input_completion": null,
+  "input_output_root": null,
+  "input_plan": null,
+  "objective": {
+    "boundary_tolerance_cm": null,
+    "boundary_metrics_status": "DEFERRED_BEFORE_SELECT",
+    "fit_score_aggregation": "SUM_OWNED_QUERY_LOSS_PER_PERSON_THEN_MEAN_COMPONENTS_THEN_MEAN_THREE_CASES",
+    "halo_policy": "VISIBLE_TO_PREDICTOR_EXCLUDED_FROM_LOSS_AND_FIT_SCORE",
+    "primary_loss": "SIX_STATE_CROSS_ENTROPY_WITHOUT_CLIPPING",
+    "query_ownership": "EACH_CORE_QUERY_EXACTLY_ONCE",
+    "secondary_metrics": [],
+    "state_order": [
+      "AA",
+      "AE",
+      "AN",
+      "EE",
+      "EN",
+      "NN"
+    ],
+    "training_loss_aggregation": "MEAN_CE_OVER_OBSERVED_CORE_QUERIES_PER_PERSON_THEN_MEAN_128_PEOPLE_PER_REGION_UPDATE",
+    "truth_support": "TRUTH_OBSERVED_AND_QUERY_VALID"
+  },
+  "optimization": {
+    "adam_state_precision": null,
+    "betas": [
+      0.9,
+      0.999
+    ],
+    "checkpoint_every_steps": null,
+    "eps": 1e-08,
+    "name": "Adam",
+    "optimizer_updates": null,
+    "stability_seeds": [
+      1701,
+      1702,
+      1703
+    ],
+    "stopping_rule": null,
+    "training_seeds": [
+      1701
+    ],
+    "weight_decay": 0.0
+  },
+  "recipe_domain": {
+    "attention_heads": 4,
+    "cnn_kernels": {
+      "0.05": [
+        3,
+        7
+      ],
+      "0.2": [
+        3,
+        21
+      ],
+      "1": [
+        3,
+        101
+      ]
+    },
+    "cw2_source": null,
+    "depth": 2,
+    "dropout": 0.0,
+    "ec_source": null,
+    "families": [
+      "lai_cnn",
+      "lai_local_attention"
+    ],
+    "learning_rate": {
+      "high": 0.001,
+      "log": true,
+      "low": 0.0001
+    },
+    "radii_cm": [
+      0.05,
+      0.2,
+      1.0
+    ],
+    "widths": [
+      32,
+      64
+    ]
+  },
+  "resources": {
+    "cpus": null,
+    "estimated_total_cost_usd": null,
+    "max_batch_bytes": null,
+    "measured_update_seconds": null,
+    "memory_bytes": null,
+    "threads": null
+  },
+  "roles": {
+    "FIT": "FOLD_A",
+    "SELECT": "FOLD_B"
+  },
+  "schema": "r02_lai_training_protocol_v2",
+  "scope": "DEVELOPMENT",
+  "selection": {
+    "evaluate_allowed": false,
+    "preserved_recipe_domain_only": true,
+    "select_metadata_bound": true,
+    "select_scoring_allowed": false,
+    "select_values_loaded": false,
+    "status": "DEFERRED_BEFORE_SELECT"
+  },
+  "training_unit": {
+    "fit_batch_order": "FIXED_CASE_THEN_REGION_CYCLE",
+    "fit_cases": 3,
+    "fit_loss_aggregation": "MEAN_CE_OVER_OBSERVED_QUERIES_PER_PERSON_THEN_MEAN_PEOPLE_PER_BATCH",
+    "regions_per_case": 16,
+    "select_cases": 3,
+    "selection_loss_aggregation": "QUERY_SUM_PER_PERSON_THEN_MEAN_COMPONENTS_THEN_MEAN_CASES_V2"
+  },
+  "campaign_budget": {
+    "budget_includes": [
+      "48_INITIAL_FIT_LOADS_PER_FIT",
+      "96_ADAM_UPDATES_PER_FIT",
+      "48_FINAL_FIT_SCORES_PER_FIT"
+    ],
+    "countdown_starts": "FIRST_SCIENTIFIC_TRAINING_LAUNCH",
+    "cpu_per_worker": 1,
+    "families": 2,
+    "fits": 10,
+    "memory_bytes_per_worker": 8589934592,
+    "conditions": 5,
+    "retries_reset_budget": false,
+    "select_scoring_included": false,
+    "shared_wall_seconds": 72000,
+    "workers": 2
+  }
+}
