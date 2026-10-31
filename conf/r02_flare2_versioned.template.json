@@ -1,0 +1,71 @@
+{
+  "schema": "r02_flare_versioned_config_v1",
+  "method": "FLARE2_CLUSTERED_PROCEDURE_ON_FLARE_0_6_0",
+  "flare_version": "0.6.0",
+  "chromosome": "2",
+  "ancestry_order": ["AFR", "EUR", "NAM"],
+  "n_ancestries": 3,
+  "model_fit_role": "FIT",
+  "evaluation_claim": "FIT_ONLY_TRANSDUCTIVE_MODEL_BUILD_NOT_EVALUATION",
+  "java_heap_mib": 8192,
+  "inputs": {
+    "reference_vcf": {"sha256": "REPLACE_WITH_64_HEX"},
+    "reference_index": {"sha256": "REPLACE_WITH_64_HEX"},
+    "target_vcf": {"sha256": "REPLACE_WITH_64_HEX"},
+    "target_index": {"sha256": "REPLACE_WITH_64_HEX"},
+    "direct_panel_map": {"sha256": "REPLACE_WITH_64_HEX"},
+    "fine_panel_map": {"sha256": "REPLACE_WITH_64_HEX"},
+    "panel_to_ancestry": {"sha256": "REPLACE_WITH_64_HEX"},
+    "genetic_map": {"sha256": "REPLACE_WITH_64_HEX"},
+    "excludemarkers": {"sha256": "REPLACE_WITH_64_HEX"},
+    "flare_jar": {"sha256": "REPLACE_WITH_64_HEX"},
+    "official_builder": {"sha256": "REPLACE_WITH_64_HEX"},
+    "seeded_builder": {"sha256": "REPLACE_WITH_64_HEX"},
+    "roles": {"sha256": "REPLACE_WITH_64_HEX"}
+  },
+  "shared_parameters": {
+    "array": false,
+    "min-maf": 0.0,
+    "min-mac": 0,
+    "gen": 10,
+    "seed": 1432575816,
+    "nthreads": 1
+  },
+  "stage_parameters": {
+    "direct": {"probs": true, "em": true, "update-p": false, "panel-probs": false},
+    "panel_probabilities": {"probs": false, "em": true, "update-p": false, "panel-probs": true},
+    "clustered_final": {"probs": true, "em": true, "update-p": true, "panel-probs": false}
+  },
+  "panel_probability_window": {
+    "panel_cm": 0.5,
+    "provenance": "FLARE_0_6_0_DEFAULT_AND_BROWNING_ET_AL_FLARE2_PROCEDURE",
+    "claim": "HISTORICAL_OR_PUBLISHED_SETTING_NOT_UNIVERSAL_OPTIMUM"
+  },
+  "gmm": {
+    "seed": 1432575816,
+    "n_init": 10,
+    "init_params": "k-means++",
+    "center_normalization_tolerance": 1e-8
+  },
+  "cluster_mapping": {
+    "source": "FIXED_REFERENCE_PANEL_MAP_ONLY",
+    "minimum_probability": 0.5,
+    "minimum_log_margin": 0.25,
+    "justification": "M35 truth-blind stopping gate reused prospectively; not optimized on TARGET truth and not asserted universal"
+  },
+  "flare_0_6_0_internal_pins": {
+    "panel-weight": 0.8,
+    "states": 100,
+    "ibs-step": 0.01,
+    "ibs-buffer": 2.0,
+    "ibs-haps": 4,
+    "ibs-recycle": 4.0,
+    "em-its": 20,
+    "em-haps": 100,
+    "delta-mu": 0.03,
+    "delta-p": 0.01,
+    "panel-markers": 10,
+    "panel-haps": 1000,
+    "panel-ne": 100000
+  }
+}

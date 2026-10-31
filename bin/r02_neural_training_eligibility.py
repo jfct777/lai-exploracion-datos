@@ -199,6 +199,14 @@ def require_contract_eligibility(contract):
     path = descriptor(spec, "joint neural eligibility manifest")
     receipt = read_json(path, spec["sha256"])
     if receipt.get("schema") == "r02_lai_factorized_training_eligibility_v1":
+        chromosome = str(contract.get("lai_chromosome", ""))
+        require(chromosome.isdigit() and 1 <= int(chromosome) <= 22
+                and chromosome == str(int(chromosome)),
+                "factorized LAI contract lacks one canonical autosome")
+        development_scope_path = descriptor(
+            receipt.get("development_scope"), "factorized LAI development scope")
+        development_scope = read_json(development_scope_path,
+                                      receipt["development_scope"]["sha256"])
         require(contract.get("objective") == "lai"
                 and set(receipt) == {"schema", "status", "protocol_id", "chromosome",
                                      "development_scope", "separation_request",
@@ -208,7 +216,10 @@ def require_contract_eligibility(contract):
                 and receipt["status"] ==
                     "ELIGIBLE_FOR_INITIAL_FIT_WITH_DEPENDENT_REALIZATIONS_SELECT_VALUES_CLOSED"
                 and receipt["protocol_id"] == "FOLD_A_TO_FOLD_B"
-                and receipt["chromosome"] == "22"
+                and str(receipt["chromosome"]) == chromosome
+                and development_scope.get("chromosome") == chromosome
+                and development_scope.get("protocol_id") == receipt["protocol_id"]
+                and development_scope.get("cases") == receipt["case_roles"]
                 and receipt["people_per_case"] == 128
                 and receipt["shared_donors"] is True
                 and receipt["select_values_loaded"] is False

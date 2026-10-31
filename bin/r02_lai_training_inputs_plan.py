@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Plan and bind LAI FIT/SELECT inputs without reading simulated ancestry.
 
-``plan`` closes the deterministic L1/L2 rules and enumerates the twelve cases
-of one reciprocal development direction.  It does not create genotype matrices
-or label a case ready when an exact marker catalogue or receipt is absent.
+``plan`` closes the deterministic L1/L2 rules and enumerates an authenticated,
+explicit case universe for one reciprocal development direction.  Omitting the
+case-universe arguments preserves the historical twelve-case route.  It does
+not create genotype matrices or label a case ready when an exact marker
+catalogue or receipt is absent.
 ``adapter-request`` and ``input-request`` create the two small authenticated
 requests after their upstream files exist.  The latter requires a separate,
 admitted control decision because this program does not implement controls.
@@ -58,6 +60,117 @@ def sha(path):
 
 def load(path):
     return json.loads(Path(path).read_text())
+
+
+CASE_IDENTITY_FIELDS = ("task_id", "case_id", "chromosome", "direction", "role")
+
+
+def case_identity(row, label):
+    require(isinstance(row, dict), f"{label} case must be an object")
+    identity = {key: row.get(key) for key in CASE_IDENTITY_FIELDS}
+    require(all(isinstance(identity[key], str) and identity[key]
+                for key in ("task_id", "case_id", "direction", "role")),
+            f"{label} case identity is incomplete")
+    identity["chromosome"] = str(identity["chromosome"])
+    require(identity["chromosome"] in {str(value) for value in range(1, 23)},
+            f"{label} chromosome is not an autosome")
+    require(identity["direction"] == DIRECTION, f"{label} direction differs")
+    require(identity["role"] in {"FIT", "SELECT"}, f"{label} role differs")
+    return identity
+
+
+def index_case_identities(rows, label):
+    identities = [case_identity(row, label) for row in rows]
+    by_task = {}
+    case_ids = set()
+    for identity in identities:
+        require(identity["task_id"] not in by_task, f"duplicate {label} task_id")
+        require(identity["case_id"] not in case_ids, f"duplicate {label} case_id")
+        by_task[identity["task_id"]] = identity
+        case_ids.add(identity["case_id"])
+    return by_task
+
+
+def exact_task_rows(rows, expected_by_task, label):
+    by_task = {}
+    for row in rows:
+        task_id = row.get("task_id")
+        require(isinstance(task_id, str) and task_id, f"{label} task_id is absent")
+        require(task_id not in by_task, f"duplicate {label} task_id")
+        by_task[task_id] = row
+    require(set(by_task) == set(expected_by_task),
+            f"{label} task set has missing or extra cases")
+    return by_task
+
+
+def validate_flare_registry(registry, expected_by_task, expanded):
+    accepted_statuses = {"COMPLETE_108_FITTED_MODELS_RANGE_VERIFIED"}
+    if expanded:
+        accepted_statuses.add("COMPLETE_FITTED_MODELS_RANGE_VERIFIED")
+    records = registry.get("records")
+    require(registry.get("status") in accepted_statuses
+            and isinstance(records, list) and records,
+            "FLARE fitted-model registry differs")
+    if not expanded:
+        require(len(records) == 108, "historical FLARE registry must contain 108 records")
+    identities = []
+    for row in records:
+        raw_initial_gen = row.get("initial_gen")
+        require(isinstance(raw_initial_gen, (str, int)) and str(raw_initial_gen),
+                "FLARE fitted-model identity is incomplete")
+        identity = (row.get("case_id"), str(raw_initial_gen),
+                    row.get("policy"), row.get("marker_condition"))
+        require(all(isinstance(value, str) and value for value in identity),
+                "FLARE fitted-model identity is incomplete")
+        identities.append(identity)
+    require(len(identities) == len(set(identities)),
+            "duplicate FLARE fitted-model identity")
+    require({identity[0] for identity in identities}
+            == {row["case_id"] for row in expected_by_task.values()},
+            "FLARE fitted-model registry case set differs")
+    return records
+
+
+def resolve_expected_cases(args, inventory):
+    """Bind the direction-specific inventory to an optional SHA-pinned universe."""
+    inventory_rows = [row for row in inventory.get("tasks", [])
+                      if row.get("direction") == DIRECTION]
+    inventory_by_task = index_case_identities(inventory_rows, "inventory")
+    expected_path = getattr(args, "expected_cases", None)
+    expected_sha = getattr(args, "expected_cases_sha256", None)
+    require(bool(expected_path) == bool(expected_sha),
+            "--expected-cases and --expected-cases-sha256 must be supplied together")
+    if not expected_path:
+        roles = [row["role"] for row in inventory_by_task.values()]
+        require(len(inventory_by_task) == 12 and roles.count("FIT") == 6
+                and roles.count("SELECT") == 6,
+                "historical direction must contain exactly six FIT and six SELECT cases")
+        return inventory_by_task, None
+
+    require(len(expected_sha) == 64 and all(char in "0123456789abcdef" for char in expected_sha),
+            "expected-case SHA-256 must be 64 lowercase hexadecimal characters")
+    expected_descriptor = recorded_file(expected_path, expected_sha)
+    manifest = load(expected_path)
+    require(manifest.get("schema") == "r02_lai_expected_case_universe_v1"
+            and manifest.get("status") == "EXACT_CASE_UNIVERSE_RECORDED_PREPARATION_ONLY"
+            and manifest.get("operation") == "PREPARE_ONLY_NO_TRAINING"
+            and manifest.get("direction") == DIRECTION
+            and manifest.get("training_authorized") is False
+            and manifest.get("selection_authorized") is False
+            and manifest.get("evaluate_opened") is False,
+            "expected-case universe is not the exact preparation-only specification")
+    expected_by_task = index_case_identities(manifest.get("cases", []), "expected")
+    require(expected_by_task, "expected-case universe is empty")
+    roles = {role: sum(row["role"] == role for row in expected_by_task.values())
+             for role in ("FIT", "SELECT")}
+    chromosomes = sorted({row["chromosome"] for row in expected_by_task.values()}, key=int)
+    require(manifest.get("case_count") == len(expected_by_task)
+            and manifest.get("role_counts") == roles
+            and [str(value) for value in manifest.get("chromosomes", [])] == chromosomes,
+            "expected-case counts, roles, or chromosomes differ from its explicit cases")
+    require(inventory_by_task == expected_by_task,
+            "inventory has missing, extra, or contradictory expected cases")
+    return expected_by_task, expected_descriptor
 
 
 def descriptor(path):
@@ -124,10 +237,11 @@ def build_plan(args):
     catalogue_receipt = load(args.catalogue_receipt) if args.catalogue_receipt else None
     flare_receipt_staging = load(args.flare_receipt_staging) if args.flare_receipt_staging else None
     require(inventory.get("schema") == "r02_lai_channel_input_inventory_v1", "inventory schema differs")
+    expected_by_task, expected_cases_source = resolve_expected_cases(args, inventory)
     require(fit_plan.get("schema") == "r02_lai_fit_statistics_plan_v1", "FIT statistics plan schema differs")
     require(reader.get("schema") == "r02_lai_regional_reader_plan_v1", "regional reader plan schema differs")
-    require(registry.get("status") == "COMPLETE_108_FITTED_MODELS_RANGE_VERIFIED"
-            and len(registry.get("records", [])) == 108, "FLARE fitted-model registry differs")
+    registry_records = validate_flare_registry(
+        registry, expected_by_task, expected_cases_source is not None)
     require(flare_decision.get("schema") == "r02_lai_flare_initialization_decision_cx_v1"
             and flare_decision.get("status") == "PROSPECTIVE_DESIGN_DECISION_REQUIRES_EXACT_EXISTING_INPUT_BINDING",
             "FLARE initialization decision differs")
@@ -136,37 +250,49 @@ def build_plan(args):
         require(catalogue_receipt.get("schema") == "r02_lai_common_event_catalogue_receipt_v1"
                 and catalogue_receipt.get("status") == "COMPLETE_AUTHENTICATED_COMMON_EVENT_CORE_CATALOGUES"
                 and catalogue_receipt.get("direction") == DIRECTION
-                and catalogue_receipt.get("tasks_complete") == 12
+                and catalogue_receipt.get("tasks_complete") == len(expected_by_task)
                 and catalogue_receipt.get("truth_read") is False
                 and catalogue_receipt.get("selection_performed") is False
                 and catalogue_receipt.get("evaluate_opened") is False,
                 "COMMON/EVENT/core catalogue receipt differs")
-        catalogues = {row["task_id"]: row for row in catalogue_receipt["tasks"]}
-        require(len(catalogues) == 12, "COMMON/EVENT/core receipt lacks tasks")
+        catalogues = exact_task_rows(catalogue_receipt.get("tasks", []), expected_by_task,
+                                     "COMMON/EVENT/core receipt")
     staged_flare_receipts = {}
     if flare_receipt_staging is not None:
+        accepted_staging_statuses = {"COMPLETE_12_PRIMARY_FLARE_RECEIPTS_AUTHENTICATED"}
+        if expected_cases_source is not None:
+            accepted_staging_statuses.add("COMPLETE_PRIMARY_FLARE_RECEIPTS_AUTHENTICATED")
         require(flare_receipt_staging.get("schema") == "r02_lai_flare_projection_receipt_staging_v1"
-                and flare_receipt_staging.get("status") == "COMPLETE_12_PRIMARY_FLARE_RECEIPTS_AUTHENTICATED"
+                and flare_receipt_staging.get("status") in accepted_staging_statuses
                 and flare_receipt_staging.get("direction") == DIRECTION
-                and flare_receipt_staging.get("tasks_complete") == 12
+                and flare_receipt_staging.get("tasks_complete") == len(expected_by_task)
                 and flare_receipt_staging.get("truth_read") is False
                 and flare_receipt_staging.get("selection_performed") is False,
                 "staged primary FLARE receipt inventory differs")
-        staged_flare_receipts = {row["task_id"]: row for row in flare_receipt_staging["tasks"]}
-    fit_units = {row["unit_id"]: row for row in fit_plan["logical_units"]
-                 if row["direction"] == DIRECTION}
-    reader_tasks = {row["task_id"]: row for row in reader["tasks"]
-                    if row["direction"] == DIRECTION
-                    and {key: str(value) for key, value in row["flare_identity"].items()} == PRIMARY_FLARE}
+        staged_flare_receipts = exact_task_rows(flare_receipt_staging.get("tasks", []),
+                                                expected_by_task, "staged FLARE receipt")
+    fit_rows = [row | {"task_id": row.get("unit_id"), "role": row.get("target_role")}
+                for row in fit_plan["logical_units"]
+                if row["direction"] == DIRECTION]
+    fit_units = exact_task_rows(fit_rows, expected_by_task, "FIT plan")
+    require(index_case_identities(fit_rows, "FIT plan") == expected_by_task,
+            "FIT plan has contradictory case identities")
+    reader_rows = [row for row in reader["tasks"]
+                   if row["direction"] == DIRECTION
+                   and {key: str(value) for key, value in row["flare_identity"].items()} == PRIMARY_FLARE]
+    reader_tasks = exact_task_rows(reader_rows, expected_by_task, "reader plan")
+    require(index_case_identities(reader_rows, "reader plan") == expected_by_task,
+            "reader plan has contradictory case identities")
     tasks = []
     for item in inventory["tasks"]:
         if item["direction"] != DIRECTION:
             continue
         task_id = item["task_id"]
-        require(task_id in fit_units and task_id in reader_tasks, "case is absent from FIT or reader plan")
+        require(case_identity(item, "inventory") == expected_by_task[task_id],
+                "inventory case contradicts expected identity")
         require(item["role"] == fit_units[task_id]["target_role"], "FIT/SELECT role differs")
         primary = choose_flare(item["available"]["flare_projection_alternatives"], "10")
-        model_records = [row for row in registry["records"]
+        model_records = [row for row in registry_records
                          if row["case_id"] == item["case_id"] and row["initial_gen"] == 10
                          and row["policy"] == "ALL"
                          and row["marker_condition"] == "BASELINE_EXCLUDING_EVALUATED_DNABR_RARE"]
@@ -259,9 +385,8 @@ def build_plan(args):
             "product_requests": missing,
             "status": "CATALOGUES_COMPLETE_REGIONAL_BATCH_PENDING" if catalogue_receipt else "RULES_FIXED_PRODUCTS_NOT_MATERIALIZED",
         })
-    require(len(tasks) == 12 and sum(t["role"] == "FIT" for t in tasks) == 6
-            and sum(t["role"] == "SELECT" for t in tasks) == 6,
-            "one A-to-B direction must contain six FIT and six SELECT cases")
+    built_by_task = index_case_identities(tasks, "built plan")
+    require(built_by_task == expected_by_task, "built plan case universe differs")
     result = {
         "schema": "r02_lai_training_inputs_plan_v1",
         "status": "CATALOGUES_COMPLETE_REGIONAL_BATCH_PENDING" if catalogue_receipt else "RULES_FIXED_PRODUCTS_NOT_MATERIALIZED",
@@ -275,7 +400,9 @@ def build_plan(args):
                 "catalogue": "EXACT_ORDERED_MARKER_IDENTITIES_CONSUMED_BY_EACH_PRIMARY_FLARE_RUN",
                 "primary_flare_identity": PRIMARY_FLARE,
                 "counted_allele": "ALT",
-                "fit_frequency": "ALT_AC_DIVIDED_BY_CALLED_DIPLOID_ALT_AN_IN_THE_SIX_A_FIT_CASES",
+                "fit_frequency": ("ALT_AC_DIVIDED_BY_CALLED_DIPLOID_ALT_AN_IN_THE_SIX_A_FIT_CASES"
+                                  if expected_cases_source is None else
+                                  "ALT_AC_DIVIDED_BY_CALLED_DIPLOID_ALT_AN_IN_THE_DECLARED_FIT_CASES"),
                 "extra_frequency_filter": None,
                 "reason": "The network and FLARE receive the same marker information; marker availability does not redefine the DNABR rare catalogue.",
             },
@@ -311,6 +438,8 @@ def build_plan(args):
             "reader_plan": descriptor(args.reader_plan),
             "flare_decision": descriptor(args.flare_decision),
             "flare_registry": descriptor(args.flare_registry),
+            **({"expected_case_universe": expected_cases_source}
+               if expected_cases_source is not None else {}),
             **({"common_event_core_catalogue_receipt": descriptor(args.catalogue_receipt)}
                if args.catalogue_receipt else {}),
             **({"flare_projection_receipt_staging": descriptor(args.flare_receipt_staging)}
@@ -819,6 +948,8 @@ def main():
     p.add_argument("--inventory", required=True); p.add_argument("--fit-plan", required=True)
     p.add_argument("--reader-plan", required=True); p.add_argument("--flare-decision", required=True)
     p.add_argument("--flare-registry", required=True)
+    p.add_argument("--expected-cases")
+    p.add_argument("--expected-cases-sha256")
     p.add_argument("--catalogue-receipt")
     p.add_argument("--flare-receipt-staging")
     p.add_argument("--output", required=True); p.add_argument("--case-manifest-output")

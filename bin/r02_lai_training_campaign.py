@@ -15,10 +15,16 @@ import json
 import math
 from pathlib import Path
 import re
+import time
 
 
 PROTOCOL_SCHEMA = "r02_lai_training_protocol_v2"
+FIRST_UPDATE_PROTOCOL_SCHEMA = "r02_lai_first_retained_update_protocol_v1"
 EVIDENCE_SCHEMA = "r02_lai_training_admission_evidence_v1"
+FIRST_UPDATE_EVIDENCE_SCHEMA = "r02_lai_first_update_admission_evidence_v1"
+FIRST_UPDATE_EXECUTION_BUDGET_SCHEMA = "r02_lai_first_update_execution_budget_v1"
+REPAIR_EXECUTION_BUDGET_SCHEMA = "r02_lai_repair_same_fit_execution_budget_v1"
+RECONSTRUCTION_EXECUTION_LIMIT_SCHEMA = "r02_lai_reconstruction_execution_limit_v2"
 TRAIN_LINK_SCHEMA = "r02_lai_factorized_training_link_receipt_v1"
 TRAIN_LINK_STATUS = "FACTORIZED_LINK_BOUND_TO_AUTHENTICATED_TRAINING_PROTOCOL"
 SELECT_MANIFEST_SCHEMA = "r02_lai_training_selection_manifest_v1"
@@ -100,6 +106,23 @@ def _validate_evidence(protocol, decision_sha256):
     if protocol["scope"] == "SYNTHETIC_CODE_TEST":
         require(evidence == {}, "synthetic protocol cannot claim scientific review")
         return
+    if protocol["schema"] == FIRST_UPDATE_PROTOCOL_SCHEMA:
+        expected = {"council_root": "COUNCIL_ROOT_DECISION",
+                    "claude": "CLAUDE_EXTERNAL_REVIEW"}
+        require(set(evidence) == set(expected),
+                "first-update protocol requires root and external review records")
+        for name, role in expected.items():
+            record = read_json(descriptor(evidence[name], name + " evidence"),
+                               evidence[name]["sha256"])
+            require(set(record) == {"schema", "role", "scope", "outcome",
+                                    "decision_sha256", "evaluate_opened"}
+                    and record["schema"] == FIRST_UPDATE_EVIDENCE_SCHEMA
+                    and record["role"] == role and record["scope"] == "DEVELOPMENT"
+                    and record["outcome"] == "ADMIT_TWO_FIRST_RETAINED_UPDATES"
+                    and record["decision_sha256"] == decision_sha256
+                    and record["evaluate_opened"] is False,
+                    f"{name} evidence does not admit this exact first-update decision")
+        return
     require(set(evidence) == {"consejo", "claude", "independent_audit", "fit_budget_measurement"},
             "development protocol requires four authenticated evidence records")
     expected = {
@@ -123,12 +146,15 @@ def _validate_evidence(protocol, decision_sha256):
 
 
 def validate_protocol_value(protocol):
-    fields = {"schema", "scope", "execution_mode", "direction", "chromosome", "roles", "conditions",
+    common_fields = {"schema", "scope", "execution_mode", "direction", "chromosome", "roles", "conditions",
               "evaluate_opened", "objective", "training_unit", "recipe_domain",
               "optimization", "selection", "resources", "input_plan",
               "input_output_root", "input_completion", "campaign_budget", "evidence"}
+    first_update = (isinstance(protocol, dict)
+                    and protocol.get("schema") == FIRST_UPDATE_PROTOCOL_SCHEMA)
+    fields = common_fields
     require(isinstance(protocol, dict) and set(protocol) == fields
-            and protocol["schema"] == PROTOCOL_SCHEMA,
+            and protocol["schema"] in {PROTOCOL_SCHEMA, FIRST_UPDATE_PROTOCOL_SCHEMA},
             "training protocol fields/schema differ")
     require(protocol["scope"] in {"SYNTHETIC_CODE_TEST", "DEVELOPMENT"},
             "unknown training protocol scope")
@@ -136,10 +162,12 @@ def validate_protocol_value(protocol):
             and (protocol["scope"] != "DEVELOPMENT" or
                  protocol["execution_mode"] == FIT_ONLY_INITIAL),
             "human DEVELOPMENT currently permits only FIT_ONLY_INITIAL")
+    chromosome = str(protocol.get("chromosome"))
     require(protocol["direction"] == "FOLD_A_TO_FOLD_B"
-            and protocol["chromosome"] == "22"
+            and chromosome.isdigit() and 1 <= int(chromosome) <= 22
+            and chromosome == str(int(chromosome))
             and protocol["roles"] == {"FIT": "FOLD_A", "SELECT": "FOLD_B"},
-            "current campaign is chr22 FOLD_A_TO_FOLD_B only")
+            "current campaign requires one canonical autosome and FOLD_A_TO_FOLD_B")
     require(protocol["conditions"] == list(CONDITIONS)
             and protocol["evaluate_opened"] is False,
             "five ordered conditions required and EVALUATE must remain closed")
@@ -149,33 +177,38 @@ def validate_protocol_value(protocol):
                 and protocol["input_output_root"] is None,
                 "synthetic code test cannot claim the human PREPARE completion")
     else:
-        completion = read_json(descriptor(completion_spec, "chr22 PREPARE completion"),
+        completion = read_json(descriptor(completion_spec, "chromosome PREPARE completion"),
                                completion_spec["sha256"])
-        require(completion.get("schema") ==
-                    "r02_lai_factorized_chr22_prepare_completion_v2"
+        valid_completion_schema = (
+            completion.get("schema") ==
+                "r02_lai_factorized_chromosome_prepare_completion_v1" or
+            (chromosome == "22" and completion.get("schema") ==
+                "r02_lai_factorized_chr22_prepare_completion_v2"))
+        require(valid_completion_schema
                 and completion.get("status") == "PREPARE_COMPLETE_NO_TRAIN_NO_EVALUATE"
                 and completion.get("predictors") == 576
                 and completion.get("links") == 2880
                 and completion.get("combined_condition_batches") == 0
-                and completion.get("chromosomes") == ["22"]
+                and completion.get("chromosomes") == [chromosome]
                 and completion.get("training_started") is False
                 and completion.get("evaluate_opened") is False
                 and completion.get("publication_layout") ==
                     "predictors/ID/prepared and links/ID/linked"
                 and completion.get("verification") ==
                     "ALL_NESTED_PREDICTOR_BATCH_AND_REQUEST_HASHES_AND_FIVE_LINK_IDENTITIES_MATCH",
-                "DEVELOPMENT requires the verified 576-predictor/2880-link chr22 completion v2")
+                "DEVELOPMENT requires the verified 576-predictor/2880-link completion for its chromosome")
         plan_spec = protocol["input_plan"]
         plan = read_json(descriptor(plan_spec, "factorized PREPARE plan"),
                          plan_spec["sha256"])
-        chr22_predictors = [row for row in plan.get("predictors", [])
-                            if str(row.get("chromosome")) == "22"]
-        chr22_links = [row for row in plan.get("links", [])
-                       if str(row.get("chromosome")) == "22"]
+        chromosome_predictors = [row for row in plan.get("predictors", [])
+                                 if str(row.get("chromosome")) == chromosome]
+        chromosome_links = [row for row in plan.get("links", [])
+                            if str(row.get("chromosome")) == chromosome]
         require(plan.get("conditions") == list(CONDITIONS)
                 and plan.get("evaluate_opened") is False
-                and len(chr22_predictors) == 576 and len(chr22_links) == 2880,
-                "factorized PREPARE plan lacks the exact chr22 five-condition inventory")
+                and len(chromosome_predictors) == 576
+                and len(chromosome_links) == 2880,
+                "factorized PREPARE plan lacks the exact chromosome five-condition inventory")
         output_root = Path(protocol["input_output_root"])
         require(output_root.is_absolute()
                 and Path(completion_spec["path"]).resolve() ==
@@ -293,35 +326,58 @@ def validate_protocol_value(protocol):
                 "selection rule or complete recipe inventory differs")
 
     resources = protocol["resources"]
-    require(set(resources) == {"threads", "max_batch_bytes", "memory_bytes", "cpus",
-                               "measured_update_seconds", "estimated_total_cost_usd"}
+    resource_fields = ({"threads", "max_batch_bytes", "memory_bytes", "cpus"}
+                       if first_update else
+                       {"threads", "max_batch_bytes", "memory_bytes", "cpus",
+                        "measured_update_seconds", "estimated_total_cost_usd"})
+    require(set(resources) == resource_fields
             and type(resources["threads"]) is int and 1 <= resources["threads"] <= 8
             and type(resources["max_batch_bytes"]) is int and resources["max_batch_bytes"] > 0
             and type(resources["memory_bytes"]) is int
             and resources["memory_bytes"] >= resources["max_batch_bytes"]
             and type(resources["cpus"]) is int and resources["cpus"] >= resources["threads"]
-            and type(resources["measured_update_seconds"]) in (int, float)
-            and math.isfinite(resources["measured_update_seconds"])
-            and resources["measured_update_seconds"] > 0
-            and type(resources["estimated_total_cost_usd"]) in (int, float)
-            and math.isfinite(resources["estimated_total_cost_usd"])
-            and resources["estimated_total_cost_usd"] >= 0,
+            and (first_update or
+                 (type(resources["measured_update_seconds"]) in (int, float)
+                  and math.isfinite(resources["measured_update_seconds"])
+                  and resources["measured_update_seconds"] > 0
+                  and type(resources["estimated_total_cost_usd"]) in (int, float)
+                  and math.isfinite(resources["estimated_total_cost_usd"])
+                  and resources["estimated_total_cost_usd"] >= 0)),
             "measured resource and cost fields are incomplete")
 
     campaign_budget = protocol["campaign_budget"]
-    if protocol["execution_mode"] == FIT_ONLY_INITIAL:
+    if first_update:
         require(campaign_budget == {
-            "fits": 10, "families": 2, "conditions": 5,
-            "workers": 2, "cpu_per_worker": 1,
-            "memory_bytes_per_worker": 8589934592,
-            "shared_wall_seconds": 72000,
-            "countdown_starts": "FIRST_SCIENTIFIC_TRAINING_LAUNCH",
-            "retries_reset_budget": False,
-            "budget_includes": ["48_INITIAL_FIT_LOADS_PER_FIT",
-                                "96_ADAM_UPDATES_PER_FIT",
-                                "48_FINAL_FIT_SCORES_PER_FIT"],
-            "select_scoring_included": False,
-        }, "FIT_ONLY_INITIAL shared campaign budget differs")
+                    "status": "PENDING_FIRST_RETAINED_UPDATE_MEASUREMENT",
+                    "fits": 10, "optimizer_updates_per_fit": 96,
+                    "full_wall_seconds": None, "full_cost_usd": None},
+                "first-update protocol must not invent a full campaign budget")
+        require(resources == {"threads": 1, "max_batch_bytes": 350925967,
+                              "memory_bytes": 8589934592, "cpus": 1},
+                "first-update measured input bound or hard resources differ")
+    elif protocol["execution_mode"] == FIT_ONLY_INITIAL:
+        require(isinstance(campaign_budget, dict)
+                and set(campaign_budget) == {
+                    "fits", "families", "conditions", "workers", "cpu_per_worker",
+                    "memory_bytes_per_worker", "shared_wall_seconds", "countdown_starts",
+                    "retries_reset_budget", "budget_includes", "select_scoring_included"}
+                and campaign_budget["fits"] == 10
+                and campaign_budget["families"] == 2
+                and campaign_budget["conditions"] == 5
+                and type(campaign_budget["workers"]) is int
+                and campaign_budget["workers"] >= 1
+                and campaign_budget["cpu_per_worker"] == resources["cpus"]
+                and campaign_budget["memory_bytes_per_worker"] == resources["memory_bytes"]
+                and type(campaign_budget["shared_wall_seconds"]) is int
+                and campaign_budget["shared_wall_seconds"] > 0
+                and campaign_budget["countdown_starts"] ==
+                    "FIRST_SCIENTIFIC_TRAINING_LAUNCH"
+                and campaign_budget["retries_reset_budget"] is False
+                and campaign_budget["budget_includes"] == [
+                    "48_INITIAL_FIT_LOADS_PER_FIT", "96_ADAM_UPDATES_PER_FIT",
+                    "48_FINAL_FIT_SCORES_PER_FIT"]
+                and campaign_budget["select_scoring_included"] is False,
+                "FIT_ONLY_INITIAL shared campaign budget differs")
     else:
         require(campaign_budget is None,
                 "synthetic full protocol cannot claim the human shared budget")
@@ -329,6 +385,227 @@ def validate_protocol_value(protocol):
     decision_sha256 = digest(decision_payload(protocol))
     _validate_evidence(protocol, decision_sha256)
     return protocol, decision_sha256
+
+
+def validate_first_update_execution_budget(path, expected_sha, protocol_spec,
+                                           contract_sha256, resolved_sha256, family,
+                                           expected_condition=None):
+    """Authorize a bounded stage without changing the scientific checkpoint identity."""
+    budget = read_json(path, expected_sha)
+    common = {"schema", "stage", "protocol", "contract", "resolved", "family",
+              "condition", "seed", "workers", "cpu_per_worker",
+              "memory_bytes_per_worker", "people_per_microbatch",
+              "stop_after_steps", "checkpoint_only", "select_values_loaded",
+              "evaluate_opened", "shared_wall_seconds", "retries_reset_budget",
+              "scientific_ceiling_updates", "same_contract_required_for_continuation",
+              "deadline_epoch_seconds", "accumulated_wall_seconds", "accumulated_cost"}
+    require(budget.get("schema") == FIRST_UPDATE_EXECUTION_BUDGET_SCHEMA
+            and budget.get("protocol") == protocol_spec
+            and budget.get("contract") == contract_sha256
+            and budget.get("resolved") == resolved_sha256
+            and budget.get("family") == family in FAMILIES
+            and budget.get("condition") in CONDITIONS
+            and (expected_condition is None or
+                 budget.get("condition") == expected_condition in CONDITIONS)
+            and budget.get("seed") == 1701
+            and budget.get("workers") == 1 and budget.get("cpu_per_worker") == 1
+            and budget.get("memory_bytes_per_worker") == 8589934592
+            and budget.get("people_per_microbatch") == 8
+            and budget.get("select_values_loaded") is False
+            and budget.get("evaluate_opened") is False
+            and type(budget.get("shared_wall_seconds")) is int
+            and budget["shared_wall_seconds"] > 0
+            and budget.get("retries_reset_budget") is False
+            and budget.get("scientific_ceiling_updates") == 96
+            and budget.get("same_contract_required_for_continuation") is True
+            and type(budget.get("deadline_epoch_seconds")) in (int, float)
+            and math.isfinite(budget["deadline_epoch_seconds"])
+            and budget["deadline_epoch_seconds"] > time.time()
+            and type(budget.get("accumulated_wall_seconds")) in (int, float)
+            and math.isfinite(budget["accumulated_wall_seconds"])
+            and budget["accumulated_wall_seconds"] >= 0
+            and isinstance(budget.get("accumulated_cost"), dict)
+            and budget["accumulated_cost"].get("kind") in {
+                "UNKNOWN_SHARED_VM_MARGINAL_COST", "ESTIMATED_ALLOCATED_REFERENCE"}
+            and ((budget["accumulated_cost"]["kind"] == "UNKNOWN_SHARED_VM_MARGINAL_COST"
+                  and budget["accumulated_cost"].get("usd") is None)
+                 or (budget["accumulated_cost"]["kind"] == "ESTIMATED_ALLOCATED_REFERENCE"
+                     and type(budget["accumulated_cost"].get("usd")) in (int, float)
+                     and math.isfinite(budget["accumulated_cost"]["usd"])
+                     and budget["accumulated_cost"]["usd"] >= 0)),
+            "execution budget differs from the exact contract-bound stage")
+    if budget["stage"] == "FIRST_RETAINED_UPDATE_MEASUREMENT":
+        require(set(budget) == common | {"fits", "fit_scoring_performed", "reference_hourly_cost_usd"}
+                and budget["fits"] == 1 and budget["stop_after_steps"] == 1
+                and budget["checkpoint_only"] is True
+                and budget["fit_scoring_performed"] is False
+                and (budget["reference_hourly_cost_usd"] is None
+                     or (type(budget["reference_hourly_cost_usd"]) in (int, float)
+                         and math.isfinite(budget["reference_hourly_cost_usd"])
+                         and budget["reference_hourly_cost_usd"] >= 0))
+                and budget["shared_wall_seconds"] == 7200
+                and budget["shared_wall_seconds"] <=
+                    budget["deadline_epoch_seconds"] - time.time() + 1
+                and budget["accumulated_wall_seconds"] == 0
+                and budget["accumulated_cost"] in (
+                    {"kind": "UNKNOWN_SHARED_VM_MARGINAL_COST", "usd": None},
+                    {"kind": "ESTIMATED_ALLOCATED_REFERENCE", "usd": 0}),
+                "first-update execution budget differs")
+    elif budget["stage"] == "CONTINUE_SAME_CONTRACT_TO_SCIENTIFIC_CEILING":
+        require(set(budget) == common | {"first_update_measurement", "fit_scoring_performed"}
+                and budget["stop_after_steps"] is None
+                and budget["checkpoint_only"] is False
+                and budget["fit_scoring_performed"] is True,
+                "continuation execution budget differs")
+        measurement_spec = budget["first_update_measurement"]
+        measurement = read_json(descriptor(measurement_spec, "first update measurement"),
+                                measurement_spec["sha256"])
+        receipt_spec = measurement.get("receipt")
+        receipt = read_json(descriptor(receipt_spec, "first retained update receipt"),
+                            receipt_spec["sha256"])
+        elapsed = measurement.get("elapsed_wall_seconds")
+        cost = measurement.get("cost")
+        deadline = budget.get("deadline_epoch_seconds")
+        require(measurement.get("schema") == "r02_lai_chr1_first_retained_update_v2"
+                and measurement.get("contract_sha256") == contract_sha256
+                and measurement.get("resolved_sha256") == resolved_sha256
+                and type(elapsed) in (int, float) and math.isfinite(elapsed) and elapsed > 0
+                and isinstance(cost, dict)
+                and cost.get("kind") in {"UNKNOWN_SHARED_VM_MARGINAL_COST",
+                                         "ESTIMATED_ALLOCATED_REFERENCE"}
+                and ((cost["kind"] == "UNKNOWN_SHARED_VM_MARGINAL_COST" and cost.get("usd") is None)
+                     or (cost["kind"] == "ESTIMATED_ALLOCATED_REFERENCE"
+                         and type(cost.get("usd")) in (int, float)
+                         and math.isfinite(cost["usd"]) and cost["usd"] >= 0))
+                and isinstance(measurement.get("cgroup"), dict)
+                and type(measurement["cgroup"].get("memory_peak_bytes")) is int
+                and measurement["cgroup"]["memory_peak_bytes"] > 0
+                and receipt.get("status") == "FIT_CHECKPOINT_ONLY"
+                and receipt.get("contract_sha256") == contract_sha256
+                and receipt.get("resolved_sha256") == resolved_sha256
+                and receipt.get("steps") == 1
+                and receipt.get("frozen_training_ceiling_steps") == 96
+                and receipt.get("fit_scoring_performed") is False
+                and receipt.get("select_accessed") is False
+                and budget["accumulated_wall_seconds"] >= elapsed
+                and budget["accumulated_cost"]["kind"] == cost["kind"]
+                and (cost["usd"] is None or budget["accumulated_cost"]["usd"] >= cost["usd"]),
+                "continuation does not bind a live cumulative budget and authenticated first update")
+    else:
+        raise ValueError("unknown execution-budget stage")
+    return budget
+
+
+def validate_repair_execution_budget(path, expected_sha, protocol_spec,
+                                     contract_sha256, resolved_sha256, family,
+                                     expected_condition=None):
+    """Admit one new 96-update FIT repair from zero using historical resources only."""
+    budget = read_json(path, expected_sha)
+    fields = {"schema", "stage", "protocol", "contract", "resolved", "family",
+              "condition", "seed", "workers", "campaign_parallel_workers",
+              "cpu_per_worker", "memory_bytes_per_worker", "people_per_microbatch",
+              "stop_after_steps", "checkpoint_only", "fit_scoring_performed",
+              "select_values_loaded", "evaluate_opened", "max_task_wall_seconds",
+              "retries_reset_budget", "scientific_ceiling_updates", "starts_from_zero",
+              "checkpoint_reuse", "current_contract_first_update_measurement",
+              "resource_basis"}
+    require(set(budget) == fields
+            and budget.get("schema") == REPAIR_EXECUTION_BUDGET_SCHEMA
+            and budget.get("stage") == "REPAIR_SAME_FIT_FULL_BUDGET"
+            and budget.get("protocol") == protocol_spec
+            and budget.get("contract") == contract_sha256
+            and budget.get("resolved") == resolved_sha256
+            and budget.get("family") == family in FAMILIES
+            and budget.get("condition") in CONDITIONS
+            and (expected_condition is None or
+                 budget.get("condition") == expected_condition in CONDITIONS)
+            and budget.get("seed") == 1701
+            and budget.get("workers") == 1 and budget.get("campaign_parallel_workers") == 2
+            and budget.get("cpu_per_worker") == 1
+            and budget.get("memory_bytes_per_worker") == 8589934592
+            and budget.get("people_per_microbatch") == 8
+            and budget.get("stop_after_steps") is None
+            and budget.get("checkpoint_only") is False
+            and budget.get("fit_scoring_performed") is True
+            and budget.get("select_values_loaded") is False
+            and budget.get("evaluate_opened") is False
+            and budget.get("max_task_wall_seconds") == 43200
+            and budget.get("retries_reset_budget") is False
+            and budget.get("scientific_ceiling_updates") == 96
+            and budget.get("starts_from_zero") is True
+            and budget.get("checkpoint_reuse") is False
+            and budget.get("current_contract_first_update_measurement") is None,
+            "repair execution budget differs from the exact fresh 96-update FIT stage")
+    basis_spec = budget["resource_basis"]
+    basis = read_json(descriptor(basis_spec, "historical resource basis"), basis_spec["sha256"])
+    require(set(basis) == {"schema", "evidence_role", "family", "historical_contract",
+                           "historical_receipt", "trace", "trace_task"}
+            and basis.get("schema") == "r02_lai_repair_resource_basis_v1"
+            and basis.get("evidence_role") ==
+                "HISTORICAL_RESOURCE_ENVELOPE_ONLY_DIFFERENT_CONTRACT"
+            and basis.get("family") == family,
+            "repair resource evidence is not explicitly historical and family-matched")
+    old_contract_spec = basis["historical_contract"]
+    old_contract = read_json(descriptor(old_contract_spec, "historical contract"),
+                             old_contract_spec["sha256"])
+    old_receipt_spec = basis["historical_receipt"]
+    old_receipt = read_json(descriptor(old_receipt_spec, "historical receipt"),
+                            old_receipt_spec["sha256"])
+    require(old_contract_spec["sha256"] != contract_sha256
+            and old_contract.get("objective") == "lai" and old_contract.get("steps") == 96
+            and old_receipt.get("contract_sha256") == old_contract_spec["sha256"]
+            and old_receipt.get("resolved_sha256") == resolved_sha256
+            and old_receipt.get("status") == "FIT_CHECKPOINT"
+            and old_receipt.get("steps") == 96 and old_receipt.get("select_accessed") is False,
+            "resource basis is not a completed different-contract 96-update FIT")
+    trace_spec = basis["trace"]
+    trace_path = Path(descriptor(trace_spec, "historical Nextflow trace"))
+    require(sha(trace_path) == trace_spec["sha256"], "historical trace SHA-256 differs")
+    task = basis["trace_task"]
+    require(set(task) == {"name", "duration_seconds", "peak_rss_bytes"}
+            and type(task["duration_seconds"]) is int and 0 < task["duration_seconds"] < 43200
+            and type(task["peak_rss_bytes"]) is int
+            and 0 < task["peak_rss_bytes"] < 8589934592,
+            "historical task resource values exceed the repair envelope")
+    rows = trace_path.read_text().splitlines()
+    require(rows and "name" in rows[0].split("\t"), "historical trace header differs")
+    header = rows[0].split("\t")
+    observed = [dict(zip(header, row.split("\t"))) for row in rows[1:]
+                if len(row.split("\t")) == len(header)]
+    matched = [row for row in observed if row.get("name") == task["name"]]
+    require(len(matched) == 1 and matched[0].get("status") == "COMPLETED"
+            and matched[0].get("peak_rss") not in {None, "-"},
+            "historical completed task is absent from the pinned trace")
+    return budget
+
+
+def validate_reconstruction_execution_limit(path, expected_sha, contract_sha256,
+                                            family, condition):
+    """Preserve v18's measured source, reconstructed, and combined limits."""
+    value = read_json(path, expected_sha)
+    required = {"schema", "status", "metadata_scan", "contract_sha256_by_id",
+                "superseded_estimate", "max_factorized_source_bytes",
+                "max_reconstructed_join_bytes", "max_source_plus_reconstructed_bytes",
+                "memory_bytes", "derivation", "select_values_loaded", "evaluate_opened"}
+    require(set(value) == required and value.get("schema") == RECONSTRUCTION_EXECUTION_LIMIT_SCHEMA
+            and value.get("status") == "TECHNICAL_LIMITS_FROM_ALL_480_RECONSTRUCTED_FIT_LINK_HEADERS"
+            and value.get("memory_bytes") == 8589934592
+            and value.get("derivation") == "maximum over each link of factorized_source_bytes + reconstructed_join_bytes"
+            and value["max_source_plus_reconstructed_bytes"] < value["memory_bytes"]
+            and value.get("select_values_loaded") is False and value.get("evaluate_opened") is False,
+            "reconstruction execution limit differs")
+    scan_spec = value["metadata_scan"]
+    scan = read_json(descriptor(scan_spec, "factorized-source metadata scan"), scan_spec["sha256"])
+    require(scan.get("status") == "NPZ_NPY_HEADERS_ONLY_NO_ARRAY_BODY_OR_GENOTYPE_READ"
+            and scan.get("links_scanned") == 480
+            and scan.get("global_maximum_reconstructed", {}).get("reconstructed_join_bytes") == value["max_reconstructed_join_bytes"]
+            and scan.get("global_maximum_source_plus_reconstructed", {}).get("factorized_source_bytes") == value["max_factorized_source_bytes"]
+            and scan.get("global_maximum_source_plus_reconstructed", {}).get("source_plus_reconstructed_bytes") == value["max_source_plus_reconstructed_bytes"],
+            "reconstruction metadata evidence differs")
+    require(value["contract_sha256_by_id"].get(family + "." + condition) == contract_sha256,
+            "reconstruction limit is not bound to this exact contract")
+    return {key: value[key] for key in ("max_factorized_source_bytes",
+        "max_reconstructed_join_bytes", "max_source_plus_reconstructed_bytes")}
 
 
 @lru_cache(maxsize=16)
@@ -426,7 +703,9 @@ def _validate_training_receipt(entry, receipt, contract, resolved, stage, action
             and receipt["status"] == TRAIN_LINK_STATUS
             and receipt["request_sha256"] == entry["sha256"]
             and receipt["role"] == stage and receipt["direction"] == "FOLD_A_TO_FOLD_B"
-            and receipt["chromosome"] == "22" and receipt["evaluate_opened"] is False,
+            and str(receipt["chromosome"]) ==
+                str(contract.get("lai_chromosome", "22"))
+            and receipt["evaluate_opened"] is False,
             "training-link receipt identity differs")
     protocol_spec = contract.get("lai_training_protocol")
     require(protocol_spec == receipt["protocol"], "contract and training link use different protocols")
@@ -436,14 +715,44 @@ def _validate_training_receipt(entry, receipt, contract, resolved, stage, action
             and contract.get("information_condition") == receipt["condition"] in CONDITIONS,
             "training link condition or protocol decision differs")
     validate_resolved(protocol, resolved)
-    require(receipt["resolved_configuration_sha256"] == digest(resolved),
-            "training link resolved configuration differs")
+    _validate_runtime_only_resolved_amendment(
+        receipt["resolved_configuration_sha256"], contract, resolved)
     require(contract.get("steps") == protocol["optimization"]["optimizer_updates"]
             and contract.get("threads") == protocol["resources"]["threads"]
             and contract.get("limits", {}).get("max_batch_bytes") ==
                 protocol["resources"]["max_batch_bytes"],
             "contract budget/resources differ from authenticated protocol")
     return protocol
+
+
+def _validate_runtime_only_resolved_amendment(prepared_digest, contract, resolved):
+    """Authenticate the sole runtime-only EVENT mode added after PREPARE."""
+    if prepared_digest == digest(resolved):
+        return
+    amendment = contract.get("runtime_only_resolved_amendment")
+    required = {"schema", "added_field", "added_value", "source_resolved",
+                "source_resolved_configuration_sha256", "runtime_resolved",
+                "runtime_resolved_configuration_sha256",
+                "prepared_receipts_unchanged"}
+    require(isinstance(amendment, dict) and set(amendment) == required
+            and amendment.get("schema") ==
+                "r02_lai_runtime_only_resolved_amendment_v1"
+            and amendment.get("added_field") == "lai_common_context_mode"
+            and amendment.get("added_value") == "EVENT_QUERY_COMMON_KV_V1"
+            and amendment.get("prepared_receipts_unchanged") is True,
+            "runtime resolved amendment is absent or exceeds the admitted field")
+    source = read_json(descriptor(amendment["source_resolved"], "source resolved"),
+                       amendment["source_resolved"]["sha256"])
+    runtime = read_json(descriptor(amendment["runtime_resolved"], "runtime resolved"),
+                        amendment["runtime_resolved"]["sha256"])
+    expected_runtime = dict(source)
+    expected_runtime[amendment["added_field"]] = amendment["added_value"]
+    require(runtime == expected_runtime and resolved == runtime
+            and prepared_digest == digest(source) ==
+                amendment["source_resolved_configuration_sha256"]
+            and digest(runtime) ==
+                amendment["runtime_resolved_configuration_sha256"],
+            "prepared and runtime resolved recipes differ beyond the admitted mode")
 
 
 def _authenticate_source_prepare(receipt, protocol, resolved=None):
@@ -499,6 +808,8 @@ def validate_campaign_contract(contract):
                                     protocol_spec["sha256"])
     require(contract.get("objective") == "lai"
             and contract.get("scope") == protocol["scope"]
+            and str(contract.get("lai_chromosome", protocol["chromosome"])) ==
+                str(protocol["chromosome"])
             and contract.get("information_condition") in CONDITIONS
             and set(contract.get("batches", {})) == {"FIT", "SELECT"}
             and contract.get("steps") == protocol["optimization"]["optimizer_updates"]
@@ -516,19 +827,22 @@ def validate_campaign_contract(contract):
         plan_spec = protocol["input_plan"]
         plan = read_json(descriptor(plan_spec, "factorized PREPARE plan"),
                          plan_spec["sha256"])
+        chromosome = str(protocol["chromosome"])
         planned_links = {(row["predictor_id"], row["condition"]): row["link_id"]
-                         for row in plan["links"] if str(row["chromosome"]) == "22"}
+                         for row in plan["links"]
+                         if str(row["chromosome"]) == chromosome}
         planned_predictors = {row["predictor_id"]: row["request"]
                               for row in plan["predictors"]
-                              if str(row["chromosome"]) == "22"}
+                              if str(row["chromosome"]) == chromosome}
         planned_by_request = {
             (str(Path(spec["path"]).resolve()), spec["sha256"]): predictor_id
             for predictor_id, spec in planned_predictors.items()}
-        require(len(planned_links) == 2880, "chr22 plan link identities are not unique")
+        require(len(planned_links) == 2880,
+                "chromosome plan link identities are not unique")
         require(len(planned_predictors) == 576,
-                "chr22 plan predictor identities are not unique")
+                "chromosome plan predictor identities are not unique")
         require(len(planned_by_request) == 576,
-                "chr22 predictor request descriptors are not unique")
+                "chromosome predictor request descriptors are not unique")
     observed_cases = set()
     for stage in ("FIT", "SELECT"):
         entries = contract["batches"][stage]
@@ -551,7 +865,7 @@ def validate_campaign_contract(contract):
                     and receipt.get("role") == stage
                     and receipt.get("condition") == contract["information_condition"]
                     and receipt.get("direction") == "FOLD_A_TO_FOLD_B"
-                    and str(receipt.get("chromosome")) == "22"
+                    and str(receipt.get("chromosome")) == str(protocol["chromosome"])
                     and receipt.get("evaluate_opened") is False,
                     "campaign batch receipt differs from stage, condition, or protocol")
             source = _authenticate_source_prepare(receipt, protocol)
@@ -567,7 +881,7 @@ def validate_campaign_contract(contract):
                 require(predictor.get("task_id") == source["task_id"]
                         and predictor.get("case_id") == source["case_id"]
                         and predictor.get("role") == stage
-                        and str(predictor.get("chromosome")) == "22",
+                        and str(predictor.get("chromosome")) == str(protocol["chromosome"]),
                         "regional predictor request identity differs")
                 validate_case_reference_identity(
                     contract, source["case_id"], predictor.get("reference_identity"))
@@ -575,7 +889,8 @@ def validate_campaign_contract(contract):
             from r02_lai_neural_input import parse_case
             scenario, chromosome, donor_fold, replicate = parse_case(receipt["case_id"])
             expected_fold = "FOLD_A" if stage == "FIT" else "FOLD_B"
-            require(scenario == "PULSE_T10_ANCHOR" and chromosome == "22"
+            require(scenario == "PULSE_T10_ANCHOR"
+                    and chromosome == str(protocol["chromosome"])
                     and donor_fold == expected_fold and replicate in {1, 2, 3}
                     and re.fullmatch(r"region-(?:0[0-9]|1[0-5])", receipt["region_id"]),
                     f"{stage} case, realization, fold, or region differs")
@@ -605,7 +920,7 @@ def validate_loaded_training_link(data, entry, receipt, contract, resolved, stag
             "loaded training arrays differ from authenticated PREPARE reconstruction")
 
 
-def load_training_link(entry, contract, resolved, stage, *, max_uncompressed_bytes):
+def load_training_link(entry, contract, resolved, stage, *, max_reconstruction_bytes):
     receipt = read_json(entry["receipt_path"], entry["receipt_sha256"])
     protocol = _validate_training_receipt(entry, receipt, contract, resolved, stage, "TRAIN")
     _authenticate_source_prepare(receipt, protocol, resolved)
@@ -613,7 +928,7 @@ def load_training_link(entry, contract, resolved, stage, *, max_uncompressed_byt
     source_path = descriptor(source, "source PREPARE receipt")
     from r02_lai_neural_input import load_factorized_link
     return load_factorized_link(entry["path"], entry["sha256"], source_path,
-                                source["sha256"], max_uncompressed_bytes=max_uncompressed_bytes,
+                                source["sha256"], reconstruction_limits=max_reconstruction_bytes,
                                 action="PREPARE")
 
 
@@ -623,6 +938,8 @@ def create_training_link(request, request_sha256, source_receipt, source_receipt
     require(stage in {"FIT", "SELECT"} and condition in CONDITIONS,
             "unknown development role or condition")
     require(sha(request) == request_sha256, "factorized request differs")
+    protocol, decision_sha256 = validate_protocol(protocol_path, protocol_sha256)
+    chromosome = str(protocol["chromosome"])
     source = read_json(source_receipt, source_receipt_sha256)
     require(source.get("schema") == "r02_lai_regional_truth_factorized_link_receipt_v1"
             and source.get("status") ==
@@ -630,9 +947,9 @@ def create_training_link(request, request_sha256, source_receipt, source_receipt
             and source.get("request_sha256") == request_sha256
             and source.get("role") == stage and source.get("condition") == condition
             and source.get("direction") == "FOLD_A_TO_FOLD_B"
-            and str(source.get("chromosome")) == "22" and source.get("evaluate_opened") is False,
+            and str(source.get("chromosome")) == chromosome
+            and source.get("evaluate_opened") is False,
             "source PREPARE receipt does not match requested training unit")
-    protocol, decision_sha256 = validate_protocol(protocol_path, protocol_sha256)
     resolved = read_json(resolved_path, resolved_sha256)
     validate_resolved(protocol, resolved)
     receipt = {
@@ -643,7 +960,7 @@ def create_training_link(request, request_sha256, source_receipt, source_receipt
         "protocol": {"path": str(Path(protocol_path).resolve()), "sha256": protocol_sha256},
         "protocol_decision_sha256": decision_sha256,
         "resolved_configuration_sha256": digest(resolved),
-        "direction": "FOLD_A_TO_FOLD_B", "chromosome": "22", "role": stage,
+        "direction": "FOLD_A_TO_FOLD_B", "chromosome": chromosome, "role": stage,
         "condition": condition, "case_id": source["case_id"],
         "region_id": source["region_id"], "predictor_id": source["task_id"],
         "arrays": source["arrays"],
@@ -657,7 +974,10 @@ def create_training_link(request, request_sha256, source_receipt, source_receipt
 
 
 def execute(contract_path, contract_sha256, resolved_path, resolved_sha256, condition, seed,
-            output, checkpoint_dir=None, *, fit_only=False, stop_after_steps=None):
+            output, checkpoint_dir=None, *, fit_only=False, stop_after_steps=None,
+            lai_people_per_microbatch=None, checkpoint_only=False,
+            execution_budget=None, execution_budget_sha256=None,
+            reconstruction_limit=None, reconstruction_limit_sha256=None):
     from r02_context_train import read_json as read_pinned, train
     contract = read_pinned(contract_path, contract_sha256)
     resolved = read_pinned(resolved_path, resolved_sha256)
@@ -672,6 +992,32 @@ def execute(contract_path, contract_sha256, resolved_path, resolved_sha256, cond
             and contract.get("information_condition") == condition in CONDITIONS,
             "contract objective or information condition differs")
     allowed = protocol["optimization"]["training_seeds"]
+    legacy = contract["limits"]["max_batch_bytes"]
+    max_reconstruction_bytes = {"max_factorized_source_bytes": legacy,
+        "max_reconstructed_join_bytes": legacy,
+        "max_source_plus_reconstructed_bytes": 2 * legacy}
+    if protocol["schema"] == FIRST_UPDATE_PROTOCOL_SCHEMA:
+        require(execution_budget is not None and execution_budget_sha256 is not None,
+                "first-update execution requires a separate exact technical budget")
+        budget_value = read_json(execution_budget, execution_budget_sha256)
+        if budget_value.get("schema") == REPAIR_EXECUTION_BUDGET_SCHEMA:
+            stage = validate_repair_execution_budget(
+                execution_budget, execution_budget_sha256, protocol_spec,
+                contract_sha256, resolved_sha256, resolved.get("family"), condition)
+        else:
+            stage = validate_first_update_execution_budget(
+                execution_budget, execution_budget_sha256, protocol_spec,
+                contract_sha256, resolved_sha256, resolved.get("family"), condition)
+        require(reconstruction_limit is not None and reconstruction_limit_sha256 is not None,
+                "factorized execution requires an authenticated three-part reconstruction limit")
+        max_reconstruction_bytes = validate_reconstruction_execution_limit(
+            reconstruction_limit, reconstruction_limit_sha256, contract_sha256,
+            resolved.get("family"), condition)
+        require(condition == stage["condition"] and seed == stage["seed"]
+                and fit_only and stop_after_steps == stage["stop_after_steps"]
+                and lai_people_per_microbatch == stage["people_per_microbatch"]
+                and checkpoint_only is stage["checkpoint_only"],
+                "execution exceeds the exact contract-bound stage budget")
     if not fit_only:
         allowed = sorted(set(allowed + protocol["optimization"]["stability_seeds"]))
     require(seed in allowed, "seed is outside the authenticated campaign phase")
@@ -679,7 +1025,10 @@ def execute(contract_path, contract_sha256, resolved_path, resolved_sha256, cond
                  condition, seed, output, checkpoint_dir=checkpoint_dir,
                  checkpoint_every_steps=protocol["optimization"]["checkpoint_every_steps"],
                  adam_state_precision=protocol["optimization"]["adam_state_precision"],
-                 fit_only=fit_only, stop_after_steps=stop_after_steps)
+                 fit_only=fit_only, stop_after_steps=stop_after_steps,
+                 lai_people_per_microbatch=lai_people_per_microbatch,
+                 checkpoint_only=checkpoint_only,
+                 max_reconstruction_bytes=max_reconstruction_bytes)
 
 
 def select(manifest_path, manifest_sha256, output):
@@ -777,6 +1126,10 @@ def main(argv=None):
         run.add_argument("--" + name.replace("_", "-"), required=True)
     run.add_argument("--checkpoint-dir"); run.add_argument("--fit-only", action="store_true")
     run.add_argument("--stop-after-steps", type=int)
+    run.add_argument("--lai-people-per-microbatch", type=int)
+    run.add_argument("--checkpoint-only", action="store_true")
+    run.add_argument("--execution-budget"); run.add_argument("--execution-budget-sha256")
+    run.add_argument("--reconstruction-limit"); run.add_argument("--reconstruction-limit-sha256")
     choose = commands.add_parser("select")
     choose.add_argument("--manifest", required=True); choose.add_argument("--manifest-sha256", required=True)
     choose.add_argument("--output", required=True)
@@ -788,7 +1141,13 @@ def main(argv=None):
     elif args.command == "execute":
         value = execute(args.contract, args.contract_sha256, args.resolved, args.resolved_sha256,
                         args.condition, int(args.seed), args.output, args.checkpoint_dir,
-                        fit_only=args.fit_only, stop_after_steps=args.stop_after_steps)
+                        fit_only=args.fit_only, stop_after_steps=args.stop_after_steps,
+                        lai_people_per_microbatch=args.lai_people_per_microbatch,
+                        checkpoint_only=args.checkpoint_only,
+                        execution_budget=args.execution_budget,
+                        execution_budget_sha256=args.execution_budget_sha256,
+                        reconstruction_limit=args.reconstruction_limit,
+                        reconstruction_limit_sha256=args.reconstruction_limit_sha256)
     else:
         value = select(args.manifest, args.manifest_sha256, args.output)
     print(json.dumps(value, sort_keys=True))

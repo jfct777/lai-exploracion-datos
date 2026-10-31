@@ -253,7 +253,7 @@ class LAITrainingCampaignTest(unittest.TestCase):
         changed = copy.deepcopy(self.protocol_value)
         changed["scope"] = "DEVELOPMENT"
         changed["execution_mode"] = campaign.FIT_ONLY_INITIAL
-        with self.assertRaisesRegex(ValueError, "chr22 PREPARE completion"):
+        with self.assertRaisesRegex(ValueError, "chromosome PREPARE completion"):
             campaign.validate_protocol_value(changed)
         changed["input_completion"] = write(self.root / "complete.json", {
             "schema": "r02_lai_factorized_chr22_prepare_completion_v2",
@@ -269,7 +269,7 @@ class LAITrainingCampaignTest(unittest.TestCase):
             campaign.validate_protocol_value(changed)
         pending = json.loads((ROOT / "bin" /
                               "r02_lai_training_campaign_PROTOCOL_PENDING.json").read_text())
-        with self.assertRaisesRegex(ValueError, "invalid chr22 PREPARE completion descriptor"):
+        with self.assertRaisesRegex(ValueError, "invalid chromosome PREPARE completion descriptor"):
             campaign.validate_protocol_value(pending)
 
     def test_fit_only_protocol_defers_select_and_boundary_metrics(self):
@@ -285,7 +285,8 @@ class LAITrainingCampaignTest(unittest.TestCase):
         }
         changed["campaign_budget"] = {
             "fits": 10, "families": 2, "conditions": 5, "workers": 2,
-            "cpu_per_worker": 1, "memory_bytes_per_worker": 8589934592,
+            "cpu_per_worker": 1,
+            "memory_bytes_per_worker": changed["resources"]["memory_bytes"],
             "shared_wall_seconds": 72000,
             "countdown_starts": "FIRST_SCIENTIFIC_TRAINING_LAUNCH",
             "retries_reset_budget": False,
@@ -315,6 +316,28 @@ class LAITrainingCampaignTest(unittest.TestCase):
         wrong["cnn_query_config"]["kernel_sizes"] = [3, 21]
         with self.assertRaisesRegex(ValueError, "kernels"):
             campaign.validate_resolved(self.protocol_value, wrong)
+
+    def test_training_link_uses_protocol_chromosome_and_rejects_foreign_source(self):
+        protocol_value = copy.deepcopy(self.protocol_value)
+        protocol_value["chromosome"] = "1"
+        protocol = write(self.root / "chr1-protocol.json", protocol_value)
+        request, source, source_value = self.source_receipt("FIT", 0, 0)
+        source_value["chromosome"] = "1"
+        source_value["case_id"] = source_value["case_id"].replace("chr22.", "chr1.")
+        source = write(self.root / "chr1-source.json", source_value)
+        result = campaign.create_training_link(
+            request["path"], request["sha256"], source["path"], source["sha256"],
+            protocol["path"], protocol["sha256"], self.resolved["path"],
+            self.resolved["sha256"], "FIT", "NONE", self.root / "chr1-link.json")
+        self.assertEqual(result["chromosome"], "1")
+        foreign_value = copy.deepcopy(source_value)
+        foreign_value["chromosome"] = "22"
+        foreign = write(self.root / "foreign-source.json", foreign_value)
+        with self.assertRaisesRegex(ValueError, "source PREPARE"):
+            campaign.create_training_link(
+                request["path"], request["sha256"], foreign["path"], foreign["sha256"],
+                protocol["path"], protocol["sha256"], self.resolved["path"],
+                self.resolved["sha256"], "FIT", "NONE", self.root / "foreign-link.json")
 
     def test_case_specific_identity_rejects_crossed_realization_before_arrays(self):
         fields = sorted(campaign.REFERENCE_IDENTITY_FIELDS)
@@ -346,8 +369,10 @@ class LAITrainingCampaignTest(unittest.TestCase):
         contract = write(self.root / "contract.json", contract_value)
 
         def reconstructed(request_path, request_sha256, receipt_path, receipt_sha256,
-                          *, max_uncompressed_bytes, action):
+                          *, reconstruction_limits, action):
             self.assertEqual(action, "PREPARE")
+            self.assertEqual(set(reconstruction_limits), {"max_factorized_source_bytes",
+                "max_reconstructed_join_bytes", "max_source_plus_reconstructed_bytes"})
             role = "FIT" if Path(request_path).name.startswith("FIT-") else "SELECT"
             return copy.deepcopy(self.data[role])
 
@@ -381,6 +406,19 @@ class LAITrainingCampaignTest(unittest.TestCase):
             trainer.train(*common, "NONE", 1701, self.root / "wrong-adam",
                           adam_state_precision="fp64", fit_only=True,
                           stop_after_steps=1)
+
+    def test_campaign_cli_propagates_person_microbatch_checkpoint_only(self):
+        with patch.object(campaign, "execute", return_value={"status": "fixture"}) as execute:
+            campaign.main([
+                "execute", "--contract", "contract.json",
+                "--contract-sha256", "a" * 64, "--resolved", "resolved.json",
+                "--resolved-sha256", "b" * 64, "--condition", "NONE",
+                "--seed", "1701", "--output", "output", "--checkpoint-dir", "checkpoint",
+                "--fit-only", "--stop-after-steps", "1",
+                "--lai-people-per-microbatch", "8", "--checkpoint-only",
+            ])
+        self.assertEqual(execute.call_args.kwargs["lai_people_per_microbatch"], 8)
+        self.assertTrue(execute.call_args.kwargs["checkpoint_only"])
 
     def test_public_trainer_rejects_fit_only_protocol_before_arrays(self):
         contract_value = self.make_contract()

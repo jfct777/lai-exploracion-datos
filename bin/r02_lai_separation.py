@@ -29,6 +29,8 @@ IDENTITIES = ("person", "donor", "family", "atomic_unit", "population", "root", 
 DEVELOPMENT_SCOPE_SCHEMA = "r02_lai_directional_development_scope_v1"
 DEVELOPMENT_BATCH_SCHEMA = "r02_lai_directional_development_batches_v1"
 DEVELOPMENT_CLAIM = "FIT_SELECT_DEVELOPMENT_CONDITIONAL_ON_RECORDED_DONORS_AND_SHARED_REFERENCE_PANEL_NO_RESERVED_PERFORMANCE"
+FACTORIZED_RECEIPT_SCHEMA = "r02_lai_factorized_training_link_receipt_v1"
+FACTORIZED_REGIONS = tuple(f"region-{index:02d}" for index in range(16))
 
 
 def authenticated(spec):
@@ -74,6 +76,56 @@ def cross_roles(units):
     return {key: [{"identity": identity, "roles": {r: sorted(c) for r, c in role_map.items()}}
                   for identity, role_map in sorted(values.items()) if len(role_map) > 1]
             for key, values in by_key.items()}
+
+
+def exact_case_identity_audit(units, cases, protocol_id):
+    """Audit the eight recorded identity axes for an explicitly named case set.
+
+    Only aggregate counts and set digests leave this function.  Passing this
+    check does not establish genetic kinship or reference-panel independence.
+    """
+    require(isinstance(cases, dict) and set(cases) == {"FIT", "SELECT"}
+            and all(isinstance(values, list) and values and len(values) == len(set(values))
+                    for values in cases.values()),
+            "exact case audit requires unique nonempty FIT and SELECT case lists")
+    expected = {(case, role) for role, values in cases.items() for case in values}
+    selected = [unit for unit in units
+                if unit["protocol_id"] == protocol_id
+                and (unit["case_id"], unit["role"]) in expected]
+    observed = [(unit["case_id"], unit["role"]) for unit in selected]
+    require(len(observed) == len(set(observed)) and set(observed) == expected,
+            "UNITS_V2 omits, duplicates, or relabels an exact factorized case")
+    incomplete = {key: sum(not unit["identities"].get(key) or
+                           "" in unit["identities"].get(key, set())
+                           for unit in selected)
+                  for key in IDENTITIES}
+    collisions = cross_roles(selected)
+    axes = {}
+    for key in IDENTITIES:
+        role_values = {
+            role: set().union(*(unit["identities"][key] for unit in selected
+                                if unit["role"] == role))
+            for role in ("FIT", "SELECT")
+        }
+        axes[key] = {
+            "fit_unique": len(role_values["FIT"]),
+            "select_unique": len(role_values["SELECT"]),
+            "intersection_count": len(collisions[key]),
+            "fit_set_sha256": axis_sha256(sorted(role_values["FIT"])),
+            "select_set_sha256": axis_sha256(sorted(role_values["SELECT"])),
+        }
+    passed = not any(incomplete.values()) and not any(collisions.values())
+    return {
+        "schema": "r02_lai_exact_case_identity_audit_v1",
+        "protocol_id": protocol_id,
+        "role_case_counts": {role: len(values) for role, values in cases.items()},
+        "identity_axes": axes,
+        "incomplete_identity_counts": incomplete,
+        "nominal_identity_separation_passed": passed,
+        "biological_independence_claimed": False,
+        "donor_reference_independence_tested": False,
+        "identifiers_emitted": False,
+    }
 
 
 def assignment_identity(assignments):
@@ -290,7 +342,7 @@ def audit_directional_development(result, scope):
     }
 
 
-def audit(request_path, expected_sha=None):
+def audit(request_path, expected_sha=None, exact_cases=None, exact_protocol_id=None):
     if expected_sha:
         require(sha256(request_path) == expected_sha, "audit request differs")
     request = read_json(request_path)
@@ -399,7 +451,7 @@ def audit(request_path, expected_sha=None):
             blocked.append('IBD_DETECTABILITY_NOT_CALIBRATED')
     else:
         blocked.append('PAIR_LEVEL_KINSHIP_DEPENDENCIES_NOT_TRACED')
-    return {"schema": "r02_lai_separation_audit_v1", "status": "AUDITED_DEVELOPMENT_PROTOCOLS_PRODUCTION_BLOCKED",
+    result = {"schema": "r02_lai_separation_audit_v1", "status": "AUDITED_DEVELOPMENT_PROTOCOLS_PRODUCTION_BLOCKED",
             "request_sha256": sha256(request_path), "assignments": assignments, "protocols": protocols,
             "pooled_collision_counts": {k: len(v) for k, v in pooled.items()},
             "pooling_allowed": False, "cross_protocol_selection_allowed": False,
@@ -412,6 +464,11 @@ def audit(request_path, expected_sha=None):
             "limits": ["Nominal population and component disjointness is not biological independence.",
                        "Content identity denotes supplied simulated mosaics, not validated parental phase.",
                        "A fixed external reference panel does not resolve its kinship sensitivity."]}
+    if exact_cases is not None:
+        require(exact_protocol_id in PROTOCOLS, "exact case audit requires one known protocol")
+        result["exact_case_identity_audit"] = exact_case_identity_audit(
+            units, exact_cases, exact_protocol_id)
+    return result
 
 
 def require_single_protocol(requests):
@@ -453,11 +510,101 @@ def require_contract_directional_batches(contract, directional):
     return protocol_id
 
 
+def require_factorized_regional_receipts(contract, cases, chromosome):
+    """Authenticate regional metadata without opening feature or truth arrays."""
+    batches = contract.get("batches")
+    require(isinstance(batches, dict) and set(batches) == {"FIT", "SELECT"},
+            "factorized contract requires exactly FIT and SELECT batches")
+    expected_regions = set(FACTORIZED_REGIONS)
+    condition = contract.get("information_condition")
+    require(isinstance(condition, str) and condition, "factorized contract lacks information condition")
+    records, case_hashes = [], defaultdict(lambda: defaultdict(set))
+    for role in ("FIT", "SELECT"):
+        entries = batches[role]
+        require(isinstance(entries, list) and len(entries) == 16 * len(cases[role]),
+                "factorized role lacks exact case x 16-region receipt coverage")
+        by_case = defaultdict(set)
+        for entry in entries:
+            require(entry.get("format") == "LAI_FACTORIZED_TRAINING_LINK_V1"
+                    and entry.get("protocol_id") == "FOLD_A_TO_FOLD_B"
+                    and entry.get("role") == role
+                    and entry.get("lai_case_id") in cases[role]
+                    and all(isinstance(entry.get(key), str) and entry.get(key)
+                            for key in ("sha256", "receipt_path", "receipt_sha256")),
+                    "factorized regional entry has wrong case, role, or protocol")
+            receipt_spec = {"path": entry.get("receipt_path"),
+                            "sha256": entry.get("receipt_sha256")}
+            receipt_path = authenticated(receipt_spec)
+            receipt = read_json(receipt_path)
+            require(receipt.get("schema") == FACTORIZED_RECEIPT_SCHEMA
+                    and receipt.get("request_sha256") == entry.get("sha256")
+                    and receipt.get("direction") == "FOLD_A_TO_FOLD_B"
+                    and receipt.get("role") == role
+                    and receipt.get("case_id") == entry.get("lai_case_id")
+                    and str(receipt.get("chromosome")) == chromosome
+                    and receipt.get("condition") == condition
+                    and receipt.get("evaluate_opened") is False,
+                    "factorized receipt context differs from contract")
+            region = receipt.get("region_id")
+            require(region in expected_regions and region not in by_case[receipt["case_id"]],
+                    "factorized receipt region is unknown or duplicated")
+            by_case[receipt["case_id"]].add(region)
+            hashes = receipt.get("reconstructed_arrays_sha256")
+            require(isinstance(hashes, dict)
+                    and {"person_id", "component_id", "role"} <= set(hashes)
+                    and all(isinstance(hashes[key], str) and len(hashes[key]) == 64
+                            for key in ("person_id", "component_id", "role")),
+                    "factorized receipt lacks stored identity-array hashes")
+            for key in ("person_id", "component_id", "role"):
+                case_hashes[(role, receipt["case_id"])][key].add(hashes[key])
+            source_spec = receipt.get("source_prepare_receipt")
+            require(isinstance(source_spec, dict)
+                    and all(isinstance(source_spec.get(key), str) and source_spec.get(key)
+                            for key in ("path", "sha256")),
+                    "factorized receipt lacks an authenticated PREPARE receipt")
+            source = read_json(authenticated(source_spec))
+            require(source.get("schema") ==
+                    "r02_lai_regional_truth_factorized_link_receipt_v1"
+                    and source.get("request_sha256") == receipt.get("request_sha256")
+                    and source.get("direction") == receipt.get("direction")
+                    and source.get("role") == role
+                    and source.get("case_id") == receipt.get("case_id")
+                    and str(source.get("chromosome")) == chromosome
+                    and source.get("condition") == condition
+                    and source.get("region_id") == region
+                    and source.get("arrays") == receipt.get("arrays")
+                    and source.get("reconstructed_arrays_sha256") == hashes
+                    and source.get("evaluate_opened") is False,
+                    "factorized PREPARE receipt context differs from training receipt")
+            records.append((role, receipt["case_id"], region,
+                            entry["receipt_sha256"], source_spec["sha256"]))
+        require(set(by_case) == set(cases[role])
+                and all(regions == expected_regions for regions in by_case.values()),
+                "factorized receipts omit a case or region")
+    require(all(len(values) == 1 for hashes in case_hashes.values()
+                for values in hashes.values()),
+            "stored identity-array hashes vary within one factorized case")
+    digest = hashlib.sha256()
+    for record in sorted(records):
+        digest.update(("\t".join(record) + "\n").encode())
+    return {
+        "schema": "r02_lai_factorized_regional_metadata_audit_v1",
+        "receipts_authenticated": len(records),
+        "source_prepare_receipts_authenticated": len(records),
+        "role_receipt_counts": {role: sum(row[0] == role for row in records)
+                                for role in ("FIT", "SELECT")},
+        "regions_per_case": len(FACTORIZED_REGIONS),
+        "stored_identity_hashes_constant_within_case": True,
+        "receipt_set_sha256": digest.hexdigest(),
+        "genomic_arrays_opened": False,
+        "evaluate_opened": False,
+    }
+
+
 def require_training_separation(contract):
     """Require one complete directional FIT/SELECT scope for development training."""
     spec = contract.get("lai_separation_request")
     require(spec is not None, "LAI production requires authenticated joint separation and scientific admission")
-    result = audit(authenticated(spec), spec["sha256"])
     scope_spec = contract.get("lai_development_scope")
     require(isinstance(scope_spec, dict), "LAI development requires a pinned directional scope")
     scope = read_json(authenticated(scope_spec))
@@ -487,6 +634,14 @@ def require_training_separation(contract):
                 and all(len(values) == 3 and len(set(values)) == 3
                         for values in cases.values()),
                 "factorized scope requires three cases per development role")
+        result = audit(authenticated(spec), spec["sha256"], exact_cases=cases,
+                       exact_protocol_id="FOLD_A_TO_FOLD_B")
+        exact = result.get("exact_case_identity_audit")
+        require(isinstance(exact, dict)
+                and exact.get("nominal_identity_separation_passed") is True
+                and exact.get("biological_independence_claimed") is False
+                and exact.get("donor_reference_independence_tested") is False,
+                "exact factorized FIT/SELECT identity separation is absent or failed")
         observed = {role: {entry.get("lai_case_id") for entry in entries}
                     for role, entries in contract.get("batches", {}).items()}
         from r02_lai_neural_input import parse_case
@@ -501,11 +656,20 @@ def require_training_separation(contract):
                         for role, entries in contract["batches"].items()
                         for entry in entries),
                 "contract batches differ from the factorized directional cases or chromosome")
+        regional = require_factorized_regional_receipts(contract, cases, chromosome)
         return {"protocol_id": "FOLD_A_TO_FOLD_B",
                 "chromosome": chromosome,
                 "development_training_separation_allowed": True,
                 "independent_replicates": False,
-                "shared_reference_dependency": scope["shared_reference_dependency"]}
+                "shared_reference_dependency": scope["shared_reference_dependency"],
+                "exact_case_identity_audit": exact,
+                "factorized_regional_metadata_audit": regional,
+                "allowed_claim":
+                    "DEVELOPMENT_ONLY_CONDITIONAL_ON_RECORDED_DONORS_AND_SHARED_REFERENCE_PANEL",
+                "forbidden_claims": ["biological independence",
+                                     "donor independence from REF_TRAIN",
+                                     "reserved performance"]}
+    result = audit(authenticated(spec), spec["sha256"])
     directional = audit_directional_development(result, scope)
     require(directional["development_training_separation_allowed"],
             "LAI development blocked: " + "; ".join(directional["blockers"]))

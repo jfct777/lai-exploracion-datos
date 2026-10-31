@@ -45,6 +45,12 @@ SINGLE_CHROMOSOME = "SINGLE_CHROMOSOME_BATCH_V1"
 AUTOSOMAL_POOL = "AUTOSOMAL_POOL_V1"
 AUTOSOMAL_PERSON_BATCHES = "AUTOSOMAL_PERSON_BATCHES_V1"
 ADAM_STATE_PRECISIONS = ("fp32", "fp64")
+LAI_FIT_MONITOR_CONFIG_SCHEMA = "r02_lai_fit_monitor_config_v1"
+LAI_FIT_MONITOR_MANIFEST_SCHEMA = "r02_lai_fit_monitor_manifest_v1"
+LAI_FIT_MONITOR_STEPS = (24, 48, 72, 96)
+LAI_FIT_MONITOR_SELECTION = "LOWER_MEDIAN_BY_CASE_AND_NUMERIC_REGION_ID_V1"
+LAI_FIT_MONITOR_METRICS = ("mean_log_loss", "mean_brier", "state_error",
+                           "dosage_mae_AFR_EUR_NAM")
 
 
 def sha(path):
@@ -77,6 +83,71 @@ def read_json(path, expected):
 
 def write_json(path, value):
     Path(path).write_text(json.dumps(value, sort_keys=True, indent=2, allow_nan=False) + "\n")
+
+
+def lai_fit_monitor_config(contract):
+    """Authenticate the fixed three-region FIT trajectory monitor, if present."""
+    config = contract.get("lai_fit_monitor")
+    if config is None:
+        return None
+    require(contract.get("objective") == "lai", "FIT monitor applies to LAI only")
+    require(isinstance(config, dict) and set(config) == {
+        "schema", "manifest_path", "manifest_sha256", "steps", "people_per_batch"},
+        "LAI FIT monitor configuration fields differ")
+    require(config["schema"] == LAI_FIT_MONITOR_CONFIG_SCHEMA
+            and config["steps"] == list(LAI_FIT_MONITOR_STEPS)
+            and config["people_per_batch"] == 8
+            and re.fullmatch(r"[0-9a-f]{64}", config["manifest_sha256"] or ""),
+            "LAI FIT monitor schema, steps, person batch, or manifest hash differs")
+    manifest = read_json(config["manifest_path"], config["manifest_sha256"])
+    require(isinstance(manifest, dict) and set(manifest) == {
+        "schema", "source_stage", "selection_rule", "case_count", "persons_per_entry",
+        "metrics", "entries", "interpretation_limit"},
+        "LAI FIT monitor manifest fields differ")
+    require(manifest["schema"] == LAI_FIT_MONITOR_MANIFEST_SCHEMA
+            and manifest["source_stage"] == "FIT"
+            and manifest["selection_rule"] == LAI_FIT_MONITOR_SELECTION
+            and manifest["case_count"] == 3 and manifest["persons_per_entry"] == 128
+            and manifest["metrics"] == list(LAI_FIT_MONITOR_METRICS)
+            and manifest["interpretation_limit"] ==
+                "FIXED_FIT_NUMERICAL_TRAJECTORY_NOT_SELECTION_OR_BIOLOGICAL_EVALUATION",
+            "LAI FIT monitor population, selection rule, metrics, or scope differs")
+    entries = manifest["entries"]
+    require(isinstance(entries, list) and len(entries) == 3
+            and all(isinstance(entry, dict) for entry in entries),
+            "LAI FIT monitor requires exactly three pinned entries")
+    canonical = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"),
+                                         ensure_ascii=True, allow_nan=False)
+    fit = contract.get("batches", {}).get("FIT", [])
+    select = contract.get("batches", {}).get("SELECT", [])
+    fit_values, select_values = {canonical(entry) for entry in fit}, {canonical(entry) for entry in select}
+    selected_values = [canonical(entry) for entry in entries]
+    require(len(selected_values) == len(set(selected_values))
+            and all(value in fit_values for value in selected_values)
+            and not set(selected_values).intersection(select_values),
+            "monitor entries must be an exact unique FIT subset and exclude SELECT")
+
+    # Region identifiers are assigned upstream in increasing coordinate order.
+    # The lower median resolves the even-region tie without inspecting truth,
+    # genotype, loss, or any model output.
+    by_case = defaultdict(list)
+    for entry in fit:
+        receipt = read_json(entry["receipt_path"], entry["receipt_sha256"])
+        case, region = receipt.get("case_id"), receipt.get("region_id")
+        match = re.fullmatch(r"region-([0-9]+)", region or "")
+        require(receipt.get("role") == "FIT" and case == entry.get("lai_case_id") and match,
+                "FIT monitor source receipt case/role/region differs")
+        by_case[case].append((int(match.group(1)), entry))
+    require(len(by_case) == 3, "FIT monitor requires the three fixed FIT cases")
+    expected = []
+    for case in sorted(by_case):
+        ordered = sorted(by_case[case])
+        require([index for index, _ in ordered] == list(range(len(ordered))),
+                "FIT regions must be a contiguous coordinate-derived order")
+        expected.append(ordered[(len(ordered) - 1) // 2][1])
+    require([canonical(entry) for entry in entries] == [canonical(entry) for entry in expected],
+            "FIT monitor entries are not the lower coordinate-order median of each case")
+    return {**config, "manifest": manifest}
 
 
 def tensor_sites(data, prefix, features=None):
@@ -122,7 +193,7 @@ def blinded_events(data, arm, burden_counts=None):
     return tensor_sites(data, "event", features)
 
 
-def lai_events(data):
+def lai_events(data, reference_scaling=None):
     """Build LAI EVENT input; per-query counts are transported separately."""
     mask, dose = data["event_valid"], data["event_dosage"]
     measured = np.where(mask, dose, 0).astype(np.float32)
@@ -130,6 +201,9 @@ def lai_events(data):
     require(references.shape == (*mask.shape, 15) and np.isfinite(references).all()
             and np.array_equal(references, np.broadcast_to(references[:1], references.shape)),
             "LAI EVENT reference features differ")
+    if reference_scaling is not None:
+        from r02_lai_reference_scaling import scale_reference_features
+        references = scale_reference_features(references, reference_scaling, np)
     features = np.concatenate((data["event_metadata"], measured[..., None], references), -1)
     return tensor_sites(data, "event", features)
 
@@ -202,6 +276,8 @@ def validate_batch(data, contract, stage, action="TRAIN"):
                     and np.issubdtype(burden.dtype, np.integer)
                     and (burden >= 0).all(),
                     "LAI query-local burden specification/array differs")
+        # Authenticate the stored raw columns and producer receipt before the
+        # model applies any configured consumption-time transformation.
         lai_events(data).check(contract["event_metadata_features"] + 1 + 15,
                                contract["limits"]["max_event_sites"])
     dose, mask = data["event_dosage"], data["event_valid"]
@@ -382,15 +458,18 @@ def validate_batch_receipt(data, entry, contract, resolved=None, action="PREPARE
                 "resolved radii/depth exceed prepared context halos; re-extract the view")
 
 
-def load_batch(entry, contract, stage, resolved=None, action="PREPARE"):
+def load_batch(entry, contract, stage, resolved=None, action="PREPARE",
+               max_reconstruction_bytes=None):
     path = Path(entry["path"])
     if entry.get("format") == "LAI_FACTORIZED_TRAINING_LINK_V1":
         from r02_lai_training_campaign import load_training_link
         require(action == "TRAIN" and stage in ("FIT", "SELECT"),
                 "admitted factorized training links permit TRAIN for FIT/SELECT only")
         require(contract["objective"] == "lai", "factorized training links require LAI")
+        require(isinstance(max_reconstruction_bytes, dict),
+                "factorized TRAIN requires explicit three-part reconstruction limits")
         data = load_training_link(entry, contract, resolved, stage,
-                                  max_uncompressed_bytes=contract["limits"]["max_batch_bytes"])
+                                  max_reconstruction_bytes=max_reconstruction_bytes)
         validate_batch(data, contract, stage, action)
         validate_batch_receipt(data, entry, contract, resolved, action)
         return data
@@ -399,9 +478,12 @@ def load_batch(entry, contract, stage, resolved=None, action="PREPARE"):
         require(action == "PREPARE" and stage in ("FIT", "SELECT"),
                 "factorized links only permit PREPARE for FIT/SELECT; EVALUATE is closed")
         require(contract["objective"] == "lai", "factorized regional links require LAI")
+        legacy = contract["limits"]["max_batch_bytes"]
         data = load_factorized_link(path, entry["sha256"], entry["receipt_path"],
                                    entry["receipt_sha256"], action=action,
-                                   max_uncompressed_bytes=contract["limits"]["max_batch_bytes"])
+                                   reconstruction_limits={"max_factorized_source_bytes": legacy,
+                                     "max_reconstructed_join_bytes": legacy,
+                                     "max_source_plus_reconstructed_bytes": 2 * legacy})
         validate_batch(data, contract, stage, action)
         validate_batch_receipt(data, entry, contract, resolved, action)
         return data
@@ -626,9 +708,10 @@ def _concatenate_pool_results(results, expected_ids):
 
 
 def validate_training_entry(entry, contract, stage, resolved=None, authenticate_windows=False,
-                            phase_metrics=None):
+                            phase_metrics=None, max_reconstruction_bytes=None):
     if dataset_mode(contract) == SINGLE_CHROMOSOME:
-        return load_batch(entry, contract, stage, resolved, action="TRAIN"), None
+        return load_batch(entry, contract, stage, resolved, action="TRAIN",
+                          max_reconstruction_bytes=max_reconstruction_bytes), None
     require(resolved is not None, "autosomal entry validation requires resolved configuration")
     return open_autosomal_entry(entry, contract, stage, resolved, authenticate_windows,
                                 phase_metrics)
@@ -643,8 +726,10 @@ def _entry_burden_cache_key(entry):
 
 
 def predict_training_entry(model, entry, contract, stage, resolved, arm,
-                           burden_cache=None, phase_metrics=None):
-    data, dataset = validate_training_entry(entry, contract, stage, resolved)
+                           burden_cache=None, phase_metrics=None,
+                           max_reconstruction_bytes=None):
+    data, dataset = validate_training_entry(entry, contract, stage, resolved,
+        max_reconstruction_bytes=max_reconstruction_bytes)
     if dataset is None:
         return model(data, arm), data, None
     prediction, pooled = model.forward_autosomal(
@@ -657,6 +742,9 @@ class TaskModel(nn.Module):
         super().__init__()
         config = ContextConfig.from_recipe(resolved)
         self.objective = contract["objective"]
+        if self.objective == "lai":
+            from r02_lai_reference_scaling import contract_scaling
+            self.lai_reference_scaling = contract_scaling(contract)
         require(config.family.startswith(self.objective + "_"), "wrong model family")
         limits = contract["limits"]
         cnn_query_config = resolved.get("cnn_query_config") if config.family == "lai_cnn" else None
@@ -679,7 +767,8 @@ class TaskModel(nn.Module):
 
     def forward(self, data, arm):
         common = tensor_sites(data, "common")
-        events = lai_events(data) if self.objective == "lai" else blinded_events(data, arm)
+        events = (lai_events(data, self.lai_reference_scaling) if self.objective == "lai"
+                  else blinded_events(data, arm))
         if self.objective == "structure":
             # Halos supply context only. Pool every owned site exactly once.
             encoded = self.encoder.common_values(common)
@@ -1311,6 +1400,141 @@ def training_loss(prediction, data, objective):
     return losses(prediction, data, objective).mean()
 
 
+def lai_fit_monitor_statistics(prediction, data, entry):
+    """Additive probability metrics on the monitor's fixed owned queries."""
+    observed = lai_loss_mask(data)
+    mask = torch.from_numpy(observed)
+    truth = torch.from_numpy(np.where(observed, data["truth_state"], 0)).long()
+    probability = prediction[mask].double()
+    labels = truth[mask]
+    require(probability.ndim == 2 and probability.shape[1] == 6 and len(labels) > 0
+            and bool(torch.isfinite(probability).all())
+            and bool((probability >= 0).all()) and bool((probability <= 1).all())
+            and bool(torch.allclose(probability.sum(1), torch.ones(len(labels), dtype=torch.float64),
+                                    atol=5e-5, rtol=0)),
+            "FIT monitor six-state probabilities differ")
+    selected = probability.gather(1, labels[:, None]).squeeze(1)
+    require(bool((selected > 0).all()), "FIT monitor encountered zero true-state probability")
+    one_hot = torch.nn.functional.one_hot(labels, 6).double()
+    dosages = torch.tensor(((2, 0, 0), (1, 1, 0), (1, 0, 1),
+                            (0, 2, 0), (0, 1, 1), (0, 0, 2)), dtype=torch.float64)
+    expected_dosage = probability @ dosages
+    actual_dosage = dosages[labels]
+    return {
+        "log_loss_sum": float((-selected.log()).sum()),
+        "brier_sum": float((probability - one_hot).square().sum()),
+        "state_error_sum": float((probability.argmax(1) != labels).sum()),
+        "dosage_abs_sum": (expected_dosage - actual_dosage).abs().sum(0).tolist(),
+        "observed_count": int(len(labels)),
+    }
+
+
+def _lai_fit_monitor_validate(entry, contract, resolved, people_per_batch):
+    data, dataset = validate_training_entry(entry, contract, "FIT", resolved)
+    require(dataset is None and len(data["person_id"]) == 128,
+            "FIT monitor requires one single-chromosome region with all 128 people")
+    return data
+
+
+def _lai_fit_monitor_predict(model, data, entry, contract, resolved, arm, people_per_batch):
+    # Use no inference_mode: r02_lai_fit_monitor owns a no_grad context and
+    # restores all training state before the next optimizer update.
+    from r02_lai_person_microbatch import slice_people, validate_person_separation
+    validate_person_separation(model, "lai", people_per_batch)
+    predictions = []
+    for start in range(0, len(data["person_id"]), people_per_batch):
+        micro = slice_people(data, start, min(start + people_per_batch, len(data["person_id"])))
+        predictions.append(model(micro, arm))
+    return torch.cat(predictions, 0)
+
+
+def _validate_lai_fit_monitor_receipt(receipt, contract, resolved, arm, step,
+                                      entries, model=None, optimizer=None):
+    from r02_lai_fit_monitor import (model_state_sha256, object_sha256,
+        optimizer_state_sha256, SCHEMA as MONITOR_SCHEMA)
+    entry_sha256 = [object_sha256(entry) for entry in entries]
+    require(receipt.get("schema") == MONITOR_SCHEMA
+            and receipt.get("status") == "FIXED_FIT_DESCRIPTIVE_MONITOR_ONLY"
+            and receipt.get("step") == step and receipt.get("arm") == arm
+            and receipt.get("people_per_batch") == 8
+            and receipt.get("contract_sha256") == object_sha256(contract)
+            and receipt.get("resolved_sha256") == object_sha256(resolved)
+            and receipt.get("fit_entry_sha256") == entry_sha256
+            and receipt.get("fit_entries") == 3
+            and receipt.get("optimizer_step_counters_before") == [step]
+            and receipt.get("optimizer_step_counters_after") == [step]
+            and receipt.get("select_accessed") is False,
+            "FIT monitor receipt identity, entries, step, or scope differs")
+    if model is not None:
+        require(receipt.get("model_state_sha256_after") == model_state_sha256(model),
+                "current FIT monitor model differs from restored checkpoint")
+    if optimizer is not None:
+        require(receipt.get("optimizer_state_sha256_after") == optimizer_state_sha256(optimizer),
+                "current FIT monitor Adam state differs from restored checkpoint")
+    return receipt
+
+
+def require_lai_fit_monitor_history(contract, resolved, arm, restored_step, checkpoint_dir):
+    """Reject continuation past any earlier due monitor that was never made durable."""
+    config = lai_fit_monitor_config(contract)
+    if config is None:
+        return []
+    receipts = []
+    for step in (value for value in config["steps"] if value < restored_step):
+        path = Path(checkpoint_dir) / "fit-monitor" / f"step-{step:012d}.json"
+        require(path.is_file(), "checkpoint is beyond a missing earlier FIT monitor receipt")
+        receipt = read_json(path, sha(path))
+        receipts.append(_validate_lai_fit_monitor_receipt(
+            receipt, contract, resolved, arm, step, config["manifest"]["entries"]))
+    return receipts
+
+
+def run_lai_fit_monitor(model, optimizer, contract, resolved, arm, completed_step, checkpoint_dir,
+                        validate_entry_callback=None, predict_entry_callback=None,
+                        loss_statistics_callback=None, max_reconstruction_bytes=None):
+    """Fill one due monitor receipt, or authenticate and reuse it after restore."""
+    config = lai_fit_monitor_config(contract)
+    if config is None or completed_step not in config["steps"]:
+        return None
+    from r02_lai_fit_monitor import optimizer_step_counters, score_fixed_fit
+    require(optimizer_step_counters(optimizer) == [completed_step],
+            "Adam step counters differ from due FIT monitor step")
+    monitor_root = Path(checkpoint_dir) / "fit-monitor"
+    monitor_root.mkdir(mode=0o700, exist_ok=True)
+    output = monitor_root / f"step-{completed_step:012d}.json"
+    entries = config["manifest"]["entries"]
+    if output.exists():
+        receipt = read_json(output, sha(output))
+        return _validate_lai_fit_monitor_receipt(
+            receipt, contract, resolved, arm, completed_step, entries, model, optimizer)
+    return score_fixed_fit(
+        model=model, optimizer=optimizer, contract=contract, resolved=resolved,
+        fit_entries=entries, arm=arm,
+        people_per_batch=config["people_per_batch"], step=completed_step, output=output,
+        validate_entry=(validate_entry_callback or (lambda entry, contract, resolved, people:
+            validate_training_entry(entry, contract, "FIT", resolved,
+                max_reconstruction_bytes=max_reconstruction_bytes)[0])),
+        predict_entry=(predict_entry_callback or _lai_fit_monitor_predict),
+        loss_statistics=(loss_statistics_callback or lai_fit_monitor_statistics))
+
+
+def lai_fit_monitor_receipts(contract, resolved, arm, checkpoint_dir, final_step):
+    config = lai_fit_monitor_config(contract)
+    if config is None:
+        return None
+    receipts = []
+    for step in (value for value in config["steps"] if value <= final_step):
+        path = Path(checkpoint_dir) / "fit-monitor" / f"step-{step:012d}.json"
+        require(path.is_file(), "due FIT monitor receipt is missing")
+        receipt = read_json(path, sha(path))
+        _validate_lai_fit_monitor_receipt(
+            receipt, contract, resolved, arm, step, config["manifest"]["entries"])
+        receipts.append({"step": step, "path": str(path.resolve()), "sha256": sha(path)})
+    return {"config": {key: value for key, value in config.items() if key != "manifest"},
+            "manifest_selection_rule": config["manifest"]["selection_rule"],
+            "receipts": receipts, "select_accessed": False}
+
+
 def person_losses(values, data, objective):
     if objective == "lai":
         return [(i, float(x)) for i, x in enumerate(values)]
@@ -1322,7 +1546,8 @@ def person_losses(values, data, objective):
 
 
 def score_batches(model, contract, stage, resolved, arm, output,
-                  burden_caches=None, phase_metrics=None):
+                  burden_caches=None, phase_metrics=None,
+                  lai_people_per_microbatch=None, max_reconstruction_bytes=None):
     """Same descriptive macro loss for SELECT/EVALUATE; no independence claim."""
     model.eval()
     errors, group_by_person, predictions = defaultdict(list), {}, []
@@ -1339,9 +1564,20 @@ def score_batches(model, contract, stage, resolved, arm, output,
         for index, entry in enumerate(contract["batches"][stage]):
             cached = (None if burden_caches is None else
                       burden_caches.get(_entry_burden_cache_key(entry)))
-            prediction, data, _ = predict_training_entry(
-                model, entry, contract, stage, resolved, arm,
-                burden_cache=cached, phase_metrics=phase_metrics)
+            if lai_people_per_microbatch is not None:
+                require(contract["objective"] == "lai" and cached is None,
+                        "person-microbatched scoring applies to single-chromosome LAI only")
+                data, dataset = validate_training_entry(entry, contract, stage, resolved,
+                    max_reconstruction_bytes=max_reconstruction_bytes)
+                require(dataset is None, "LAI person microbatching does not apply to autosomal structure data")
+                from r02_lai_person_microbatch import predict_person_microbatches
+                prediction = predict_person_microbatches(
+                    model, data, arm, lai_people_per_microbatch)
+            else:
+                prediction, data, _ = predict_training_entry(
+                    model, entry, contract, stage, resolved, arm,
+                    burden_cache=cached, phase_metrics=phase_metrics,
+                    max_reconstruction_bytes=max_reconstruction_bytes)
             value = losses(prediction, data, contract["objective"]).numpy()
             require(np.isfinite(value).all(), "nonfinite evaluation loss")
             if query_score is not None:
@@ -1396,6 +1632,8 @@ def validate_contract(contract):
             "explicit biological target, allele/feature definitions and count scope are required")
     if contract["objective"] == "lai":
         from r02_lai_query_burden import BOUNDARY, COUNT_NAMES, SCOPE
+        from r02_lai_reference_scaling import contract_scaling
+        contract_scaling(contract)
         identity = contract.get("reference_identity")
         identity_by_case = contract.get("reference_identity_by_case")
         identity_fields = {"event_catalogue_sha256", "ref_train_receipt_sha256",
@@ -1481,6 +1719,10 @@ def validate_contract(contract):
     require(all(len(v) == 1 for v in roles.values()), "family/donor component crosses FIT and SELECT")
     require(set(contract["batches"]) == {"FIT", "SELECT"}
             and all(contract["batches"].values()), "both development datasets required")
+    monitor = lai_fit_monitor_config(contract)
+    if contract["scope"] == "DEVELOPMENT" and contract["objective"] == "lai":
+        require(review.get("lai_fit_monitor") == contract.get("lai_fit_monitor"),
+                "LAI review does not admit this exact FIT monitor configuration")
     if (contract["objective"] == "lai" and any(
             entry.get("format") == "LAI_FACTORIZED_TRAINING_LINK_V1"
             for batches in contract["batches"].values() for entry in batches)):
@@ -1567,12 +1809,21 @@ def checkpoint_identity(contract, contract_sha256, resolved_sha256, arm, seed,
         "r02_context_train.py", "r02_context_checkpoint.py", "r02_context_update_checkpoint.py",
         "r02_adam_fp64_state.py",
         "genomic_context_runtime.py", "r02_lai_cnn_config.py", "r02_local_attention_blocks.py",
+        "r02_lai_common_context.py",
         "r02_context_autosomal_dataset.py", "r02_context_autosomal_pool.py",
         "r02_genomic_event_inputs.py",
         "r02_neural_training_eligibility.py", "r02_lai_reference_features.py",
         "r02_lai_event_annotations.py", "r02_lai_separation.py",
         "r02_lai_target_dependencies.py", "r02_lai_query_burden.py",
         "r02_lai_training_campaign.py")}
+    from r02_lai_reference_scaling import contract_scaling, LOG1P_MODE
+    scaling = contract_scaling(contract)
+    if scaling["mode"] == LOG1P_MODE:
+        code["r02_lai_reference_scaling.py"] = sha(source.with_name("r02_lai_reference_scaling.py"))
+    monitor = lai_fit_monitor_config(contract)
+    if monitor is not None:
+        code["r02_lai_fit_monitor.py"] = sha(source.with_name("r02_lai_fit_monitor.py"))
+        code["r02_lai_person_microbatch.py"] = sha(source.with_name("r02_lai_person_microbatch.py"))
     if dataset_mode(contract) == AUTOSOMAL_PERSON_BATCHES:
         code["r02_event_mmap_reader.py"] = sha(source.with_name("r02_event_mmap_reader.py"))
         code["r02_k03_neural_target.py"] = sha(source.with_name("r02_k03_neural_target.py"))
@@ -1582,7 +1833,7 @@ def checkpoint_identity(contract, contract_sha256, resolved_sha256, arm, seed,
             "unknown rare pooling checkpoint identity")
     require(locus_descriptor in (LOCUS_DESCRIPTOR_LEGACY, LOCUS_DESCRIPTOR_CHROM22),
             "unknown locus descriptor checkpoint identity")
-    return {"schema": "r02_context_checkpoint_identity_v1", "contract_sha256": contract_sha256,
+    identity = {"schema": "r02_context_checkpoint_identity_v1", "contract_sha256": contract_sha256,
             "resolved_sha256": resolved_sha256, "objective": contract["objective"],
             "lai_burden_scope": contract.get("lai_burden_scope"),
             "lai_burden_count_names": contract.get("lai_burden_count_names"),
@@ -1592,12 +1843,29 @@ def checkpoint_identity(contract, contract_sha256, resolved_sha256, arm, seed,
             "locus_descriptor": locus_descriptor,
             "inputs": inputs, "code_sha256": code,
             "torch_version": torch.__version__, "numpy_version": np.__version__, "device": "cpu"}
+    if scaling["mode"] == LOG1P_MODE:
+        identity["lai_reference_scaling"] = scaling
+    if monitor is not None:
+        identity["lai_fit_monitor"] = {
+            "config": {key: value for key, value in monitor.items() if key != "manifest"},
+            "manifest_entry_sha256": [hashlib.sha256(json.dumps(
+                entry, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+                for entry in monitor["manifest"]["entries"]],
+            "selection_rule": monitor["manifest"]["selection_rule"],
+        }
+    return identity
 
 
 def train(contract_path, contract_sha256, resolved_path, resolved_sha256, arm, seed, output,
           checkpoint_dir=None, checkpoint_every_steps=1, adam_state_precision="fp32",
-          fit_only=False, stop_after_steps=None, record_aggregate_norms=False):
+          fit_only=False, stop_after_steps=None, record_aggregate_norms=False,
+          lai_people_per_microbatch=None, checkpoint_only=False,
+          max_reconstruction_bytes=None):
     output = Path(output)
+    checkpoint_dir = (Path(checkpoint_dir) if checkpoint_dir is not None
+                      else output.parent / f".{output.name}.internal-checkpoints")
+    first_phase_path = checkpoint_dir / "FIRST_UPDATE_PHASES.json"
+    first_phase_started = time.monotonic()
     configure_torch_cache(output.parent / f".{output.name}.torch-cache")
     # Force any PyTorch startup/import failure before opening genotype batches.
     torch.use_deterministic_algorithms(True)
@@ -1637,9 +1905,37 @@ def train(contract_path, contract_sha256, resolved_path, resolved_sha256, arm, s
     require(type(fit_only) is bool and (stop_after_steps is None or fit_only),
             "partial training requires FIT_ONLY; SELECT cannot score an unfinished budget")
     require(type(record_aggregate_norms) is bool, "aggregate norm diagnostic flag must be boolean")
+    require(type(checkpoint_only) is bool, "checkpoint-only flag must be boolean")
     final_step = contract["steps"] if stop_after_steps is None else stop_after_steps
     require(type(final_step) is int and 1 <= final_step <= contract["steps"],
             "FIT stop must lie inside the frozen training ceiling")
+    require(not checkpoint_only or (contract["objective"] == "lai"
+            and lai_people_per_microbatch is not None and fit_only
+            and stop_after_steps is not None and final_step < contract["steps"]),
+            "checkpoint-only requires person-microbatched LAI, FIT_ONLY, and an explicit stop before the training ceiling")
+    if lai_people_per_microbatch is not None:
+        require(contract["objective"] == "lai" and dataset_mode(contract) == SINGLE_CHROMOSOME,
+                "person microbatching is admitted for single-chromosome LAI only")
+        require(type(lai_people_per_microbatch) is int and lai_people_per_microbatch > 0,
+                "LAI people per microbatch must be a positive integer")
+    # Construct and audit the exact model before authenticating 48 FIT entries.
+    # This makes an unreviewed person-coupling module fail before any batch read.
+    random.seed(seed)
+    np.random.seed(seed % (2**32))
+    torch.manual_seed(seed)
+    torch.set_num_threads(contract["threads"])
+    model = TaskModel(resolved, contract)
+    model_audit_done = time.monotonic()
+    technical_execution = None
+    if lai_people_per_microbatch is not None:
+        from r02_lai_person_microbatch import amendment_identity
+        helper_path = Path(__file__).with_name("r02_lai_person_microbatch.py")
+        technical_execution = amendment_identity(
+            model, lai_people_per_microbatch,
+            {name: sha(Path(__file__).with_name(name)) for name in (
+                helper_path.name, "r02_context_train.py", "genomic_context_runtime.py",
+                "r02_local_attention_blocks.py", "r02_lai_cnn_config.py",
+                "r02_lai_common_context.py")})
     phase_metrics = {}
     # Authenticate all data before any optimizer step. Load one bounded batch at a time.
     for stage, batches in contract["batches"].items():
@@ -1649,32 +1945,60 @@ def train(contract_path, contract_sha256, resolved_path, resolved_sha256, arm, s
             validate_training_entry(entry, contract, stage, resolved,
                 authenticate_windows=dataset_mode(contract) in
                     (AUTOSOMAL_POOL,AUTOSOMAL_PERSON_BATCHES),
-                phase_metrics=phase_metrics)
+                phase_metrics=phase_metrics,
+                max_reconstruction_bytes=max_reconstruction_bytes)
+    authentication_done = time.monotonic()
+    if fit_only:
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        prior_phases = (json.loads(first_phase_path.read_text())
+                        if first_phase_path.is_file() else {})
+        if prior_phases.get("status") != "FIRST_UPDATE_DURABLE":
+            write_json(first_phase_path, {
+            "schema": "r02_lai_first_update_phase_timing_v1",
+            "status": "INPUT_AUTHENTICATION_COMPLETE_BEFORE_ADAM",
+            "fit_entries_authenticated": len(contract["batches"]["FIT"]),
+            "model_audit_seconds": model_audit_done - first_phase_started,
+            "input_authentication_seconds": authentication_done - model_audit_done,
+            "optimizer_updates_completed": 0,
+            })
     if output.exists():
         require(output.is_dir() and not any(output.iterdir()),
                 "existing training output must be an empty directory left before scoring")
     else:
         output.mkdir(parents=True)
-    random.seed(seed)
-    np.random.seed(seed % (2**32))
-    torch.manual_seed(seed)
-    torch.set_num_threads(contract["threads"])
-    model = TaskModel(resolved, contract)
     require(resolved.get("optimizer", "Adam") == "Adam", "unsupported optimizer; no silent substitution")
     optimizer = build_optimizer(model.parameters(), model.encoder.config.learning_rate,
                                 adam_state_precision)
     identity = checkpoint_identity(contract, contract_sha256, resolved_sha256, arm, seed,
                                    adam_state_precision, model.encoder.config.rare_pooling,
                                    model.encoder.config.locus_descriptor)
-    checkpoint_dir = (Path(checkpoint_dir) if checkpoint_dir is not None
-                      else output.parent / f".{output.name}.internal-checkpoints")
     partial_root=checkpoint_dir/"partial-updates"
     store = CheckpointStore(checkpoint_dir, identity)
     norm_diagnostics = []
     score_burden_caches = {}
+    technical_checkpoint_binding = None
     try:
+        if technical_execution is not None:
+            from r02_lai_person_microbatch import bind_checkpoint_amendment
+            technical_checkpoint_binding = bind_checkpoint_amendment(
+                checkpoint_dir, identity_digest(identity), technical_execution)
         start_step, history = store.restore(model, optimizer)
         require(start_step <= final_step, "checkpoint is beyond the requested safe stopping point")
+        require_lai_fit_monitor_history(
+            contract, resolved, arm, start_step, checkpoint_dir)
+        # A crash can occur after the Adam checkpoint becomes durable but before
+        # its monitor JSON is promoted. Fill only that missing diagnostic before
+        # considering the next optimizer update.
+        run_lai_fit_monitor(model, optimizer, contract, resolved, arm, start_step, checkpoint_dir,
+                            max_reconstruction_bytes=max_reconstruction_bytes)
+        first_update_started = time.monotonic()
+        if fit_only and start_step == 0:
+            phases = read_json(first_phase_path, sha(first_phase_path))
+            phases.update({
+                "status": "FIRST_UPDATE_STARTED",
+                "pre_update_setup_seconds": first_update_started - authentication_done,
+            })
+            write_json(first_phase_path, phases)
         for step in range(start_step, final_step):
             model.train()
             fit_batch_index=step%len(contract["batches"]["FIT"])
@@ -1690,13 +2014,22 @@ def train(contract_path, contract_sha256, resolved_path, resolved_sha256, arm, s
                 optimizer.zero_grad(set_to_none=True)
             before=({name:parameter.detach().clone() for name,parameter in model.named_parameters()}
                     if record_aggregate_norms else None)
-            data, dataset = validate_training_entry(entry, contract, "FIT", resolved)
+            data, dataset = validate_training_entry(entry, contract, "FIT", resolved,
+                max_reconstruction_bytes=max_reconstruction_bytes)
             try:
                 if dataset is None:
-                    prediction=model(data,arm);pooled=None
-                    value=training_loss(prediction,data,contract["objective"])
-                    require(bool(torch.isfinite(value)),"nonfinite training loss")
-                    value.backward()
+                    pooled=None
+                    if lai_people_per_microbatch is None:
+                        prediction=model(data,arm)
+                        value=training_loss(prediction,data,contract["objective"])
+                        require(bool(torch.isfinite(value)),"nonfinite training loss")
+                        value.backward()
+                    else:
+                        from r02_lai_person_microbatch import backward_person_microbatches
+                        micro = backward_person_microbatches(
+                            model, data, arm, lai_people_per_microbatch,
+                            lambda predicted, batch: losses(predicted, batch, "lai"))
+                        value, prediction = micro.loss, micro.prediction
                 else:
                     value,prediction,pooled,_=model.backward_autosomal(
                         dataset,data,arm,update_store,optimizer,resumed_update,
@@ -1717,21 +2050,88 @@ def train(contract_path, contract_sha256, resolved_path, resolved_sha256, arm, s
                 # An autosomal partial update is anchored by a completed Adam
                 # generation before its own files are cleared. This preserves
                 # recovery even when the requested completed-step cadence is >1.
+                monitor_due = (contract.get("lai_fit_monitor") is not None
+                               and completed in LAI_FIT_MONITOR_STEPS)
                 if (dataset is not None or completed%checkpoint_every_steps==0 or
-                        completed==final_step):
+                        completed==final_step or monitor_due):
                     store.save(model,optimizer,completed,history)
+                if fit_only and start_step == 0 and completed == 1:
+                    phases = read_json(first_phase_path, sha(first_phase_path))
+                    phases.update({
+                        "status": "FIRST_UPDATE_DURABLE",
+                        "first_update_seconds": time.monotonic() - first_update_started,
+                        "optimizer_updates_completed": 1,
+                    })
+                    write_json(first_phase_path, phases)
                 if update_store is not None:update_store.clear()
+                if monitor_due:
+                    run_lai_fit_monitor(
+                        model, optimizer, contract, resolved, arm, completed, checkpoint_dir,
+                        max_reconstruction_bytes=max_reconstruction_bytes)
             finally:
                 if update_store is not None:update_store.close()
     finally:
         store.close()
+    if checkpoint_only:
+        current_path = checkpoint_dir / "CURRENT"
+        current_sha256 = sha(current_path)
+        current = read_json(current_path, current_sha256)
+        manifest_path = checkpoint_dir / current["manifest"]
+        manifest_sha256 = sha(manifest_path)
+        manifest = read_json(manifest_path, manifest_sha256)
+        require(current.get("manifest_sha256") == manifest_sha256
+                and manifest.get("identity_sha256") == identity_digest(identity)
+                and manifest.get("next_step") == final_step
+                and isinstance(manifest.get("state"), dict)
+                and {"model", "optimizer", "python_rng", "numpy_rng", "torch_rng"}
+                    <= set(manifest["state"]),
+                "checkpoint-only CURRENT does not authenticate model, Adam, and RNG state")
+        receipt = {
+            "schema": SCHEMA, "status": "FIT_CHECKPOINT_ONLY",
+            "score_role": None, "fit_scoring_performed": False,
+            "select_accessed": False, "scope": contract["scope"],
+            "arm": arm, "seed": seed, "contract_sha256": contract_sha256,
+            "resolved_sha256": resolved_sha256,
+            "frozen_training_ceiling_steps": contract["steps"],
+            "steps": final_step, "training_losses": history,
+            "trainer_sha256": sha(__file__),
+            "technical_execution": technical_execution,
+            "technical_checkpoint_binding": technical_checkpoint_binding,
+            "lai_reference_scaling": model.lai_reference_scaling,
+            "lai_fit_monitor": lai_fit_monitor_receipts(
+                contract, resolved, arm, checkpoint_dir, final_step),
+            "internal_checkpoint": {
+                "schema": "r02_context_internal_checkpoint_v1",
+                "identity_sha256": identity_digest(identity),
+                "adam_state_precision": adam_state_precision,
+                "restored_steps": start_step,
+                "final_confirmed_step": final_step,
+                "frequency_completed_steps": checkpoint_every_steps,
+                "current": str(current_path.resolve()),
+                "current_sha256": current_sha256,
+                "manifest": str(manifest_path.resolve()),
+                "manifest_sha256": manifest_sha256,
+                "payload_sha256": manifest["payload_sha256"],
+                "model_adam_rng_state_authenticated": True,
+            },
+            "scientific_conclusion": "NONE_TECHNICAL_RECOVERY_BOUNDARY_ONLY",
+            "limitations": [
+                "no_FIT_or_SELECT_scoring_performed",
+                "partial_optimizer_budget_not_complete_training",
+                "synthetic_equivalence_does_not_establish_human_memory_fit",
+            ],
+        }
+        write_json(output / "training.receipt.json", receipt)
+        return receipt
     score_role = "FIT" if fit_only else "SELECT"
     metric, errors, components = score_batches(
         model, contract, score_role, resolved, arm, output,
         burden_caches=(score_burden_caches if score_role == "FIT" and
                        dataset_mode(contract) in (AUTOSOMAL_POOL, AUTOSOMAL_PERSON_BATCHES)
                        else None),
-        phase_metrics=phase_metrics)
+        phase_metrics=phase_metrics,
+        lai_people_per_microbatch=lai_people_per_microbatch,
+        max_reconstruction_bytes=max_reconstruction_bytes)
     checkpoint = output / "weights.npz"
     np.savez(checkpoint, **{k: v.detach().numpy() for k, v in model.state_dict().items()})
     metric_name = ("k03_component_pair_weighted_mse"
@@ -1753,6 +2153,13 @@ def train(contract_path, contract_sha256, resolved_path, resolved_sha256, arm, s
             "comparison_use": "POST_SELECTION_MECHANISTIC_ABLATION_NOT_INDEPENDENT_CONFIRMATION"}
            if contract.get("dose_relocation") else {}),
         "eligibility_manifest_sha256": contract.get("eligibility_manifest", {}).get("sha256"),
+        "technical_execution": technical_execution,
+        "technical_checkpoint_binding": technical_checkpoint_binding,
+        **({"lai_reference_scaling": model.lai_reference_scaling}
+           if contract["objective"] == "lai" else {}),
+        **({"lai_fit_monitor": lai_fit_monitor_receipts(
+                contract, resolved, arm, checkpoint_dir, final_step)}
+           if contract["objective"] == "lai" else {}),
         "trainer_sha256": sha(__file__), "runtime_sha256": sha(Path(__file__).with_name("genomic_context_runtime.py")),
         "autosomal_dataset_sha256": sha(Path(__file__).with_name("r02_context_autosomal_dataset.py")),
         "autosomal_pool_sha256": sha(Path(__file__).with_name("r02_context_autosomal_pool.py")),
@@ -1926,12 +2333,18 @@ def main():
                         help="Absolute safe stopping point within the immutable training ceiling")
     parser.add_argument("--record-aggregate-norms", action="store_true",
                         help="Record aggregate module/representation norms; never person rows")
+    parser.add_argument("--lai-people-per-microbatch", type=int,
+                        help="Technical LAI person count per autograd/inference microbatch")
+    parser.add_argument("--checkpoint-only", action="store_true",
+                        help="Stop after a partial FIT checkpoint without scoring FIT or SELECT")
     args = parser.parse_args()
     if args.stage in ("evaluate", "verify-evaluation"):
         require(not args.fit_only and args.stop_after_steps is None,
                 "FIT continuation options do not apply to reserved evaluation")
         require(not args.record_aggregate_norms,
                 "training norm diagnostics do not apply to reserved evaluation")
+        require(args.lai_people_per_microbatch is None and not args.checkpoint_only,
+                "LAI person microbatch/checkpoint-only options do not apply to reserved evaluation")
         require(args.evaluation_plan and args.evaluation_plan_sha256 and
                 all(getattr(args, x) is None for x in ("contract", "contract_sha256", "resolved", "resolved_sha256", "arm", "seed",
                                                        "checkpoint_dir")),
@@ -1951,7 +2364,8 @@ def main():
         result = train(args.contract, args.contract_sha256, args.resolved, args.resolved_sha256,
                        args.arm, args.seed, args.output, args.checkpoint_dir,
                        args.checkpoint_every_steps, args.adam_state_precision,
-                       args.fit_only, args.stop_after_steps, args.record_aggregate_norms)
+                       args.fit_only, args.stop_after_steps, args.record_aggregate_norms,
+                       args.lai_people_per_microbatch, args.checkpoint_only)
     print(json.dumps(result, sort_keys=True, allow_nan=False))
 
 

@@ -500,7 +500,7 @@ def join_regional_truth(request_path, expected_sha, output_dir, factorized_link=
 
 
 def load_factorized_link(request_path, request_sha256, receipt_path, receipt_sha256,
-                         *, max_uncompressed_bytes, action="PREPARE"):
+                         *, reconstruction_limits, action="PREPARE"):
     """Rebuild a stored regional condition in memory and authenticate every array.
 
     The source files, role and geometry are checked by the same operation that
@@ -510,8 +510,11 @@ def load_factorized_link(request_path, request_sha256, receipt_path, receipt_sha
     """
     import zipfile
     require(action == "PREPARE", "factorized PREPARE link cannot authorize TRAIN")
-    require(type(max_uncompressed_bytes) is int and max_uncompressed_bytes > 0,
-            "positive uncompressed memory limit required")
+    require(isinstance(reconstruction_limits, dict)
+            and set(reconstruction_limits) == {"max_factorized_source_bytes",
+                "max_reconstructed_join_bytes", "max_source_plus_reconstructed_bytes"}
+            and all(type(v) is int and v > 0 for v in reconstruction_limits.values()),
+            "explicit source, joined-array, and combined reconstruction limits are required")
     require(sha(receipt_path) == receipt_sha256, "factorized receipt SHA-256 differs")
     receipt = read_json(receipt_path)
     require(receipt.get("schema") == REGIONAL_FACTORIZED_LINK_RECEIPT_SCHEMA
@@ -526,12 +529,16 @@ def load_factorized_link(request_path, request_sha256, receipt_path, receipt_sha
     for name in ("regional_batch", "control_batch", "overlay", "event_burden_prefix"):
         with zipfile.ZipFile(paths[name]) as archive:
             total += sum(item.file_size for item in archive.infolist())
-    require(total <= max_uncompressed_bytes, "factorized sources exceed memory budget")
+    require(total <= reconstruction_limits["max_factorized_source_bytes"],
+            "factorized sources exceed reconstruction memory budget")
     data, rebuilt = join_regional_truth(request_path, request_sha256, None,
                                        factorized_link=True, _reconstruct_only=True)
     require(rebuilt == receipt, "reconstructed factorized arrays or provenance differ")
-    require(total + sum(value.nbytes for value in data.values()) <= max_uncompressed_bytes,
-            "factorized sources plus reconstructed arrays exceed memory budget")
+    reconstructed = sum(value.nbytes for value in data.values())
+    require(reconstructed <= reconstruction_limits["max_reconstructed_join_bytes"],
+            "reconstructed joined arrays exceed measured technical limit")
+    require(total + reconstructed <= reconstruction_limits["max_source_plus_reconstructed_bytes"],
+            "factorized sources plus reconstructed arrays exceed reconstruction memory budget")
     return data
 
 

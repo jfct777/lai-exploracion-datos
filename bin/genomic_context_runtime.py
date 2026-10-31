@@ -19,6 +19,8 @@ from r02_local_attention_blocks import (LOCAL_MEAN_PREFIX_RANGE_V1, ContextExecu
 from r02_context_autosomal_pool import (RARE_POOLING_POLICIES, RARE_POOLING_SUM,
                                          finalize_rare_sum)
 from r02_lai_cnn_config import validate_cnn_config, query_halo, chromosome_step, maximum_step
+from r02_lai_common_context import (EVENT_QUERY_COMMON_KV_V1, LAI_COMMON_CONTEXT_MODES,
+                                    LOCAL_MEAN_V1, EventQueryCommonAttention)
 
 
 FAMILIES = {"structure_deep_sets", "structure_local_attention", "lai_cnn", "lai_local_attention"}
@@ -46,6 +48,7 @@ class ContextConfig:
     learning_rate: float
     rare_pooling: str = RARE_POOLING_SUM
     locus_descriptor: str = LOCUS_DESCRIPTOR_LEGACY
+    lai_common_context_mode: str = LOCAL_MEAN_V1
 
     def __post_init__(self):
         require(self.family in FAMILIES, "unknown contextual family")
@@ -62,6 +65,10 @@ class ContextConfig:
         require(self.locus_descriptor in LOCUS_DESCRIPTORS, "unknown locus descriptor")
         require(self.family.startswith("structure_") or self.locus_descriptor == LOCUS_DESCRIPTOR_LEGACY,
                 "chromosome-aware locus descriptor applies only to structure families")
+        require(self.lai_common_context_mode in LAI_COMMON_CONTEXT_MODES,
+                "unknown LAI COMMON-context mode")
+        require(self.lai_common_context_mode == LOCAL_MEAN_V1 or self.family.startswith("lai_"),
+                "EVENT-query/COMMON-key-value attention applies only to LAI")
         if self.family == "structure_deep_sets":
             require(self.rare_radius_cm is None, "Deep Sets has no rare-neighbor radius")
         else:
@@ -81,6 +88,7 @@ class ContextConfig:
         values = {key: resolved[key] for key in FIELDS}
         values["rare_pooling"] = resolved.get("rare_pooling", RARE_POOLING_SUM)
         values["locus_descriptor"] = resolved.get("locus_descriptor", LOCUS_DESCRIPTOR_LEGACY)
+        values["lai_common_context_mode"] = resolved.get("lai_common_context_mode", LOCAL_MEAN_V1)
         return cls(**values)
 
 
@@ -285,8 +293,14 @@ class ContextualModel(nn.Module):
         execution = None if context_execution is None else ContextExecution(**context_execution)
         self.context_execution = execution
         self.chromosome_aware = config.locus_descriptor == LOCUS_DESCRIPTOR_CHROM22
+        require(config.lai_common_context_mode == LOCAL_MEAN_V1 or execution is not None,
+                "EVENT-query/COMMON-key-value attention requires bounded context execution")
         self.common_encoder = mlp(common_features, config.width, 1, config.dropout,
                                   self.chromosome_aware)
+        common_context_heads = config.heads if config.heads is not None else 1
+        self.event_common_attention = (EventQueryCommonAttention(
+            event_features, config.width, common_context_heads, config.dropout, execution)
+            if config.lai_common_context_mode == EVENT_QUERY_COMMON_KV_V1 else None)
         # Event metadata must retain actual allele identity/position definitions.
         # log1p(number of common neighbors) distinguishes no context from mean zero.
         self.event_encoder = mlp(event_features + config.width + 1, config.width,
@@ -318,8 +332,14 @@ class ContextualModel(nn.Module):
     def event_values(self, common, encoded_common, events):
         events.check(self.event_features, self.limits[1])
         require(common.features.shape[0] == events.features.shape[0], "batch mismatch")
-        context, count = local_mean(encoded_common, events, common, self.config.common_radius_cm,
-                                    execution=self.context_execution)
+        if self.event_common_attention is None:
+            context, count = local_mean(encoded_common, events, common, self.config.common_radius_cm,
+                                        execution=self.context_execution)
+        else:
+            context, count = self.event_common_attention(
+                events.features, events.cm, events.chrom, events.valid,
+                encoded_common, common.cm, common.chrom, common.valid,
+                self.config.common_radius_cm)
         inputs = torch.cat((events.cleaned(), context,
                             torch.log1p(count.to(context.dtype))[..., None]), -1)
         values = (self.event_encoder(inputs, events.chrom, events.valid)
