@@ -253,6 +253,16 @@ class MaskedGenotypeModel(nn.Module):
         values = values.to(next(self.parameters()).dtype)
         return values.unsqueeze(0).expand(channel.dosage.shape[0], -1, -1)
 
+    def locus_descriptor(self, channel: MaskedTensorChannel) -> Tensor:
+        """Return the existing learned locus/channel identity representation.
+
+        This public method exposes exactly the query representation already used
+        by the historical prediction head.  It does not inspect dosage, target
+        labels or reference people and does not add a second locus embedding.
+        """
+        channel.check(self.config.max_loci_per_channel)
+        return self.query_encoder(self._metadata(channel))
+
     def _sites(self, channel: MaskedTensorChannel, features: Tensor, visible_only: bool) -> Sites:
         batch = channel.dosage.shape[0]
         valid = channel.locus_valid.unsqueeze(0).expand(batch, -1)
@@ -309,7 +319,7 @@ class MaskedGenotypeModel(nn.Module):
                          rare: MaskedTensorChannel, condition: str) -> Tensor:
         query_metadata = self._metadata(target)
         query = self._sites(target, query_metadata, visible_only=False)
-        query_values = self.query_encoder(query_metadata)
+        query_values = self.locus_descriptor(target)
         common_summary, common_count = self._local_mean(
             common_values, query, common_sites, self.config.common_radius_cm)
         if condition == "count_only":

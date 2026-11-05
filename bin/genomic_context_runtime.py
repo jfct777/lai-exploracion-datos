@@ -21,6 +21,7 @@ from r02_context_autosomal_pool import (RARE_POOLING_POLICIES, RARE_POOLING_SUM,
 from r02_lai_cnn_config import validate_cnn_config, query_halo, chromosome_step, maximum_step
 from r02_lai_common_context import (EVENT_QUERY_COMMON_KV_V1, LAI_COMMON_CONTEXT_MODES,
                                     LOCAL_MEAN_V1, EventQueryCommonAttention)
+from r02_lai_query_event_attention import (LAI_QUERY_EVENT_MODES, QueryEventAttention)
 
 
 FAMILIES = {"structure_deep_sets", "structure_local_attention", "lai_cnn", "lai_local_attention"}
@@ -49,6 +50,7 @@ class ContextConfig:
     rare_pooling: str = RARE_POOLING_SUM
     locus_descriptor: str = LOCUS_DESCRIPTOR_LEGACY
     lai_common_context_mode: str = LOCAL_MEAN_V1
+    lai_query_event_mode: str = LOCAL_MEAN_V1
 
     def __post_init__(self):
         require(self.family in FAMILIES, "unknown contextual family")
@@ -69,6 +71,10 @@ class ContextConfig:
                 "unknown LAI COMMON-context mode")
         require(self.lai_common_context_mode == LOCAL_MEAN_V1 or self.family.startswith("lai_"),
                 "EVENT-query/COMMON-key-value attention applies only to LAI")
+        require(self.lai_query_event_mode in LAI_QUERY_EVENT_MODES,
+                "unknown LAI query-EVENT readout mode")
+        require(self.lai_query_event_mode == LOCAL_MEAN_V1 or self.family.startswith("lai_"),
+                "query-EVENT attention applies only to LAI")
         if self.family == "structure_deep_sets":
             require(self.rare_radius_cm is None, "Deep Sets has no rare-neighbor radius")
         else:
@@ -89,6 +95,7 @@ class ContextConfig:
         values["rare_pooling"] = resolved.get("rare_pooling", RARE_POOLING_SUM)
         values["locus_descriptor"] = resolved.get("locus_descriptor", LOCUS_DESCRIPTOR_LEGACY)
         values["lai_common_context_mode"] = resolved.get("lai_common_context_mode", LOCAL_MEAN_V1)
+        values["lai_query_event_mode"] = resolved.get("lai_query_event_mode", LOCAL_MEAN_V1)
         return cls(**values)
 
 
@@ -322,6 +329,11 @@ class ContextualModel(nn.Module):
         self.query_dropout = nn.Dropout(config.dropout)
         self.state_head = nn.Linear(config.width, 6) if not is_structure else None
         self.gate_head = nn.Linear(config.width, 1) if not is_structure else None
+        # Added after historical modules so default initialization and old
+        # checkpoints retain their parameter names and random-number sequence.
+        self.query_event_attention = (None if config.lai_query_event_mode == LOCAL_MEAN_V1
+            else QueryEventAttention(config.width + 7 + lai_query_burden_features,
+                config.width, common_context_heads, execution, config.lai_query_event_mode))
 
     def common_values(self, common):
         common.check(self.common_features, self.limits[0])
@@ -422,9 +434,10 @@ class ContextualModel(nn.Module):
             rows.append(row)
         return torch.stack(rows)
 
-    def predict_lai(self, common: Sites, queries: Sites, baseline_probabilities: Tensor,
-                    events: Sites | None = None, include_rare=True,
-                    query_burden: Tensor | None = None):
+    def _lai_query_hidden(self, common: Sites, queries: Sites, baseline_probabilities: Tensor,
+                          events: Sites | None = None, include_rare=True,
+                          query_burden: Tensor | None = None) -> tuple[Tensor, Tensor]:
+        """Return the shared LAI query representation and cleaned FLARE input."""
         require(self.config.family.startswith("lai_"), "LAI family required")
         encoded = self.common_values(common)
         queries.check(queries.features.shape[-1], self.limits[2])
@@ -441,23 +454,54 @@ class ContextualModel(nn.Module):
                            execution=self.context_execution)
         rare = torch.zeros_like(c)
         nr = torch.zeros_like(nc)
-        if include_rare:
-            require(events is not None, "events required for rare-enabled arm")
-            values = self.event_values(common, encoded, events)
-            rare, nr = local_mean(values, queries, events, self.config.rare_radius_cm,
-                                 execution=self.context_execution)
-        inputs = [c, rare, p, torch.log1p(nc.to(c.dtype))[..., None],
-                  torch.log1p(nr.to(c.dtype))[..., None]]
         if self.lai_query_burden_features:
             require(query_burden is not None and query_burden.shape == (*queries.cm.shape, 3)
                     and bool(torch.isfinite(query_burden).all()) and bool((query_burden >= 0).all()),
                     "LAI query burden shape/value differs")
-            inputs.append(torch.log1p(query_burden.to(c.dtype)))
         else:
             require(query_burden is None, "legacy LAI model cannot consume query burden")
+        if include_rare:
+            require(events is not None, "events required for rare-enabled arm")
+            values = self.event_values(common, encoded, events)
+            if self.query_event_attention is None:
+                rare, nr = local_mean(values, queries, events, self.config.rare_radius_cm,
+                                     execution=self.context_execution)
+            else:
+                query_inputs = [c, p, torch.log1p(nc.to(c.dtype))[..., None]]
+                if self.lai_query_burden_features:
+                    query_inputs.append(torch.log1p(query_burden.to(c.dtype)))
+                rare, nr = self.query_event_attention(
+                    torch.cat(query_inputs, -1), queries.cm, queries.chrom, queries.valid,
+                    values, events.cm, events.chrom, events.valid, self.config.rare_radius_cm)
+        inputs = [c, rare, p, torch.log1p(nc.to(c.dtype))[..., None],
+                  torch.log1p(nr.to(c.dtype))[..., None]]
+        if self.lai_query_burden_features:
+            inputs.append(torch.log1p(query_burden.to(c.dtype)))
         x = self.query_fusion(torch.cat(inputs, -1))
         if self.query_convs:
             x = self._convolve_queries(x, queries)
+        return x, p
+
+    def predict_lai_logits(self, common: Sites, queries: Sites, baseline_probabilities: Tensor,
+                           events: Sites | None = None, include_rare=True,
+                           query_burden: Tensor | None = None) -> Tensor:
+        """Return raw six-state neural potentials before softmax or legacy gating.
+
+        FLARE probabilities remain an input to ``query_fusion``.  They must not
+        be multiplied into a downstream CRF again as independent evidence.
+        ``gate_head`` belongs only to :meth:`predict_lai`'s historical mixture.
+        """
+        x, _ = self._lai_query_hidden(
+            common, queries, baseline_probabilities, events, include_rare, query_burden)
+        logits = self.state_head(x)
+        return torch.where(queries.valid[..., None], logits,
+                           torch.full_like(logits, float("nan")))
+
+    def predict_lai(self, common: Sites, queries: Sites, baseline_probabilities: Tensor,
+                    events: Sites | None = None, include_rare=True,
+                    query_burden: Tensor | None = None):
+        x, p = self._lai_query_hidden(
+            common, queries, baseline_probabilities, events, include_rare, query_burden)
         candidate = self.state_head(x).softmax(-1)
         gate = self.gate_head(x).sigmoid()
         result = (1 - gate) * p + gate * candidate

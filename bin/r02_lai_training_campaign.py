@@ -9,6 +9,7 @@ that second receipt for training.  No operation in this module opens EVALUATE.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 from functools import lru_cache
 import hashlib
 import json
@@ -23,6 +24,9 @@ FIRST_UPDATE_PROTOCOL_SCHEMA = "r02_lai_first_retained_update_protocol_v1"
 EVIDENCE_SCHEMA = "r02_lai_training_admission_evidence_v1"
 FIRST_UPDATE_EVIDENCE_SCHEMA = "r02_lai_first_update_admission_evidence_v1"
 FIRST_UPDATE_EXECUTION_BUDGET_SCHEMA = "r02_lai_first_update_execution_budget_v1"
+FIRST_UPDATE_EXECUTION_BUDGET_SCHEMA_V2 = "r02_lai_first_update_execution_budget_v2"
+FD_ATTEMPT_LEDGER_SCHEMA = "r02_fd_attempt_ledger_v1"
+FD_ATTEMPT_LEDGER_SCHEMA_V2 = "r02_fd_attempt_ledger_v2"
 REPAIR_EXECUTION_BUDGET_SCHEMA = "r02_lai_repair_same_fit_execution_budget_v1"
 RECONSTRUCTION_EXECUTION_LIMIT_SCHEMA = "r02_lai_reconstruction_execution_limit_v2"
 TRAIN_LINK_SCHEMA = "r02_lai_factorized_training_link_receipt_v1"
@@ -387,6 +391,120 @@ def validate_protocol_value(protocol):
     return protocol, decision_sha256
 
 
+def _validate_prior_attempts(spec, expected_condition):
+    path = descriptor(spec, "prior attempts")
+    ledger = read_json(path, spec["sha256"])
+    if ledger.get("schema") == FD_ATTEMPT_LEDGER_SCHEMA_V2:
+        fields = {"schema", "condition", "accumulated_wall_seconds",
+                  "complete_for_conservative_budgeting", "attempts"}
+        accumulated = ledger.get("accumulated_wall_seconds")
+        require(set(ledger) == fields
+                and ledger.get("condition") == expected_condition in CONDITIONS
+                and ledger.get("complete_for_conservative_budgeting") is True
+                and type(accumulated) in (int, float) and math.isfinite(accumulated)
+                and accumulated > 0 and isinstance(ledger.get("attempts"), list)
+                and ledger["attempts"],
+                "prior-attempt v2 ledger fields or condition differ")
+        durations, evidence_identities = [], set()
+        for attempt in ledger["attempts"]:
+            require(isinstance(attempt, dict), "prior-attempt v2 entry differs")
+            kind = attempt.get("duration_kind")
+            common = {"duration_kind", "duration_seconds", "evidence"}
+            require(kind in {"exact_duration", "authenticated_upper_bound"}
+                    and set(attempt) == (common if kind == "exact_duration" else
+                                         common | {"authenticated_interval"})
+                    and type(attempt.get("duration_seconds")) in (int, float)
+                    and math.isfinite(attempt["duration_seconds"])
+                    and attempt["duration_seconds"] > 0,
+                    "prior-attempt v2 duration declaration differs")
+            evidence_path = descriptor(attempt.get("evidence"), "prior-attempt evidence")
+            identity = (str(evidence_path.resolve()), attempt["evidence"]["sha256"])
+            require(identity not in evidence_identities,
+                    "prior-attempt evidence is duplicated")
+            evidence_identities.add(identity)
+            if kind == "authenticated_upper_bound":
+                interval = attempt["authenticated_interval"]
+                interval_fields = {"start_timestamp", "end_timestamp",
+                                   "start_marker", "end_marker"}
+                require(isinstance(interval, dict) and set(interval) == interval_fields
+                        and all(isinstance(interval.get(key), str) and interval[key]
+                                for key in interval_fields),
+                        "authenticated upper-bound interval differs")
+                lines = evidence_path.read_text().splitlines()
+                starts = [line for line in lines if interval["start_marker"] in line]
+                ends = [line for line in lines if interval["end_marker"] in line]
+                require(len(starts) == 1 and len(ends) == 1,
+                        "authenticated upper-bound markers are absent or ambiguous")
+                require(starts[0].startswith(interval["start_timestamp"] + " ")
+                        and ends[0].startswith(interval["end_timestamp"] + " "),
+                        "authenticated upper-bound timestamps differ from evidence")
+                try:
+                    start = datetime.strptime(interval["start_timestamp"],
+                                              "%b-%d %H:%M:%S.%f")
+                    end = datetime.strptime(interval["end_timestamp"],
+                                            "%b-%d %H:%M:%S.%f")
+                except ValueError as error:
+                    raise ValueError("authenticated upper-bound timestamp format differs") from error
+                observed = (end - start).total_seconds()
+                require(observed > 0 and math.isclose(
+                            attempt["duration_seconds"], observed,
+                            rel_tol=0, abs_tol=1e-6),
+                        "authenticated upper-bound duration or ordering differs")
+            durations.append(attempt["duration_seconds"])
+        require(math.isclose(math.fsum(durations), accumulated,
+                             rel_tol=0, abs_tol=1e-6),
+                "prior-attempt v2 durations do not equal conservative accumulated wall time")
+        return ledger
+    fields = {"schema", "condition", "accumulated_wall_seconds",
+              "known_complete_for_condition", "attempts"}
+    accumulated = ledger.get("accumulated_wall_seconds")
+    require(set(ledger) == fields and ledger.get("schema") == FD_ATTEMPT_LEDGER_SCHEMA
+            and ledger.get("condition") == expected_condition in CONDITIONS
+            and ledger.get("known_complete_for_condition") is True
+            and type(accumulated) in (int, float) and math.isfinite(accumulated)
+            and accumulated > 0 and isinstance(ledger.get("attempts"), list)
+            and ledger["attempts"],
+            "prior-attempt ledger fields or condition differ")
+    durations, evidence_identities = [], set()
+    for attempt in ledger["attempts"]:
+        require(isinstance(attempt, dict) and set(attempt) == {"duration_seconds", "evidence"}
+                and type(attempt.get("duration_seconds")) in (int, float)
+                and math.isfinite(attempt["duration_seconds"])
+                and attempt["duration_seconds"] > 0,
+                "prior-attempt duration differs")
+        evidence_path = descriptor(attempt.get("evidence"), "prior-attempt evidence")
+        identity = (str(evidence_path.resolve()), attempt["evidence"]["sha256"])
+        require(identity not in evidence_identities, "prior-attempt evidence is duplicated")
+        evidence_identities.add(identity)
+        durations.append(attempt["duration_seconds"])
+    require(math.isclose(math.fsum(durations), accumulated, rel_tol=0, abs_tol=1e-6),
+            "prior-attempt durations do not equal accumulated wall time")
+    return ledger
+
+
+def _validate_v3_phase_timing(measurement):
+    phase_spec = measurement.get("phase_timing_evidence")
+    phase = read_json(descriptor(phase_spec, "first-update phase timing"),
+                      phase_spec["sha256"])
+    fields = {"schema", "status", "fit_entries_authenticated",
+              "optimizer_updates_completed", "model_audit_seconds",
+              "input_authentication_seconds", "pre_update_setup_seconds",
+              "first_update_seconds"}
+    require(set(phase) == fields
+            and phase.get("schema") == "r02_lai_first_update_phase_timing_v1"
+            and phase.get("status") == "FIRST_UPDATE_DURABLE"
+            and phase.get("fit_entries_authenticated") == 48
+            and phase.get("optimizer_updates_completed") == 1
+            and measurement.get("phase_timing") == phase,
+            "first-update v3 phase timing identity or durable state differs")
+    for key in ("model_audit_seconds", "input_authentication_seconds",
+                "pre_update_setup_seconds", "first_update_seconds"):
+        require(type(phase.get(key)) in (int, float) and math.isfinite(phase[key])
+                and phase[key] >= 0,
+                "first-update v3 phase duration differs: " + key)
+    return phase
+
+
 def validate_first_update_execution_budget(path, expected_sha, protocol_spec,
                                            contract_sha256, resolved_sha256, family,
                                            expected_condition=None):
@@ -399,7 +517,9 @@ def validate_first_update_execution_budget(path, expected_sha, protocol_spec,
               "evaluate_opened", "shared_wall_seconds", "retries_reset_budget",
               "scientific_ceiling_updates", "same_contract_required_for_continuation",
               "deadline_epoch_seconds", "accumulated_wall_seconds", "accumulated_cost"}
-    require(budget.get("schema") == FIRST_UPDATE_EXECUTION_BUDGET_SCHEMA
+    schema = budget.get("schema")
+    require(schema in {FIRST_UPDATE_EXECUTION_BUDGET_SCHEMA,
+                       FIRST_UPDATE_EXECUTION_BUDGET_SCHEMA_V2}
             and budget.get("protocol") == protocol_spec
             and budget.get("contract") == contract_sha256
             and budget.get("resolved") == resolved_sha256
@@ -435,7 +555,10 @@ def validate_first_update_execution_budget(path, expected_sha, protocol_spec,
                      and budget["accumulated_cost"]["usd"] >= 0)),
             "execution budget differs from the exact contract-bound stage")
     if budget["stage"] == "FIRST_RETAINED_UPDATE_MEASUREMENT":
-        require(set(budget) == common | {"fits", "fit_scoring_performed", "reference_hourly_cost_usd"}
+        stage_fields = common | {"fits", "fit_scoring_performed", "reference_hourly_cost_usd"}
+        if schema == FIRST_UPDATE_EXECUTION_BUDGET_SCHEMA_V2:
+            stage_fields |= {"prior_attempts"}
+        require(set(budget) == stage_fields
                 and budget["fits"] == 1 and budget["stop_after_steps"] == 1
                 and budget["checkpoint_only"] is True
                 and budget["fit_scoring_performed"] is False
@@ -443,16 +566,30 @@ def validate_first_update_execution_budget(path, expected_sha, protocol_spec,
                      or (type(budget["reference_hourly_cost_usd"]) in (int, float)
                          and math.isfinite(budget["reference_hourly_cost_usd"])
                          and budget["reference_hourly_cost_usd"] >= 0))
-                and budget["shared_wall_seconds"] == 7200
-                and budget["shared_wall_seconds"] <=
-                    budget["deadline_epoch_seconds"] - time.time() + 1
-                and budget["accumulated_wall_seconds"] == 0
+                and (schema == FIRST_UPDATE_EXECUTION_BUDGET_SCHEMA_V2
+                     or budget["shared_wall_seconds"] <=
+                        budget["deadline_epoch_seconds"] - time.time() + 1)
                 and budget["accumulated_cost"] in (
                     {"kind": "UNKNOWN_SHARED_VM_MARGINAL_COST", "usd": None},
                     {"kind": "ESTIMATED_ALLOCATED_REFERENCE", "usd": 0}),
                 "first-update execution budget differs")
+        if schema == FIRST_UPDATE_EXECUTION_BUDGET_SCHEMA:
+            require(budget["shared_wall_seconds"] == 7200
+                    and budget["accumulated_wall_seconds"] == 0,
+                    "first-update v1 execution budget differs")
+        else:
+            ledger = _validate_prior_attempts(budget["prior_attempts"], budget["condition"])
+            require(math.isclose(budget["accumulated_wall_seconds"],
+                                 ledger["accumulated_wall_seconds"],
+                                 rel_tol=0, abs_tol=1e-6)
+                    and budget["shared_wall_seconds"]
+                        + budget["accumulated_wall_seconds"] <= 7200,
+                    "first-update v2 budget resets or exceeds the cumulative 7200 seconds")
     elif budget["stage"] == "CONTINUE_SAME_CONTRACT_TO_SCIENTIFIC_CEILING":
-        require(set(budget) == common | {"first_update_measurement", "fit_scoring_performed"}
+        stage_fields = common | {"first_update_measurement", "fit_scoring_performed"}
+        if schema == FIRST_UPDATE_EXECUTION_BUDGET_SCHEMA_V2:
+            stage_fields |= {"prior_attempts"}
+        require(set(budget) == stage_fields
                 and budget["stop_after_steps"] is None
                 and budget["checkpoint_only"] is False
                 and budget["fit_scoring_performed"] is True,
@@ -466,7 +603,9 @@ def validate_first_update_execution_budget(path, expected_sha, protocol_spec,
         elapsed = measurement.get("elapsed_wall_seconds")
         cost = measurement.get("cost")
         deadline = budget.get("deadline_epoch_seconds")
-        require(measurement.get("schema") == "r02_lai_chr1_first_retained_update_v2"
+        measurement_schema = measurement.get("schema")
+        require(measurement_schema in {"r02_lai_chr1_first_retained_update_v2",
+                                       "r02_lai_chr1_first_retained_update_v3"}
                 and measurement.get("contract_sha256") == contract_sha256
                 and measurement.get("resolved_sha256") == resolved_sha256
                 and type(elapsed) in (int, float) and math.isfinite(elapsed) and elapsed > 0
@@ -491,6 +630,13 @@ def validate_first_update_execution_budget(path, expected_sha, protocol_spec,
                 and budget["accumulated_cost"]["kind"] == cost["kind"]
                 and (cost["usd"] is None or budget["accumulated_cost"]["usd"] >= cost["usd"]),
                 "continuation does not bind a live cumulative budget and authenticated first update")
+        if measurement_schema == "r02_lai_chr1_first_retained_update_v3":
+            _validate_v3_phase_timing(measurement)
+        if schema == FIRST_UPDATE_EXECUTION_BUDGET_SCHEMA_V2:
+            ledger = _validate_prior_attempts(budget["prior_attempts"], budget["condition"])
+            require(budget["accumulated_wall_seconds"] + 1e-6 >=
+                    ledger["accumulated_wall_seconds"] + elapsed,
+                    "continuation v2 omits prior attempts or the durable first update")
     else:
         raise ValueError("unknown execution-budget stage")
     return budget
@@ -726,7 +872,7 @@ def _validate_training_receipt(entry, receipt, contract, resolved, stage, action
 
 
 def _validate_runtime_only_resolved_amendment(prepared_digest, contract, resolved):
-    """Authenticate the sole runtime-only EVENT mode added after PREPARE."""
+    """Authenticate the ordered PREPARE -> COMMON -> query-readout chain."""
     if prepared_digest == digest(resolved):
         return
     amendment = contract.get("runtime_only_resolved_amendment")
@@ -747,12 +893,45 @@ def _validate_runtime_only_resolved_amendment(prepared_digest, contract, resolve
                         amendment["runtime_resolved"]["sha256"])
     expected_runtime = dict(source)
     expected_runtime[amendment["added_field"]] = amendment["added_value"]
-    require(runtime == expected_runtime and resolved == runtime
+    require(runtime == expected_runtime
             and prepared_digest == digest(source) ==
                 amendment["source_resolved_configuration_sha256"]
             and digest(runtime) ==
                 amendment["runtime_resolved_configuration_sha256"],
             "prepared and runtime resolved recipes differ beyond the admitted mode")
+    if resolved == runtime:
+        return
+
+    query = contract.get("query_event_resolved_amendment")
+    query_required = {"schema", "added_field", "added_value", "source_resolved",
+                      "source_resolved_configuration_sha256", "runtime_resolved",
+                      "runtime_resolved_configuration_sha256",
+                      "prepared_receipts_unchanged", "training_wrappers_unchanged"}
+    require(isinstance(query, dict) and set(query) == query_required
+            and query.get("schema") ==
+                "r02_lai_query_event_resolved_amendment_v1"
+            and query.get("added_field") == "lai_query_event_mode"
+            and query.get("added_value") in {
+                "QUERY_EVENT_CONTENT_V1", "QUERY_EVENT_RELATIVE_V1"}
+            and query.get("prepared_receipts_unchanged") is True
+            and query.get("training_wrappers_unchanged") is True,
+            "query-EVENT resolved amendment is absent or recipes differ beyond the admitted field")
+    query_source_spec = descriptor(query["source_resolved"],
+                                   "query-EVENT source resolved")
+    query_runtime_spec = descriptor(query["runtime_resolved"],
+                                    "query-EVENT runtime resolved")
+    query_source = read_json(query_source_spec, query["source_resolved"]["sha256"])
+    query_runtime = read_json(query_runtime_spec, query["runtime_resolved"]["sha256"])
+    expected_query_runtime = dict(query_source)
+    expected_query_runtime[query["added_field"]] = query["added_value"]
+    require(query["source_resolved"] == amendment["runtime_resolved"]
+            and query_source == runtime
+            and query_runtime == expected_query_runtime == resolved
+            and digest(query_source) ==
+                query["source_resolved_configuration_sha256"]
+            and digest(query_runtime) ==
+                query["runtime_resolved_configuration_sha256"],
+            "COMMON and query-EVENT recipes differ beyond the ordered admitted fields")
 
 
 def _authenticate_source_prepare(receipt, protocol, resolved=None):

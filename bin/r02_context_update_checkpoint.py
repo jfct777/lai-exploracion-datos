@@ -150,7 +150,9 @@ class PartialUpdateStore:
         _require(isinstance(progress, dict) and
                  progress.get("phase") in ("AUTOSOMAL_BURDENS",
                                             "AUTOSOMAL_AGGREGATION",
-                                            "AUTOSOMAL_RECOMPUTATION") and
+                                            "AUTOSOMAL_RECOMPUTATION",
+                                            "DURATION_PERSON_CHUNKS",
+                                            "LAI_PERSON_MICROBATCH") and
                  type(progress.get("next_person_batch_index")) is int and
                  type(progress.get("next_tile_index")) is int and
                  progress["next_person_batch_index"] >= 0 and

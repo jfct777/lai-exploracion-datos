@@ -45,16 +45,19 @@ def _candidate_columns(event_cm, event_chrom, event_valid,
                           common_cm, common_chrom, common_valid, radius_cm)
 
 
-class EventQueryCommonAttention(nn.Module):
-    """Attend from each observed EVENT locus to observed nearby COMMON loci.
+class LocalQuerySourceAttention(nn.Module):
+    """Attend from each valid query to valid nearby source representations.
 
-    EVENT and COMMON remain diploid representations.  Signed and absolute
+    Argument names retain their EVENT/COMMON spelling for existing callers.
+    The computation is also reused with LAI prediction queries and EVENT
+    source representations; it does not impose a genotype or phase meaning.
+    Signed and absolute
     relative genetic distance, divided by the already configured COMMON radius,
     add a learned per-head position term to the scaled query-key product.
     """
 
     def __init__(self, event_features: int, width: int, heads: int, dropout: float = 0.,
-                 execution=None):
+                 execution=None, use_relative_position: bool = True):
         super().__init__()
         _require(all(type(value) is int and value > 0
                      for value in (event_features, width, heads)),
@@ -66,6 +69,8 @@ class EventQueryCommonAttention(nn.Module):
                  "execution must be a validated ContextExecution")
         _require(execution is None or dropout == 0,
                  "exact checkpointed/block comparison requires dropout=0")
+        _require(type(use_relative_position) is bool, "relative position flag must be boolean")
+        self.use_relative_position = use_relative_position
         self.event_features = event_features
         self.width = width
         self.heads = heads
@@ -125,6 +130,11 @@ class EventQueryCommonAttention(nn.Module):
         # projections are float32.  Position is an input to the learned layer,
         # so use the query projection dtype without changing masks/coordinates.
         position = torch.stack((scaled_delta, scaled_delta.abs()), -1).to(query.dtype)
+        if not self.use_relative_position:
+            # Retain the same parameter tensors for a matched readout control.
+            # This removes only this layer's relative-distance input; upstream
+            # locus representations can still contain positional information.
+            position = torch.zeros_like(position)
         position_bias = self.relative_position(position).permute(0, 3, 1, 2)
 
         scores = torch.einsum("bhed,bhcd->bhec", query, key) / math.sqrt(self.head_width)
@@ -188,3 +198,7 @@ class EventQueryCommonAttention(nn.Module):
         actual = sum(parameter.numel() for parameter in self.parameters())
         _require(actual == expected, "EVENT-COMMON attention parameter inventory differs")
         return actual
+
+
+# Backward-compatible public name and unchanged state_dict parameter names.
+EventQueryCommonAttention = LocalQuerySourceAttention

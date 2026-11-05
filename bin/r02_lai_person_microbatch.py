@@ -33,6 +33,8 @@ _INDEPENDENT_MODULES = {
     ("genomic_context_runtime", "LocalAttention"),
     ("genomic_context_runtime", "MultiscaleQueryConvolution"),
     ("r02_lai_common_context", "EventQueryCommonAttention"),
+    ("r02_lai_common_context", "LocalQuerySourceAttention"),
+    ("r02_lai_query_event_attention", "QueryEventAttention"),
     ("torch.nn.modules.container", "Sequential"),
     ("torch.nn.modules.container", "ModuleList"),
     ("torch.nn.modules.linear", "Linear"),
@@ -85,6 +87,10 @@ _QUERY_SITE_FIELDS = {"query_global_index"}
 _SCHEMA_METADATA_FIELDS = {
     "event_annotation_schema", "event_call_provenance_count_order",
     "event_call_provenance_role_order", "event_reference_ancestry_order",
+    "personal_dose_intervention", "personal_dose_available",
+}
+_SCALAR_METADATA_FIELDS = {
+    "event_annotation_schema", "personal_dose_intervention", "personal_dose_available",
 }
 
 
@@ -173,10 +179,20 @@ def slice_people(data, start, end):
     for name in _QUERY_SITE_FIELDS & set(data):
         _require(np.asarray(data[name]).shape == (query_shape[1],),
                  f"shared query-site axis differs: {name}")
-    if "event_annotation_schema" in data:
-        _require(np.asarray(data["event_annotation_schema"]).shape == (),
-                 "event annotation schema must be scalar")
-    for name in (_SCHEMA_METADATA_FIELDS - {"event_annotation_schema"}) & set(data):
+    for name in _SCALAR_METADATA_FIELDS & set(data):
+        _require(np.asarray(data[name]).shape == (), f"scalar metadata differs: {name}")
+    dose_metadata = {"personal_dose_intervention", "personal_dose_available"}
+    if dose_metadata & set(data):
+        _require(dose_metadata <= set(data), "personal-dose metadata must be complete")
+        condition = str(np.asarray(data["personal_dose_intervention"]).item())
+        available = np.asarray(data["personal_dose_available"]).item()
+        _require(condition in {"PERSONAL_DOSE_REMOVED_FIXED_SUPPORT",
+                               "PERSONAL_DOSE_PERMUTED_FIXED_SUPPORT"}
+                 and isinstance(available, (bool, np.bool_))
+                 and bool(available) ==
+                    (condition == "PERSONAL_DOSE_PERMUTED_FIXED_SUPPORT"),
+                 "personal-dose metadata condition/availability differs")
+    for name in (_SCHEMA_METADATA_FIELDS - _SCALAR_METADATA_FIELDS) & set(data):
         _require(np.asarray(data[name]).ndim == 1,
                  f"schema vocabulary must be one-dimensional: {name}")
     result = dict(data)
@@ -200,16 +216,21 @@ class PersonMicrobatchBackward:
 
 
 def backward_person_microbatches(model, data, arm, people_per_microbatch,
-                                 person_losses):
+                                 person_losses, progress=None):
     """Accumulate \(sum_i loss_i/N\); caller owns zero_grad and Adam step."""
     validate_person_separation(model, "lai", people_per_microbatch)
     people = len(data["person_id"])
     _require(people > 0, "empty LAI person axis")
-    predictions = []
-    total = torch.zeros((), dtype=torch.float64)
+    if progress is None:
+        start, total, predictions = 0, torch.zeros((), dtype=torch.float64), []
+    else:
+        start, total, predictions = progress.resume(people)
+        _require(0 <= start <= people and start % people_per_microbatch == 0,
+                 "saved LAI person cursor differs from microbatch boundary")
     microbatches = 0
-    for start in range(0, people, people_per_microbatch):
-        micro = slice_people(data, start, min(start + people_per_microbatch, people))
+    for first in range(start, people, people_per_microbatch):
+        end = min(first + people_per_microbatch, people)
+        micro = slice_people(data, first, end)
         prediction = model(micro, arm)
         values = person_losses(prediction, micro)
         _require(values.shape == (len(micro["person_id"]),)
@@ -219,6 +240,8 @@ def backward_person_microbatches(model, data, arm, people_per_microbatch,
         total += values.detach().double().sum()
         predictions.append(prediction.detach())
         microbatches += 1
+        if progress is not None:
+            progress.save(end, total, predictions, people)
         del values, prediction, micro
     return PersonMicrobatchBackward(
         loss=(total / people), prediction=torch.cat(predictions, 0),

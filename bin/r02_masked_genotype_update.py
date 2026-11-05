@@ -197,7 +197,8 @@ def masked_fragment_record(fragment: MaskedFragment, max_loci: int):
     return record, keys
 
 
-def masked_streaming_update_identity(model, optimizer, records, *, information_condition):
+def masked_streaming_update_identity(model, optimizer, records, *, information_condition,
+                                     identity_extension=None):
     """Build the update identity from preflight records without retaining tensors."""
     _require(information_condition in INFORMATION_CONDITIONS,
              "unknown rare-information condition")
@@ -208,7 +209,7 @@ def masked_streaming_update_identity(model, optimizer, records, *, information_c
     rare_count = sum(value["rare_count"] for value in values)
     _require(common_count > 0 and rare_count > 0,
              "complete streaming update requires positive channel counts")
-    return {"schema": SCHEMA, "model_config": asdict(model.config),
+    identity = {"schema": SCHEMA, "model_config": asdict(model.config),
             "fragment_content_sha256": [value["content_sha256"] for value in values],
             "fragment_owned_targets_sha256": [value["owned_targets_sha256"] for value in values],
             "code_sha256": masked_update_code_hashes(),
@@ -227,6 +228,13 @@ def masked_streaming_update_identity(model, optimizer, records, *, information_c
             "torch_version": torch.__version__,
             "parameter_device": str(next(model.parameters()).device),
             "model_optimizer_start_sha256": optimizer_start_digest(model, optimizer)}
+    if identity_extension is not None:
+        _require(isinstance(identity_extension, dict) and identity_extension,
+                 "nonempty streaming identity extension must be a dictionary")
+        # Force the extension through the same canonical serializer used by the
+        # checkpoint before any gradient is calculated.
+        identity["identity_extension"] = json.loads(_canonical(identity_extension))
+    return identity
 
 
 def _restore_parameter_gradients_on_model_device(model, gradients) -> None:
@@ -451,11 +459,14 @@ def run_masked_update(model: MaskedGenotypeModel, optimizer, fragments: list[Mas
 
 def run_masked_update_streaming(model, optimizer, load_fragment, records,
                                 *, information_condition: str,
-                                checkpoint: MaskedUpdateStore | None = None):
+                                checkpoint: MaskedUpdateStore | None = None,
+                                forward_fragment=None,
+                                identity_extension=None):
     """Load, authenticate, backpropagate and release one fragment at a time."""
     records = tuple(records)
     identity = masked_streaming_update_identity(
-        model, optimizer, records, information_condition=information_condition)
+        model, optimizer, records, information_condition=information_condition,
+        identity_extension=identity_extension)
     global_common = identity["global_common_count"]
     global_rare = identity["global_rare_count"]
     if checkpoint is not None:
@@ -483,8 +494,10 @@ def run_masked_update_streaming(model, optimizer, load_fragment, records,
         actual, _ = masked_fragment_record(fragment, model.config.max_loci_per_channel)
         _require(actual == records[index],
                  "streamed fragment differs from its preflight identity")
-        output = model(fragment.common, fragment.rare,
-                       information_condition=information_condition)
+        output = (model(fragment.common, fragment.rare,
+                        information_condition=information_condition)
+                  if forward_fragment is None else
+                  forward_fragment(model, fragment, information_condition))
         terms = masked_genotype_loss_terms(
             output.common_logits, fragment.common_targets.dosage,
             fragment.common_targets.score_mask,
