@@ -152,6 +152,23 @@ class LocalQuerySourceAttention(nn.Module):
                              torch.zeros_like(result))
         return result, count
 
+    def _attend_columns(self, query, key, value,
+                        event_cm, event_chrom, event_valid,
+                        common_cm, common_chrom, common_valid,
+                        columns, radius_cm):
+        """Select a block's source columns inside the checkpointed calculation.
+
+        ``key`` and ``value`` remain the complete shared projections in the
+        checkpoint inputs.  Their per-block copies are therefore recreated by
+        backward instead of being retained for every query block.
+        """
+        return self._attend(
+            query, key.index_select(2, columns), value.index_select(2, columns),
+            event_cm, event_chrom, event_valid,
+            common_cm.index_select(1, columns),
+            common_chrom.index_select(1, columns),
+            common_valid.index_select(1, columns), radius_cm)
+
     def forward(self, event_features, event_cm, event_chrom, event_valid,
                 common_values, common_cm, common_chrom, common_valid, radius_cm):
         self._validate(event_features, event_cm, event_chrom, event_valid,
@@ -180,14 +197,22 @@ class LocalQuerySourceAttention(nn.Module):
             elements = (event_cm.shape[0] * self.heads * (end - start) * len(columns))
             if elements > self.execution.max_mask_elements:
                 raise ValueError("EVENT-COMMON attention mask budget exceeded; no neighbors were truncated")
-            args = (query[:, :, start:end], key[:, :, columns], value[:, :, columns],
+            if self.execution.checkpoint_blocks and torch.is_grad_enabled():
+                # Keep the complete key/value projections shared across blocks.
+                # Selecting before checkpoint would retain two independent
+                # advanced-indexing copies per block until backward.
+                result = checkpoint(
+                    self._attend_columns,
+                    query[:, :, start:end], key, value,
+                    event_cm[:, start:end], event_chrom[:, start:end], event_valid[:, start:end],
+                    common_cm, common_chrom, common_valid, columns, radius_cm,
+                    use_reentrant=False)
+            else:
+                result = self._attend(
+                    query[:, :, start:end], key[:, :, columns], value[:, :, columns],
                     event_cm[:, start:end], event_chrom[:, start:end], event_valid[:, start:end],
                     common_cm[:, columns], common_chrom[:, columns], common_valid[:, columns],
                     radius_cm)
-            if self.execution.checkpoint_blocks and torch.is_grad_enabled():
-                result = checkpoint(self._attend, *args, use_reentrant=False)
-            else:
-                result = self._attend(*args)
             outputs.append(result[0]); counts.append(result[1])
         return torch.cat(outputs, 1), torch.cat(counts, 1)
 

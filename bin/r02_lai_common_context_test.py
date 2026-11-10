@@ -1,12 +1,14 @@
 import sys
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bin"))
 
 import torch
+from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
 from genomic_context_runtime import ContextConfig, Sites, build_model
 from r02_lai_common_context import (EVENT_QUERY_COMMON_KV_V1, LOCAL_MEAN_V1,
@@ -82,6 +84,111 @@ class EventQueryCommonAttentionTest(unittest.TestCase):
             self.assertIsNotNone(b_parameter.grad)
             torch.testing.assert_close(a_parameter.grad, b_parameter.grad,
                                        atol=2e-11, rtol=2e-11)
+
+    def test_checkpoint_many_windows_shares_full_key_value_storage_and_matches_gradients(self):
+        """Checkpoint must recreate, rather than retain, per-window KV copies."""
+        batch, queries, common, features, width, heads = 2, 33, 80, 3, 8, 2
+        execution = dict(query_block_size=2, max_mask_elements=100_000)
+        torch.manual_seed(20261108)
+        plain = EventQueryCommonAttention(
+            features, width, heads, execution=ContextExecution(
+                checkpoint_blocks=False, **execution)).double()
+        checked = EventQueryCommonAttention(
+            features, width, heads, execution=ContextExecution(
+                checkpoint_blocks=True, **execution)).double()
+        checked.load_state_dict(plain.state_dict(), strict=True)
+
+        event = torch.randn(batch, queries, features, dtype=torch.float64)
+        source = torch.randn(batch, common, width, dtype=torch.float64)
+        event_cm = torch.linspace(.03, .97, queries, dtype=torch.float64).repeat(batch, 1)
+        common_cm = torch.linspace(0., 1., common, dtype=torch.float64).repeat(batch, 1)
+        event_chrom = torch.ones((batch, queries), dtype=torch.int64)
+        common_chrom = torch.ones((batch, common), dtype=torch.int64)
+        event_valid = torch.ones((batch, queries), dtype=torch.bool)
+        common_valid = torch.ones((batch, common), dtype=torch.bool)
+
+        left_event = event.detach().clone().requires_grad_()
+        left_source = source.detach().clone().requires_grad_()
+        expected, expected_count = plain(
+            left_event, event_cm, event_chrom, event_valid,
+            left_source, common_cm, common_chrom, common_valid, .08)
+
+        checkpoint_calls, saved = [], []
+
+        def storage(tensor):
+            return tensor.untyped_storage().data_ptr()
+
+        def observe_checkpoint(function, *args, **kwargs):
+            checkpoint_calls.append({
+                "name": function.__name__,
+                "key_shape": tuple(args[1].shape),
+                "value_shape": tuple(args[2].shape),
+                "key_storage": storage(args[1]),
+                "value_storage": storage(args[2]),
+                "columns": int(args[9].numel()),
+            })
+            return torch_checkpoint(function, *args, **kwargs)
+
+        def pack(tensor):
+            saved.append({
+                "shape": tuple(tensor.shape),
+                "storage": storage(tensor),
+                "bytes": tensor.untyped_storage().nbytes(),
+            })
+            return tensor
+
+        right_event = event.detach().clone().requires_grad_()
+        right_source = source.detach().clone().requires_grad_()
+        with patch("r02_lai_common_context.checkpoint", side_effect=observe_checkpoint):
+            with torch.autograd.graph.saved_tensors_hooks(pack, lambda tensor: tensor):
+                actual, actual_count = checked(
+                    right_event, event_cm, event_chrom, event_valid,
+                    right_source, common_cm, common_chrom, common_valid, .08)
+
+        self.assertEqual(len(checkpoint_calls), 17)
+        self.assertEqual({call["name"] for call in checkpoint_calls}, {"_attend_columns"})
+        self.assertEqual({call["key_shape"] for call in checkpoint_calls},
+                         {(batch, heads, common, width // heads)})
+        self.assertEqual({call["value_shape"] for call in checkpoint_calls},
+                         {(batch, heads, common, width // heads)})
+        self.assertEqual(len({call["key_storage"] for call in checkpoint_calls}), 1)
+        self.assertEqual(len({call["value_storage"] for call in checkpoint_calls}), 1)
+        self.assertTrue(all(2 < call["columns"] < common for call in checkpoint_calls))
+
+        # Non-reentrant checkpoint retains repeated references to the two full
+        # projection storages.  It must not retain distinct [B,H,K,D] advanced-
+        # indexing copies for the intermediate K selected columns of each block.
+        full_storages = ({call["key_storage"] for call in checkpoint_calls}
+                         | {call["value_storage"] for call in checkpoint_calls})
+        self.assertTrue(full_storages.issubset({item["storage"] for item in saved}))
+        shared_kv_bytes = sum(dict(
+            (item["storage"], item["bytes"]) for item in saved
+            if item["storage"] in full_storages).values())
+        selected_kv_bytes_before_repair = sum(
+            2 * batch * heads * call["columns"] * (width // heads) * 8
+            for call in checkpoint_calls)
+        self.assertEqual(sum(call["columns"] for call in checkpoint_calls), 260)
+        self.assertEqual(shared_kv_bytes, 20_480)
+        self.assertEqual(selected_kv_bytes_before_repair, 66_560)
+        self.assertLess(shared_kv_bytes, selected_kv_bytes_before_repair)
+        selected_copies = [
+            item for item in saved
+            if len(item["shape"]) == 4
+            and item["shape"][0] == batch and item["shape"][1] == heads
+            and 2 < item["shape"][2] < common
+            and item["shape"][3] == width // heads
+        ]
+        self.assertEqual(selected_copies, [])
+
+        self.assertTrue(torch.equal(actual_count, expected_count))
+        torch.testing.assert_close(actual, expected, atol=2e-12, rtol=2e-12)
+        weight = torch.linspace(.1, 1., expected.numel(), dtype=torch.float64).reshape_as(expected)
+        (expected * weight).sum().backward()
+        (actual * weight).sum().backward()
+        torch.testing.assert_close(right_event.grad, left_event.grad, atol=2e-11, rtol=2e-11)
+        torch.testing.assert_close(right_source.grad, left_source.grad, atol=2e-11, rtol=2e-11)
+        for left, right in zip(plain.parameters(), checked.parameters()):
+            torch.testing.assert_close(right.grad, left.grad, atol=2e-11, rtol=2e-11)
 
     def test_exact_observation_chromosome_and_radius_mask_and_position(self):
         layer = EventQueryCommonAttention(1, 2, 1).double()

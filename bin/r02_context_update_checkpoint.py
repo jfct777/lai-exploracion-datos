@@ -152,7 +152,8 @@ class PartialUpdateStore:
                                             "AUTOSOMAL_AGGREGATION",
                                             "AUTOSOMAL_RECOMPUTATION",
                                             "DURATION_PERSON_CHUNKS",
-                                            "LAI_PERSON_MICROBATCH") and
+                                            "LAI_PERSON_MICROBATCH",
+                                            "LAI_WEIGHTED_OCCURRENCE_MICROBATCH") and
                  type(progress.get("next_person_batch_index")) is int and
                  type(progress.get("next_tile_index")) is int and
                  progress["next_person_batch_index"] >= 0 and
